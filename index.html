@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мессенджер</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --text: #e8eaf0; --muted: #8b93a7; --accent: #4f8cff; --mine: #2f5fd0; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 10px; }
+  input { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 12px; outline: none; width: 100%; }
+  input:focus { border-color: var(--accent); }
+  .hidden { display: none !important; }
+
+  /* Вход */
+  #auth { min-height: 100%; display: grid; place-items: center; padding: 20px; }
+  .card { width: 100%; max-width: 360px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 16px; padding: 24px; display: grid; gap: 12px; }
+  .card h1 { margin: 0 0 4px; font-size: 22px; }
+  .tabs { display: flex; gap: 6px; background: var(--panel2); padding: 4px; border-radius: 12px; }
+  .tabs button { flex: 1; padding: 8px; background: transparent; color: var(--muted); }
+  .tabs button.on { background: var(--accent); color: #fff; }
+  .primary { background: var(--accent); color: #fff; padding: 11px; font-weight: 600; }
+  .primary:disabled { opacity: .6; cursor: default; }
+  .msg { font-size: 14px; min-height: 1em; }
+  .msg.err { color: var(--err); } .msg.ok { color: #6bd68a; }
+
+  /* Приложение */
+  #app { height: 100%; display: flex; }
+  #sidebar { width: 320px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; }
+  .side-head { padding: 14px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+  .me { display: flex; justify-content: space-between; align-items: center; }
+  .me b { font-size: 16px; }
+  .link { background: none; color: var(--muted); padding: 4px 6px; }
+  .link:hover { color: var(--text); }
+  .find { display: flex; gap: 6px; }
+  .find button { background: var(--panel2); color: var(--text); padding: 0 14px; border: 1px solid var(--line); }
+  #chatList { overflow-y: auto; flex: 1; }
+  .chat-item { padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; display: flex;
+    gap: 10px; align-items: center; }
+  .chat-item:hover { background: var(--panel2); }
+  .chat-item.active { background: #22314f; }
+  .avatar { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+    font-weight: 700; flex-shrink: 0; color: #fff; }
+  .chat-meta { min-width: 0; flex: 1; }
+  .chat-name { font-weight: 600; display: flex; justify-content: space-between; gap: 6px; }
+  .chat-last { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); align-self: center; flex-shrink: 0; }
+  .empty { color: var(--muted); padding: 20px 14px; font-size: 14px; }
+
+  #chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .chat-head { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+    display: flex; align-items: center; gap: 10px; min-height: 61px; }
+  #backBtn { display: none; }
+  #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+  .bubble { max-width: min(75%, 560px); padding: 8px 12px; border-radius: 14px; background: var(--panel2);
+    align-self: flex-start; white-space: pre-wrap; word-wrap: break-word; }
+  .bubble.mine { background: var(--mine); align-self: flex-end; }
+  .bubble time { display: block; font-size: 11px; color: rgba(255,255,255,.55); text-align: right; margin-top: 2px; }
+  .day { align-self: center; color: var(--muted); font-size: 12px; margin: 8px 0; }
+  #composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); background: var(--panel); }
+  #composer button { background: var(--accent); color: #fff; padding: 0 18px; font-weight: 600; }
+  .placeholder { flex: 1; display: grid; place-items: center; color: var(--muted); padding: 20px; text-align: center; }
+
+  /* Телефон */
+  @media (max-width: 720px) {
+    #sidebar { width: 100%; border-right: 0; }
+    #chat { display: none; }
+    body.in-chat #sidebar { display: none; }
+    body.in-chat #chat { display: flex; }
+    #backBtn { display: inline-block; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Вход / регистрация -->
+<section id="auth" class="hidden">
+  <form class="card" id="authForm">
+    <h1>Мессенджер</h1>
+    <div class="tabs">
+      <button type="button" id="tabLogin" class="on">Вход</button>
+      <button type="button" id="tabSignup">Регистрация</button>
+    </div>
+    <input id="username" class="hidden" placeholder="Ник (латиница, цифры, _)" autocomplete="username" maxlength="24">
+    <input id="email" type="email" placeholder="Email" autocomplete="email" required>
+    <input id="password" type="password" placeholder="Пароль (от 6 символов)" autocomplete="current-password" minlength="6" required>
+    <button class="primary" id="authBtn" type="submit">Войти</button>
+    <div class="msg" id="authMsg"></div>
+  </form>
+</section>
+
+<!-- Основной экран -->
+<section id="app" class="hidden">
+  <aside id="sidebar">
+    <div class="side-head">
+      <div class="me"><b id="meName"></b><button class="link" id="logoutBtn">Выйти</button></div>
+      <form class="find" id="findForm">
+        <input id="findInput" placeholder="Найти по нику…" autocomplete="off">
+        <button type="submit">Найти</button>
+      </form>
+      <div class="msg" id="findMsg"></div>
+    </div>
+    <div id="chatList"></div>
+  </aside>
+
+  <main id="chat">
+    <div class="chat-head">
+      <button class="link" id="backBtn">←</button>
+      <div id="chatTitle" style="font-weight:600"></div>
+    </div>
+    <div id="placeholder" class="placeholder">Выберите чат слева или найдите человека по нику</div>
+    <div id="messages" class="hidden"></div>
+    <form id="composer" class="hidden">
+      <input id="text" placeholder="Сообщение…" autocomplete="off" maxlength="4000">
+      <button type="submit">➤</button>
+    </form>
+  </main>
+</section>
+
+<div id="configWarn" class="hidden" style="padding:24px;max-width:560px;margin:40px auto;line-height:1.6">
+  <h2>Почти готово</h2>
+  <p>Откройте файл <b>config.js</b> и вставьте туда адрес проекта и ключ из Supabase. Подробно — в README.md.</p>
+</div>
+
+<script type="module">
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
+
+const $ = (id) => document.getElementById(id);
+
+if (SUPABASE_URL.includes('ВАШ') || SUPABASE_KEY.includes('ВАШ')) {
+  $('configWarn').classList.remove('hidden');
+  throw new Error('config.js не заполнен');
+}
+
+const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let me = null;                     // { id, username }
+const names = new Map();           // id -> username
+const chats = new Map();           // partnerId -> { last, unread }
+const history = new Map();         // partnerId -> [messages]
+let activeId = null;
+let channel = null;
+
+/* ---------- Вход и регистрация ---------- */
+let mode = 'login';
+function setMode(m) {
+  mode = m;
+  $('tabLogin').classList.toggle('on', m === 'login');
+  $('tabSignup').classList.toggle('on', m === 'signup');
+  $('username').classList.toggle('hidden', m === 'login');
+  $('authBtn').textContent = m === 'login' ? 'Войти' : 'Создать аккаунт';
+  $('password').autocomplete = m === 'login' ? 'current-password' : 'new-password';
+  say('authMsg', '');
+}
+$('tabLogin').onclick = () => setMode('login');
+$('tabSignup').onclick = () => setMode('signup');
+
+function say(id, text, kind = 'err') {
+  const el = $(id);
+  el.textContent = text;
+  el.className = 'msg ' + (text ? kind : '');
+}
+
+$('authForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const email = $('email').value.trim();
+  const password = $('password').value;
+  $('authBtn').disabled = true;
+  try {
+    if (mode === 'login') {
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+    } else {
+      const username = $('username').value.trim().toLowerCase();
+      if (!/^[a-z0-9_]{3,24}$/.test(username))
+        throw new Error('Ник: 3–24 символа, латиница, цифры или _');
+      const { data: free, error: e1 } = await sb.rpc('username_available', { name: username });
+      if (e1) throw e1;
+      if (!free) throw new Error('Этот ник уже занят');
+      const { data, error } = await sb.auth.signUp({
+        email, password,
+        options: { data: { username }, emailRedirectTo: location.origin + location.pathname }
+      });
+      if (error) throw error;
+      if (!data.session) say('authMsg', 'Готово! Подтвердите email по ссылке из письма, потом войдите.', 'ok');
+    }
+  } catch (err) {
+    say('authMsg', humanError(err));
+  } finally {
+    $('authBtn').disabled = false;
+  }
+};
+
+function humanError(err) {
+  const m = (err && err.message) || String(err);
+  if (/Invalid login credentials/i.test(m)) return 'Неверный email или пароль';
+  if (/Email not confirmed/i.test(m)) return 'Сначала подтвердите email по ссылке из письма';
+  if (/already registered/i.test(m)) return 'Этот email уже зарегистрирован';
+  if (/rate limit/i.test(m)) return 'Слишком много попыток, подождите немного';
+  if (/Failed to fetch/i.test(m)) return 'Нет связи с сервером. Проверьте интернет и config.js';
+  return m;
+}
+
+$('logoutBtn').onclick = () => sb.auth.signOut();
+
+sb.auth.onAuthStateChange((_event, session) => {
+  // откладываем, чтобы не блокировать внутренний обработчик Supabase
+  setTimeout(() => session ? startApp(session.user) : stopApp(), 0);
+});
+
+/* ---------- Запуск ---------- */
+async function startApp(user) {
+  if (me && me.id === user.id) return;
+  me = { id: user.id, username: user.user_metadata?.username || '' };
+  const { data: p } = await sb.from('profiles').select('username').eq('id', me.id).maybeSingle();
+  if (p) me.username = p.username;
+  names.set(me.id, me.username);
+
+  $('auth').classList.add('hidden');
+  $('app').classList.remove('hidden');
+  $('meName').textContent = '@' + me.username;
+
+  await loadChats();
+  subscribe();
+}
+
+function stopApp() {
+  me = null; activeId = null;
+  chats.clear(); history.clear(); names.clear();
+  if (channel) { sb.removeChannel(channel); channel = null; }
+  $('app').classList.add('hidden');
+  $('auth').classList.remove('hidden');
+  document.body.classList.remove('in-chat');
+  closeChatView();
+}
+
+/* ---------- Список чатов ---------- */
+async function loadChats() {
+  const { data, error } = await sb.from('messages')
+    .select('*')
+    .or(`sender_id.eq.${me.id},receiver_id.eq.${me.id}`)
+    .order('created_at', { ascending: false })
+    .limit(500);
+  if (error) { $('chatList').innerHTML = `<div class="empty">Ошибка: ${esc(error.message)}</div>`; return; }
+  for (const m of data) {
+    const pid = partnerOf(m);
+    if (!chats.has(pid)) chats.set(pid, { last: m, unread: false });
+  }
+  await ensureNames([...chats.keys()]);
+  renderChats();
+}
+
+async function ensureNames(ids) {
+  const missing = ids.filter((id) => !names.has(id));
+  if (!missing.length) return;
+  const { data } = await sb.from('profiles').select('id, username').in('id', missing);
+  for (const p of data || []) names.set(p.id, p.username);
+}
+
+function renderChats() {
+  const list = $('chatList');
+  const items = [...chats.entries()].sort((a, b) =>
+    (b[1].last?.created_at || '').localeCompare(a[1].last?.created_at || ''));
+  if (!items.length) {
+    list.innerHTML = '<div class="empty">Чатов пока нет. Найдите человека по нику выше.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const [pid, c] of items) {
+    const name = names.get(pid) || '…';
+    const el = document.createElement('div');
+    el.className = 'chat-item' + (pid === activeId ? ' active' : '');
+    el.innerHTML = `
+      ${avatar(name)}
+      <div class="chat-meta">
+        <div class="chat-name"><span></span><small style="color:var(--muted);font-weight:400"></small></div>
+        <div class="chat-last"></div>
+      </div>
+      ${c.unread ? '<span class="dot"></span>' : ''}`;
+    el.querySelector('.chat-name span').textContent = name;
+    el.querySelector('.chat-name small').textContent = c.last ? timeShort(c.last.created_at) : '';
+    el.querySelector('.chat-last').textContent = c.last
+      ? (c.last.sender_id === me.id ? 'Вы: ' : '') + c.last.content : 'Новый чат';
+    el.onclick = () => openChat(pid);
+    list.appendChild(el);
+  }
+}
+
+/* ---------- Поиск по нику ---------- */
+$('findForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const q = $('findInput').value.trim().toLowerCase().replace(/^@/, '');
+  if (!q) return;
+  if (q === me.username) return say('findMsg', 'Это вы 🙂');
+  const { data, error } = await sb.from('profiles').select('id, username').eq('username', q).maybeSingle();
+  if (error) return say('findMsg', error.message);
+  if (!data) return say('findMsg', 'Пользователь @' + q + ' не найден');
+  say('findMsg', '');
+  $('findInput').value = '';
+  names.set(data.id, data.username);
+  if (!chats.has(data.id)) chats.set(data.id, { last: null, unread: false });
+  openChat(data.id);
+};
+
+/* ---------- Открытый чат ---------- */
+async function openChat(pid) {
+  activeId = pid;
+  const c = chats.get(pid);
+  if (c) c.unread = false;
+  document.body.classList.add('in-chat');
+  $('chatTitle').textContent = '@' + (names.get(pid) || '');
+  $('placeholder').classList.add('hidden');
+  $('messages').classList.remove('hidden');
+  $('composer').classList.remove('hidden');
+  renderChats();
+
+  if (!history.has(pid)) {
+    $('messages').innerHTML = '<div class="day">Загрузка…</div>';
+    const { data, error } = await sb.from('messages')
+      .select('*')
+      .or(`and(sender_id.eq.${me.id},receiver_id.eq.${pid}),and(sender_id.eq.${pid},receiver_id.eq.${me.id})`)
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) { $('messages').innerHTML = `<div class="day">Ошибка: ${esc(error.message)}</div>`; return; }
+    // за время загрузки могли прийти новые сообщения — объединяем без дублей
+    const merged = new Map([...(history.get(pid) || []), ...data.reverse()].map((m) => [m.id, m]));
+    history.set(pid, [...merged.values()].sort((a, b) => a.created_at.localeCompare(b.created_at)));
+  }
+  if (activeId === pid) { renderMessages(); $('text').focus(); }
+}
+
+function closeChatView() {
+  $('placeholder').classList.remove('hidden');
+  $('messages').classList.add('hidden');
+  $('composer').classList.add('hidden');
+  $('chatTitle').textContent = '';
+}
+
+$('backBtn').onclick = () => {
+  document.body.classList.remove('in-chat');
+  activeId = null;
+  closeChatView();
+  renderChats();
+};
+
+function renderMessages() {
+  const box = $('messages');
+  box.innerHTML = '';
+  let lastDay = '';
+  for (const m of history.get(activeId) || []) {
+    const day = new Date(m.created_at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+    if (day !== lastDay) {
+      const d = document.createElement('div');
+      d.className = 'day'; d.textContent = day; box.appendChild(d);
+      lastDay = day;
+    }
+    box.appendChild(bubble(m));
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+function bubble(m) {
+  const el = document.createElement('div');
+  el.className = 'bubble' + (m.sender_id === me.id ? ' mine' : '');
+  el.textContent = m.content;
+  const t = document.createElement('time');
+  t.textContent = new Date(m.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  el.appendChild(t);
+  return el;
+}
+
+/* ---------- Отправка ---------- */
+$('composer').onsubmit = async (e) => {
+  e.preventDefault();
+  const input = $('text');
+  const content = input.value.trim();
+  if (!content || !activeId) return;
+  input.value = '';
+  const { data, error } = await sb.from('messages')
+    .insert({ sender_id: me.id, receiver_id: activeId, content })
+    .select().single();
+  if (error) { input.value = content; alertInline('Не отправилось: ' + error.message); return; }
+  addMessage(data);
+};
+
+function alertInline(text) {
+  const d = document.createElement('div');
+  d.className = 'day'; d.style.color = 'var(--err)'; d.textContent = text;
+  $('messages').appendChild(d);
+  $('messages').scrollTop = $('messages').scrollHeight;
+}
+
+/* ---------- Новые сообщения в реальном времени ---------- */
+function subscribe() {
+  if (channel) sb.removeChannel(channel);
+  channel = sb.channel('inbox-' + me.id)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => addMessage(payload.new))
+    .subscribe();
+}
+
+async function addMessage(m) {
+  if (!me || (m.sender_id !== me.id && m.receiver_id !== me.id)) return;
+  const pid = partnerOf(m);
+  await ensureNames([pid]);
+  const c = chats.get(pid) || { last: null, unread: false };
+  if (!c.last || c.last.created_at <= m.created_at) c.last = m;
+  if (m.sender_id !== me.id && pid !== activeId) c.unread = true;
+  chats.set(pid, c);
+
+  const h = history.get(pid);
+  if (h && !h.some((x) => x.id === m.id)) {
+    h.push(m);
+    if (pid === activeId) renderMessages();
+  }
+  renderChats();
+}
+
+/* ---------- Мелочи ---------- */
+function partnerOf(m) { return m.sender_id === me.id ? m.receiver_id : m.sender_id; }
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function avatar(name) {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `<div class="avatar" style="background:hsl(${h} 55% 42%)">${esc((name[0] || '?').toUpperCase())}</div>`;
+}
+
+function timeShort(iso) {
+  const d = new Date(iso), now = new Date();
+  return d.toDateString() === now.toDateString()
+    ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
+// Показываем экран входа, если сессии нет
+const { data: { session } } = await sb.auth.getSession();
+if (!session) $('auth').classList.remove('hidden');
+</script>
+</body>
+</html>
