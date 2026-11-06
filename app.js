@@ -400,7 +400,7 @@ async function startApp(user) {
   await loadChats();
   subscribe();
   shareAll();
-  if (prefs.notify) setupPush(true).catch(() => {});
+  if (prefs.notify && 'Notification' in window && Notification.permission === 'granted') setupPush(true).catch(() => {});
   const m = location.hash.match(/c=([0-9a-f-]{36})/);
   if (m) { window.history.replaceState(null, '', location.pathname); openChat(m[1]); }
 }
@@ -879,16 +879,20 @@ async function setupPush(enable) {
       ? 'На iPhone сначала установите приложение: «Поделиться» → «На экран Домой», и откройте его с иконки'
       : 'Этот браузер не поддерживает push-уведомления');
   }
-  const reg = swReg || await navigator.serviceWorker.ready;
   if (enable) {
-    const perm = await Notification.requestPermission();
-    if (perm !== 'granted') throw new Error('Разрешите уведомления в настройках браузера');
+    // На iPhone запрос разрешения должен идти сразу после нажатия, без ожиданий перед ним
+    const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error(/iPhone|iPad/.test(navigator.userAgent)
+      ? 'Разрешите уведомления: Настройки iPhone → Уведомления → Мессенджер'
+      : 'Разрешите уведомления в настройках браузера');
+    const reg = swReg || await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(VAPID_PUBLIC_KEY) });
     const j = sub.toJSON();
     const { error } = await sb.rpc('save_push_subscription', { p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth });
     if (error) throw error;
   } else {
+    const reg = swReg || await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
     if (sub) { await sb.from('push_subscriptions').delete().eq('endpoint', sub.endpoint); await sub.unsubscribe(); }
   }
