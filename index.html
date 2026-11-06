@@ -1,291 +1,139 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-style="classic" data-mode="light">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Мессенджер</title>
+<meta name="theme-color" content="#ffffff">
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#7c5cff">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Мессенджер">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #f4f1ff; --bg2: #ffe9f3;
-    --panel: #ffffff; --panel2: #f6f4fb; --line: #ece8f5;
-    --text: #2b2540; --muted: #8a84a3;
-    --accent: #7c5cff; --accent2: #ff6fa8;
-    --theirs: #ffffff; --chatbg: #f7f5fd;
-    --err: #e5484d; --ok: #2fa86b;
-    --shadow: 0 10px 40px rgba(92, 64, 180, .12);
-  }
-  body.dark {
-    --bg: #15121f; --bg2: #1d1530;
-    --panel: #1d1a29; --panel2: #262236; --line: #2f2a42;
-    --text: #efeaff; --muted: #9b93b8;
-    --theirs: #2a2540; --chatbg: #17141f;
-    --shadow: 0 10px 40px rgba(0, 0, 0, .35);
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
-  body { background: linear-gradient(135deg, var(--bg), var(--bg2)); color: var(--text);
-    font: 15px/1.45 "Nunito", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    transition: background .3s, color .3s; }
-  button { font: inherit; cursor: pointer; border: 0; border-radius: 14px; color: inherit; background: none; }
-  input { font: inherit; color: var(--text); background: var(--panel2); border: 2px solid transparent;
-    border-radius: 14px; padding: 12px 14px; outline: none; width: 100%; transition: border-color .2s, background .2s; }
-  input::placeholder { color: var(--muted); }
-  input:focus { border-color: var(--accent); background: var(--panel); }
-  .hidden { display: none !important; }
-  .grad { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; }
-
-  /* ---------- Вход ---------- */
-  #auth { min-height: 100%; display: grid; place-items: center; padding: 20px; }
-  .card { width: 100%; max-width: 380px; background: var(--panel); border-radius: 28px; padding: 32px 28px;
-    display: grid; gap: 14px; box-shadow: var(--shadow); animation: pop .4s ease; }
-  .logo { width: 72px; height: 72px; border-radius: 24px; display: grid; place-items: center; font-size: 36px;
-    margin: 0 auto 4px; box-shadow: 0 8px 24px rgba(124, 92, 255, .35); }
-  .card h1 { margin: 0; font-size: 26px; font-weight: 800; text-align: center; }
-  .card .sub { margin: -6px 0 6px; text-align: center; color: var(--muted); }
-  .tabs { display: flex; gap: 4px; background: var(--panel2); padding: 5px; border-radius: 16px; }
-  .tabs button { flex: 1; padding: 9px; color: var(--muted); font-weight: 700; border-radius: 12px; }
-  .tabs button.on { background: var(--panel); color: var(--accent); box-shadow: 0 2px 10px rgba(92, 64, 180, .12); }
-  .primary { padding: 13px; font-weight: 800; font-size: 16px; transition: transform .1s, filter .2s; }
-  .primary:hover { filter: brightness(1.05); }
-  .primary:active { transform: scale(.98); }
-  .primary:disabled { opacity: .6; cursor: default; }
-  .secondary { padding: 11px 14px; font-weight: 700; background: var(--panel2); }
-  .secondary:hover { background: var(--line); }
-  .danger { color: var(--err); }
-  .msg { font-size: 14px; min-height: 1em; text-align: center; }
-  .msg.err { color: var(--err); } .msg.ok { color: var(--ok); }
-
-  /* ---------- Приложение ---------- */
-  #app { height: 100%; display: flex; padding: 16px; gap: 16px; }
-  #sidebar { width: 340px; flex-shrink: 0; background: var(--panel); border-radius: 24px; box-shadow: var(--shadow);
-    display: flex; flex-direction: column; overflow: hidden; }
-  .side-head { padding: 18px 16px 12px; display: grid; gap: 12px; }
-  .me { display: flex; align-items: center; gap: 10px; }
-  .me .who { flex: 1; min-width: 0; cursor: pointer; }
-  .me .hi { font-size: 13px; color: var(--muted); }
-  .me b { font-size: 17px; font-weight: 800; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .icon-btn { width: 38px; height: 38px; display: grid; place-items: center; background: var(--panel2); font-size: 17px;
-    border-radius: 12px; flex-shrink: 0; transition: background .2s; }
-  .icon-btn:hover { background: var(--line); }
-  .search-row { display: flex; gap: 8px; }
-  .find { position: relative; flex: 1; }
-  .find input { padding-left: 40px; }
-  .find::before { content: "🔍"; position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 14px; opacity: .6; }
-  .new-group { width: 48px; font-size: 20px; border-radius: 14px; flex-shrink: 0; }
-  .side-title { padding: 4px 18px 6px; font-size: 12px; font-weight: 800; letter-spacing: .06em;
-    text-transform: uppercase; color: var(--muted); }
-  #chatList { overflow-y: auto; flex: 1; padding: 0 8px 8px; }
-  .chat-item { padding: 10px; border-radius: 16px; cursor: pointer; display: flex; gap: 12px; align-items: center;
-    transition: background .15s; }
-  .chat-item:hover { background: var(--panel2); }
-  .chat-item.active { background: linear-gradient(135deg, rgba(124, 92, 255, .14), rgba(255, 111, 168, .12)); }
-  .avatar { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center;
-    font-weight: 800; font-size: 18px; flex-shrink: 0; color: #fff; position: relative; }
-  .avatar.sm { width: 40px; height: 40px; font-size: 16px; }
-  .avatar.xs { width: 32px; height: 32px; font-size: 13px; }
-  .avatar.lg { width: 84px; height: 84px; font-size: 34px; }
-  .avatar .grp { position: absolute; right: -2px; bottom: -2px; font-size: 12px; background: var(--panel);
-    border-radius: 50%; width: 20px; height: 20px; display: grid; place-items: center; }
-  .chat-meta { min-width: 0; flex: 1; }
-  .chat-name { font-weight: 700; display: flex; justify-content: space-between; gap: 6px; }
-  .chat-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chat-name small { color: var(--muted); font-weight: 600; font-size: 12px; flex-shrink: 0; }
-  .chat-last { color: var(--muted); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .chat-item.unread .chat-last { color: var(--text); font-weight: 700; }
-  .dot { min-width: 10px; height: 10px; border-radius: 50%; background: var(--accent2); flex-shrink: 0;
-    box-shadow: 0 0 0 3px rgba(255, 111, 168, .2); }
-  .empty { color: var(--muted); padding: 28px 16px; font-size: 14px; text-align: center; }
-  .empty .big { font-size: 40px; display: block; margin-bottom: 8px; }
-
-  #chat { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--panel);
-    border-radius: 24px; box-shadow: var(--shadow); overflow: hidden; }
-  .chat-head { padding: 12px 18px; border-bottom: 1px solid var(--line); display: flex; align-items: center;
-    gap: 12px; min-height: 68px; }
-  .chat-head .info { flex: 1; min-width: 0; cursor: pointer; display: flex; align-items: center; gap: 12px; }
-  .chat-head .title { font-weight: 800; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chat-head .status { font-size: 12.5px; color: var(--muted); }
-  #backBtn { display: none; }
-  #messages { flex: 1; overflow-y: auto; padding: 18px 20px; display: flex; flex-direction: column; gap: 4px;
-    background: var(--chatbg);
-    background-image: radial-gradient(rgba(124, 92, 255, .07) 1px, transparent 1px); background-size: 22px 22px; }
-  .bubble { max-width: min(72%, 560px); padding: 9px 14px 6px; border-radius: 20px 20px 20px 6px;
-    background: var(--theirs); align-self: flex-start; white-space: pre-wrap; word-wrap: break-word;
-    box-shadow: 0 2px 6px rgba(60, 40, 120, .08); animation: pop .2s ease; }
-  .bubble.mine { background: linear-gradient(135deg, var(--accent), #9b6bff); color: #fff;
-    align-self: flex-end; border-radius: 20px 20px 6px 20px; }
-  .bubble .from { font-size: 12.5px; font-weight: 800; margin-bottom: 2px; }
-  .bubble time { display: block; font-size: 11px; opacity: .6; text-align: right; margin-top: 1px; }
-  .bubble.photo { padding: 4px 4px 6px; }
-  .bubble.photo .from { padding: 4px 10px 0; }
-  .bubble.photo .cap { padding: 4px 10px 0; }
-  .bubble.photo time { padding: 0 10px; }
-  .bubble img { display: block; max-width: min(300px, 100%); max-height: 340px; min-width: 120px; min-height: 80px;
-    border-radius: 16px; cursor: zoom-in; background: var(--panel2); object-fit: cover; }
-  .day { align-self: center; color: var(--muted); font-size: 12px; font-weight: 700; margin: 10px 0;
-    background: var(--panel); padding: 4px 12px; border-radius: 999px; box-shadow: 0 1px 4px rgba(60, 40, 120, .08); }
-  #composer { display: flex; gap: 10px; padding: 14px; border-top: 1px solid var(--line); align-items: center; }
-  #composer input[type=text] { border-radius: 999px; padding: 12px 18px; }
-  #composer .send { width: 48px; height: 48px; border-radius: 50%; font-size: 20px; flex-shrink: 0;
-    box-shadow: 0 6px 16px rgba(124, 92, 255, .35); transition: transform .1s; }
-  #composer .send:active { transform: scale(.92); }
-  #composer .attach { width: 44px; height: 44px; border-radius: 50%; font-size: 20px; flex-shrink: 0;
-    background: var(--panel2); display: grid; place-items: center; cursor: pointer; }
-  #composer .attach:hover { background: var(--line); }
-  .uploading { font-size: 13px; color: var(--muted); padding: 0 16px 10px; }
-  .placeholder { flex: 1; display: grid; place-content: center; justify-items: center; gap: 6px; color: var(--muted);
-    padding: 20px; text-align: center; }
-  .placeholder .big { font-size: 64px; animation: float 3s ease-in-out infinite; }
-  .placeholder h2 { margin: 6px 0 0; color: var(--text); font-weight: 800; }
-  .hint { font-size: 14px; color: var(--muted); text-align: center; padding: 30px 10px; }
-  .hint .big { font-size: 44px; display: block; margin-bottom: 6px; }
-
-  /* ---------- Окна ---------- */
-  .overlay { position: fixed; inset: 0; background: rgba(20, 12, 40, .45); backdrop-filter: blur(4px);
-    display: grid; place-items: center; padding: 16px; z-index: 10; animation: fade .2s ease; }
-  .modal { width: 100%; max-width: 420px; max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel);
-    border-radius: 26px; padding: 22px; box-shadow: var(--shadow); display: grid; gap: 14px; animation: pop .25s ease; }
-  .modal-head { display: flex; align-items: center; justify-content: space-between; }
-  .modal-head h3 { margin: 0; font-size: 20px; font-weight: 800; }
-  .section { display: grid; gap: 10px; padding: 14px; background: var(--panel2); border-radius: 18px; }
-  .section h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-  .section input { background: var(--panel); }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  .row .lbl { font-weight: 700; }
-  .row .lbl small { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; }
-  .center { display: grid; justify-items: center; gap: 6px; text-align: center; }
-  .center .name { font-size: 19px; font-weight: 800; }
-  .center .nick { color: var(--muted); }
-  .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
-  .swatch { width: 32px; height: 32px; border-radius: 50%; border: 3px solid transparent; }
-  .swatch.on { border-color: var(--text); }
-  .switch { position: relative; width: 48px; height: 28px; flex-shrink: 0; }
-  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
-  .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: .2s; cursor: pointer; }
-  .switch span::before { content: ""; position: absolute; width: 22px; height: 22px; left: 3px; top: 3px;
-    background: #fff; border-radius: 50%; transition: .2s; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
-  .switch input:checked + span { background: var(--accent); }
-  .switch input:checked + span::before { transform: translateX(20px); }
-  .member { display: flex; align-items: center; gap: 10px; }
-  .member .n { font-weight: 700; }
-  .member .u { color: var(--muted); font-size: 13px; }
-  .inline { display: flex; gap: 8px; }
-  .inline button { flex-shrink: 0; }
-
-  .lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, .85); display: grid; place-items: center;
-    z-index: 20; cursor: zoom-out; animation: fade .2s ease; padding: 20px; }
-  .lightbox img { max-width: 100%; max-height: 100%; border-radius: 12px; }
-
-  .lock-note { align-self: center; font-size: 12px; color: var(--muted); background: var(--panel); padding: 6px 12px;
-    border-radius: 12px; text-align: center; max-width: 420px; margin: 4px 0 10px; }
-  .warn { align-self: stretch; background: #fff4e5; color: #7a4b00; border-radius: 16px; padding: 10px 14px;
-    font-size: 13.5px; display: grid; gap: 8px; margin-bottom: 8px; }
-  body.dark .warn { background: #3a2c12; color: #ffd591; }
-  .warn button { justify-self: start; background: #ffb020; color: #3a2600; font-weight: 800; padding: 7px 12px; border-radius: 10px; }
-  .bubble.locked { font-style: italic; opacity: .75; }
-  .safety { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 15px; letter-spacing: .04em;
-    display: grid; grid-template-columns: repeat(4, auto); gap: 6px 14px; justify-content: center; padding: 6px 0; }
-  .small { font-size: 13px; color: var(--muted); text-align: center; }
-  .modal .primary:disabled { opacity: .6; }
-  @keyframes pop { from { transform: scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
-  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes float { 50% { transform: translateY(-8px); } }
-
-  /* ---------- Телефон ---------- */
-  @media (max-width: 720px) {
-    #app { padding: 0; gap: 0; }
-    #sidebar, #chat { border-radius: 0; box-shadow: none; }
-    #sidebar { width: 100%; }
-    #chat { display: none; }
-    body.in-chat #sidebar { display: none; }
-    body.in-chat #chat { display: flex; }
-    #backBtn { display: grid; }
-    .bubble { max-width: 85%; }
-  }
-</style>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Doto:wght@600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+<script>
+  // Тема применяется до отрисовки, чтобы не было «вспышки»
+  try {
+    const p = JSON.parse(localStorage.getItem('prefs') || '{}');
+    const mode = p.mode === 'auto' || !p.mode
+      ? (p.theme === 'dark' ? 'dark' : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : p.mode;
+    document.documentElement.dataset.style = p.style || 'classic';
+    document.documentElement.dataset.mode = mode;
+  } catch {}
+</script>
 </head>
 <body>
 
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.7c2 .6 3.2 2.4 3.5 5.3"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+    <symbol id="i-attach" viewBox="0 0 24 24"><path d="M20.5 11.5 12 20a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.7 17.7a1.7 1.7 0 0 1-2.4-2.4L15 7.6"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4Z"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3 2 20h20Z"/><path d="M12 10v4M12 17v.5"/></symbol>
+  </defs>
+</svg>
+
 <!-- Вход / регистрация -->
-<section id="auth" class="hidden">
-  <form class="card" id="authForm">
-    <div class="logo grad">💬</div>
-    <h1>Привет! 👋</h1>
-    <p class="sub" id="authSub">Рады видеть снова</p>
-    <div class="tabs">
-      <button type="button" id="tabLogin" class="on">Вход</button>
-      <button type="button" id="tabSignup">Регистрация</button>
+<section id="auth" class="auth" hidden>
+  <form class="auth-card" id="authForm" novalidate>
+    <div class="brand">
+      <img src="icon-192.png" alt="" class="brand-icon">
+      <div>
+        <div class="brand-name">messenger</div>
+        <div class="brand-sub" id="authSub">С возвращением</div>
+      </div>
     </div>
-    <input id="username" class="hidden" placeholder="Придумайте ник, например daniil" autocomplete="username" maxlength="24">
-    <input id="email" type="email" placeholder="Email" autocomplete="email" required>
-    <input id="password" type="password" placeholder="Пароль (от 6 символов)" autocomplete="current-password" minlength="6" required>
-    <button class="primary grad" id="authBtn" type="submit">Войти</button>
-    <div class="msg" id="authMsg"></div>
+    <div class="segmented" role="tablist">
+      <button type="button" id="tabLogin" class="on" role="tab">Вход</button>
+      <button type="button" id="tabSignup" role="tab">Регистрация</button>
+    </div>
+    <label class="field" id="usernameField" hidden>
+      <span>Ник</span>
+      <input id="username" placeholder="латиница, цифры, _" autocomplete="username" maxlength="24" autocapitalize="off" spellcheck="false">
+    </label>
+    <label class="field">
+      <span>Email</span>
+      <input id="email" type="email" placeholder="you@example.com" autocomplete="email" required>
+    </label>
+    <label class="field">
+      <span>Пароль</span>
+      <input id="password" type="password" placeholder="от 6 символов" autocomplete="current-password" minlength="6" required>
+    </label>
+    <button class="btn btn-primary" id="authBtn" type="submit">Войти</button>
+    <p class="note" id="authMsg" role="status"></p>
   </form>
 </section>
 
 <!-- Основной экран -->
-<section id="app" class="hidden">
-  <aside id="sidebar">
-    <div class="side-head">
-      <div class="me">
-        <div id="meAvatar"></div>
-        <div class="who" id="meWho" title="Настройки"><span class="hi">Привет,</span><b id="meName"></b></div>
-        <button class="icon-btn" id="themeBtn" title="Сменить тему">🌙</button>
-        <button class="icon-btn" id="settingsBtn" title="Настройки">⚙️</button>
-      </div>
-      <div class="search-row">
-        <form class="find" id="findForm">
-          <input id="findInput" placeholder="Ник друга + Enter" autocomplete="off">
-        </form>
-        <button class="new-group grad" id="newGroupBtn" title="Новая группа">👥</button>
-      </div>
-      <div class="msg" id="findMsg"></div>
+<section id="app" class="app" hidden>
+  <aside class="sidebar">
+    <header class="side-top">
+      <button class="me" id="meBtn" title="Настройки">
+        <span id="meAvatar"></span>
+        <span class="me-text"><span class="me-name" id="meName"></span><span class="me-nick" id="meNick"></span></span>
+      </button>
+      <button class="icon-btn" id="modeBtn" title="Светлая / тёмная"><svg class="i"><use href="#i-moon"/></svg></button>
+      <button class="icon-btn" id="settingsBtn" title="Настройки"><svg class="i"><use href="#i-settings"/></svg></button>
+    </header>
+    <div class="side-tools">
+      <form class="search" id="findForm">
+        <svg class="i"><use href="#i-search"/></svg>
+        <input id="findInput" placeholder="Ник друга" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+      </form>
+      <button class="icon-btn icon-btn-accent" id="newGroupBtn" title="Новая группа"><svg class="i"><use href="#i-users"/></svg></button>
     </div>
-    <div class="side-title">Чаты</div>
-    <div id="chatList"></div>
+    <p class="note" id="findMsg" role="status"></p>
+    <div class="list-label">Чаты</div>
+    <div class="chat-list" id="chatList"></div>
   </aside>
 
-  <main id="chat">
-    <div class="chat-head">
-      <button class="icon-btn" id="backBtn">←</button>
-      <div class="info" id="chatInfo" title="О чате">
-        <div id="chatAvatar"></div>
-        <div style="min-width:0">
-          <div class="title" id="chatTitle"></div>
-          <div class="status" id="chatStatus"></div>
-        </div>
-      </div>
+  <main class="chat" id="chat">
+    <header class="chat-top">
+      <button class="icon-btn back" id="backBtn" title="Назад"><svg class="i"><use href="#i-back"/></svg></button>
+      <button class="chat-info" id="chatInfo" title="О чате">
+        <span id="chatAvatar"></span>
+        <span class="chat-info-text">
+          <span class="chat-title" id="chatTitle"></span>
+          <span class="chat-sub" id="chatStatus"></span>
+        </span>
+      </button>
+    </header>
+    <div class="placeholder" id="placeholder">
+      <div class="placeholder-mark"><svg class="i"><use href="#i-chat"/></svg></div>
+      <h2>Выберите чат</h2>
+      <p>Найдите друга по нику или создайте группу.</p>
     </div>
-    <div id="placeholder" class="placeholder">
-      <div class="big">💌</div>
-      <h2>Тут будут ваши разговоры</h2>
-      <div>Выберите чат слева, найдите друга по нику или создайте группу 👥</div>
-    </div>
-    <div id="messages" class="hidden"></div>
-    <div id="uploading" class="uploading hidden">📤 Отправляю фото…</div>
-    <form id="composer" class="hidden">
-      <label class="attach" title="Отправить фото">📎<input type="file" id="fileInput" accept="image/*" hidden></label>
-      <input id="text" type="text" placeholder="Напишите что-нибудь приятное…" autocomplete="off" maxlength="4000">
-      <button type="submit" class="send grad" title="Отправить">➤</button>
+    <div class="messages" id="messages" hidden></div>
+    <div class="uploading" id="uploading" hidden>Отправляю фото…</div>
+    <form class="composer" id="composer" hidden>
+      <label class="icon-btn" title="Фото"><svg class="i"><use href="#i-attach"/></svg><input type="file" id="fileInput" accept="image/*" hidden></label>
+      <textarea id="text" rows="1" placeholder="Сообщение" autocomplete="off" maxlength="4000" enterkeyhint="send"></textarea>
+      <button type="submit" class="send" title="Отправить"><svg class="i"><use href="#i-send"/></svg></button>
     </form>
   </main>
 </section>
 
 <div id="modalRoot"></div>
 
-<div id="configWarn" class="hidden" style="padding:24px;max-width:560px;margin:40px auto;line-height:1.6">
+<div id="configWarn" class="config-warn" hidden>
   <h2>Почти готово</h2>
   <p>Откройте файл <b>config.js</b> и вставьте туда адрес проекта и ключ из Supabase. Подробно — в README.md.</p>
 </div>
 
-<script type="module" src="app.js"></script>
+<script type="module" src="js/main.js"></script>
 </body>
 </html>

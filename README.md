@@ -12,7 +12,7 @@
 - `schema.sql`: создаёт базу данных (запускается один раз)
 - `update-1.sql`: добавляет группы, фото и настройки (запускается один раз, после `schema.sql`)
 - `update-2.sql`: сквозное шифрование и push (один раз, после `update-1.sql`; удаляет старые сообщения)
-- `app.js`, `sw.js`, `manifest.webmanifest`, иконки `*.png`: само приложение
+- `js/main.js` (логика), `js/crypto.js` (шифрование), `css/styles.css` (оформление), `sw.js`, `manifest.webmanifest`, иконки `*.png`: само приложение
 - `supabase/functions/push/index.ts`: функция отправки push (вставляется в Supabase, не на GitHub)
 
 ---
