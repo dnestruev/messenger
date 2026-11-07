@@ -372,10 +372,8 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .msg.locked { font-style: italic; opacity: .7; }
 .msg-from { font-size: 12.5px; font-weight: 600; margin-bottom: 1px; color: hsl(var(--h, 230) 60% 50%); }
 [data-style="dot"] .msg-from { color: var(--muted); font-family: var(--font-mono); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
-.msg-time { display: block; text-align: right; font-size: 11px; opacity: .6; margin-top: 1px; font-variant-numeric: tabular-nums; }
-[data-style="dot"] .msg-time { font-family: var(--font-display); font-weight: 800; font-size: 12px; opacity: .55; }
 .msg.photo { padding: 4px; max-width: min(76%, 308px); }
-.msg.photo .msg-from, .msg.photo .msg-text, .msg.photo .msg-time { padding: 0 8px; }
+.msg.photo .msg-from, .msg.photo .msg-text { padding: 0 8px; }
 .msg.photo .msg-text { padding-top: 4px; }
 .msg-img {
   display: block;
@@ -414,6 +412,90 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .send:hover { filter: brightness(1.08); }
 .send:active { transform: scale(.92); }
 .send .i { stroke-width: 2.4; }
+
+/* ---------- Значки команды ---------- */
+.role {
+  display: inline-flex; align-items: center; flex-shrink: 0;
+  padding: 1px 7px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 600; line-height: 1.5; letter-spacing: .01em;
+  vertical-align: middle;
+}
+.role.creator { background: var(--accent); color: var(--accent-text); }
+.role.tester { background: var(--surface-3); color: var(--text); }
+[data-style="dot"] .role { font-family: var(--font-mono); font-weight: 500; font-size: 9.5px; text-transform: uppercase; letter-spacing: .1em; border-radius: 6px; }
+[data-style="dot"] .role.tester { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }
+.avatar.creator { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+.avatar.tester { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--muted); }
+[data-style="dot"] .avatar.creator { box-shadow: none; outline: 2px dotted var(--accent); outline-offset: 2px; }
+[data-style="dot"] .avatar.tester { box-shadow: none; outline: 2px dotted var(--muted); outline-offset: 2px; }
+.verified { width: 16px; height: 16px; color: var(--accent); stroke-width: 2; }
+.name-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.name-line > .t { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Архив в списке ---------- */
+.archive-row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 10px; margin-bottom: 2px; border-radius: var(--radius);
+  color: var(--muted); font-weight: 600; text-align: left;
+}
+.archive-row:hover { background: var(--surface-2); color: var(--text); }
+.archive-row .avatar { background: var(--surface-2); color: var(--muted); }
+.archive-row .count { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* ---------- Сообщения: ответ, изменено, галочки, меню ---------- */
+.msg-quote {
+  display: block; width: 100%; text-align: left;
+  margin: 2px 0 4px; padding: 4px 8px;
+  border-left: 3px solid currentColor; border-radius: 6px;
+  background: rgba(127, 127, 127, .14);
+  font-size: 13px; line-height: 1.35;
+  overflow: hidden;
+}
+.msg-quote b { display: block; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-quote span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .8; }
+.msg.photo .msg-quote { margin: 4px 8px 6px; width: auto; }
+.msg-meta { display: flex; justify-content: flex-end; align-items: center; gap: 4px; margin-top: 1px; font-size: 11px; opacity: .6; font-variant-numeric: tabular-nums; }
+.msg.photo .msg-meta { padding: 0 8px; }
+.msg-meta .ticks { letter-spacing: -.25em; margin-right: .2em; }
+.msg-meta .ticks.read { color: inherit; opacity: 1; }
+[data-style="dot"] .msg-meta .time { font-family: var(--font-display); font-weight: 800; font-size: 12px; }
+.msg.flash { animation: flash 1s ease; }
+@keyframes flash { 30% { box-shadow: 0 0 0 3px var(--accent); } }
+.msg.hidden-msg { opacity: .55; font-style: italic; }
+
+.menu {
+  position: fixed; z-index: 30; min-width: 180px;
+  padding: 6px; display: grid;
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .22);
+  animation: rise .12s ease;
+}
+[data-style="dot"] .menu { border: 1px solid var(--line); }
+.menu button { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; text-align: left; font-size: 14px; }
+.menu button:hover { background: var(--surface-2); }
+.menu button.danger { color: var(--danger); }
+.menu .i { width: 18px; height: 18px; }
+
+.compose-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px 0 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  color: var(--accent);
+}
+.compose-bar + .composer { border-top: 0; }
+.compose-bar-text { flex: 1; min-width: 0; display: grid; border-left: 2px solid var(--accent); padding-left: 10px; }
+.compose-bar-text b { font-size: 12.5px; font-weight: 600; }
+.compose-bar-text span { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.locked-bar {
+  display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;
+  padding: 14px 16px max(14px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 14px; text-align: center;
+}
+.locked-bar .btn { min-height: 36px; }
+.typing { color: var(--accent); }
+.danger-zone { border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); background: transparent; }
 
 /* ---------- Окна ---------- */
 .overlay {

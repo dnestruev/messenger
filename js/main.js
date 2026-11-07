@@ -98,6 +98,11 @@ const state = {
   images: new Map(),        // путь -> blob: ссылка на расшифрованное фото
   activeId: null,
   channel: null,
+  blocked: new Set(),       // кого я заблокировал
+  reads: new Map(),         // id участника -> last_read_at (для открытого чата)
+  showArchive: false,
+  compose: null,            // { mode: 'reply' | 'edit', msg }
+  typing: { channel: null, until: 0, sentAt: 0, timer: null },
 };
 const keys = {
   priv: null,               // мой секретный ключ (неизвлекаемый)
@@ -160,7 +165,9 @@ function closeModal() { modalLocked = false; $('modalRoot').replaceChildren(); }
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   document.querySelector('.lightbox')?.remove();
-  if (!modalLocked) closeModal();
+  closeMenu();
+  if ($('modalRoot').children.length) { if (!modalLocked) closeModal(); }
+  else if (state.compose) setCompose(null);
 });
 const section = (title, ...kids) => h('div', { class: 'section' }, title ? h('div', { class: 'section-title', text: title }) : null, ...kids);
 const note = () => h('p', { class: 'note', role: 'status' });
@@ -182,21 +189,38 @@ function segmented(options, value, onpick) {
 async function loadPeople(ids) {
   const missing = [...new Set(ids)].filter((id) => id && !state.people.has(id));
   if (!missing.length) return;
-  const { data } = await sb.from('profiles').select('id, username, display_name, avatar_hue').in('id', missing);
+  const { data } = await sb.from('profiles').select('id, username, display_name, avatar_hue, role').in('id', missing);
   for (const p of data || []) state.people.set(p.id, p);
 }
 const nameOf = (id) => { const p = state.people.get(id); return p ? (p.display_name || p.username) : '…'; };
 const nickOf = (id) => '@' + (state.people.get(id)?.username || '');
 const hueOfUser = (id) => { const p = state.people.get(id) || {}; return p.avatar_hue ?? hueOf(p.username); };
 
-function avatar(label, hue, size = '', badge = null) {
-  return h('span', { class: 'avatar ' + size, vars: { '--h': hue } }, (label || '?')[0].toUpperCase(),
+function avatar(label, hue, size = '', badge = null, extra = '') {
+  return h('span', { class: ['avatar', size, extra].filter(Boolean).join(' '), vars: { '--h': hue } }, (label || '?')[0].toUpperCase(),
     badge ? h('span', { class: 'badge' }, icon(badge)) : null);
 }
-const userAvatar = (id, size) => avatar(nameOf(id), hueOfUser(id), size);
+const roleOf = (id) => state.people.get(id)?.role || null;
+const ROLE_LABEL = { creator: 'Создатель', tester: 'Тестер' };
+function roleBadge(id) {
+  const r = roleOf(id);
+  return r ? h('span', { class: 'role ' + r, title: r === 'creator' ? 'Создатель мессенджера' : 'Тестер мессенджера', text: ROLE_LABEL[r] }) : null;
+}
+/** Имя + значок роли (или галочка официального чата) с обрезкой длинного текста */
+const nameLine = (text, ...after) => h('span', { class: 'name-line' }, h('span', { class: 't', text }), ...after);
+const userAvatar = (id, size) => avatar(nameOf(id), hueOfUser(id), size, null, roleOf(id));
+const isStaffMe = () => !!roleOf(state.me.id);
 const otherOf = (c) => (c.member_ids || []).find((id) => id !== state.me.id);
 const titleOf = (c) => (c.is_group ? c.title || 'Группа' : nameOf(otherOf(c)));
-const chatAvatar = (c, size) => (c.is_group ? avatar(c.title, hueOf(c.title), size, 'users') : userAvatar(otherOf(c), size));
+const chatAvatar = (c, size) => (c.is_group ? avatar(c.title, hueOf(c.title), size, c.is_official ? 'verified' : 'users') : userAvatar(otherOf(c), size));
+function verifiedIcon() { const v = icon('verified'); v.setAttribute('class', 'i verified'); return v; }
+const chatBadge = (c) => (c.is_official ? verifiedIcon() : c.is_group ? null : roleBadge(otherOf(c)));
+/** Почему нельзя писать в чат (или null, если можно) */
+function writeBlock(c) {
+  if (c.is_official && !isStaffMe()) return { text: 'Писать в официальный чат может только команда' };
+  if (!c.is_group && state.blocked.has(otherOf(c))) return { text: `Вы заблокировали ${nameOf(otherOf(c))}`, unblock: otherOf(c) };
+  return null;
+}
 
 /* =====================================================================
    Шифрование: мои ключи
@@ -429,6 +453,7 @@ async function startApp(user) {
     return;
   }
   await loadChatKeys();
+  await loadBlocks();
   await loadChats();
   subscribe();
   shareAllChatKeys();
@@ -441,7 +466,10 @@ async function startApp(user) {
 function stopApp() {
   state.me = null;
   state.activeId = null;
-  state.people.clear(); state.chats.clear(); state.history.clear();
+  state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
+  state.showArchive = false;
+  setCompose(null);
+  leaveTyping();
   for (const url of state.images.values()) URL.revokeObjectURL(url);
   state.images.clear();
   keys.priv = null; keys.fp = null; keys.chat.clear(); keys.pub.clear(); keys.trusted = {};
@@ -454,9 +482,14 @@ function stopApp() {
   document.title = 'Мессенджер';
 }
 
+async function loadBlocks() {
+  const { data } = await sb.from('blocks').select('blocked').eq('blocker', state.me.id);
+  state.blocked = new Set((data || []).map((r) => r.blocked));
+}
+
 function renderMe() {
   const p = state.people.get(state.me.id);
-  $('meName').textContent = p.display_name || p.username;
+  $('meName').replaceChildren(nameLine(p.display_name || p.username, roleBadge(state.me.id)));
   $('meNick').textContent = '@' + p.username;
   $('meAvatar').replaceChildren(userAvatar(state.me.id, 'sm'));
 }
@@ -486,22 +519,38 @@ function previewText(p) {
   return p.img ? 'Фото' + (p.t ? ': ' + p.t : '') : p.t;
 }
 function previewOf(c) {
-  if (!c.last_sender) return c.is_group ? 'Группа создана' : 'Новый чат';
+  if (!c.last_sender) return c.is_group ? (c.is_official ? 'Официальный чат' : 'Группа создана') : 'Новый чат';
+  if (state.blocked.has(c.last_sender)) return 'Сообщение скрыто';
   const who = c.last_sender === state.me.id ? 'Вы: ' : c.is_group ? nameOf(c.last_sender) + ': ' : '';
   return who + previewText(c.last_p);
 }
 
 function renderChats() {
-  const items = [...state.chats.values()].sort((a, b) => ts(b.last_message_at) - ts(a.last_message_at));
-  const unread = items.filter(isUnread).length;
+  const all = [...state.chats.values()].sort((a, b) =>
+    (b.is_official - a.is_official) || ts(b.last_message_at) - ts(a.last_message_at));
+  const archived = all.filter((c) => c.archived);
+  if (state.showArchive && !archived.length) state.showArchive = false;
+  const items = all.filter((c) => !!c.archived === state.showArchive);
+  const unread = all.filter((c) => !c.archived && isUnread(c)).length;
+  $('listLabel').textContent = state.showArchive ? 'Архив' : 'Чаты';
   document.title = unread ? `(${unread}) Мессенджер` : 'Мессенджер';
   if ('setAppBadge' in navigator) (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
 
+  const head = [];
+  if (state.showArchive) {
+    head.push(h('button', { class: 'archive-row', onclick: () => { state.showArchive = false; renderChats(); } },
+      h('span', { class: 'avatar sm' }, icon('back')), 'Назад к чатам'));
+  } else if (archived.length) {
+    const archivedUnread = archived.filter(isUnread).length;
+    head.push(h('button', { class: 'archive-row', onclick: () => { state.showArchive = true; renderChats(); } },
+      h('span', { class: 'avatar sm' }, icon('archive')), 'Архив',
+      h('span', { class: 'count', text: archivedUnread ? `${archived.length} · ${archivedUnread} новых` : String(archived.length) })));
+  }
   if (!items.length) {
-    $('chatList').replaceChildren(h('div', { class: 'list-empty', text: 'Чатов пока нет. Найдите друга по нику или создайте группу.' }));
+    $('chatList').replaceChildren(...head, h('div', { class: 'list-empty', text: 'Чатов пока нет. Найдите друга по нику или создайте группу.' }));
     return;
   }
-  $('chatList').replaceChildren(...items.map((c) => {
+  $('chatList').replaceChildren(...head, ...items.map((c) => {
     const un = isUnread(c) && c.id !== state.activeId;
     return h('button', {
       class: 'chat-item' + (c.id === state.activeId ? ' active' : '') + (un ? ' unread' : ''),
@@ -510,7 +559,7 @@ function renderChats() {
       chatAvatar(c),
       h('span', { class: 'chat-item-body' },
         h('span', { class: 'chat-item-row' },
-          h('span', { class: 'chat-item-name', text: titleOf(c) }),
+          h('span', { class: 'chat-item-name' }, nameLine(titleOf(c), chatBadge(c))),
           h('span', { class: 'chat-item-time', text: c.last_sender ? shortTime(c.last_message_at) : '' })),
         h('span', { class: 'chat-item-row' },
           h('span', { class: 'chat-item-last', text: previewOf(c) }),
@@ -523,7 +572,7 @@ $('findForm').onsubmit = async (e) => {
   const q = $('findInput').value.trim().toLowerCase().replace(/^@/, '');
   if (!q) return;
   if (q === state.people.get(state.me.id).username) return say('findMsg', 'Это же вы');
-  const { data, error } = await sb.from('profiles').select('id, username, display_name, avatar_hue').eq('username', q).maybeSingle();
+  const { data, error } = await sb.from('profiles').select('id, username, display_name, avatar_hue, role').eq('username', q).maybeSingle();
   if (error) return say('findMsg', humanError(error));
   if (!data) return say('findMsg', `Не нашли @${q} — проверьте ник`);
   state.people.set(data.id, data);
@@ -538,10 +587,16 @@ $('findForm').onsubmit = async (e) => {
 /* =====================================================================
    Открытый чат
    ===================================================================== */
+const MSG_COLUMNS = 'id, conversation_id, sender_id, ct, iv, created_at, edited_at';
+
 function showPlaceholder() {
+  leaveTyping();
+  setCompose(null);
   $('placeholder').hidden = false;
   $('messages').hidden = true;
   $('composer').hidden = true;
+  $('lockedBar').hidden = true;
+  $('composeBar').hidden = true;
   $('uploading').hidden = true;
   $('chatTitle').textContent = '';
   $('chatStatus').replaceChildren();
@@ -551,28 +606,78 @@ function showPlaceholder() {
 function renderHeader() {
   const c = state.chats.get(state.activeId);
   if (!c) return;
-  $('chatTitle').textContent = titleOf(c);
+  $('chatTitle').replaceChildren(nameLine(titleOf(c), chatBadge(c)));
   $('chatAvatar').replaceChildren(chatAvatar(c, 'sm'));
+  if (Date.now() < state.typing.until) {
+    $('chatStatus').replaceChildren(h('span', { class: 'typing', text: c.is_group ? `${nameOf(state.typing.who)} печатает…` : 'печатает…' }));
+    return;
+  }
   const n = (c.member_ids || []).length;
+  const members = `${n} ${plural(n, 'участник', 'участника', 'участников')}`;
   $('chatStatus').replaceChildren(icon('lock'),
-    c.is_group ? `${n} ${plural(n, 'участник', 'участника', 'участников')}` : nickOf(otherOf(c)));
+    c.is_group ? (c.is_official ? 'Официальный чат · ' + members : members) : nickOf(otherOf(c)));
+}
+
+function renderComposer() {
+  const c = state.chats.get(state.activeId);
+  const block = c && writeBlock(c);
+  $('composer').hidden = !c || !!block;
+  $('composeBar').hidden = !c || !!block || !state.compose;
+  $('lockedBar').hidden = !block;
+  if (block) {
+    $('lockedBar').replaceChildren(h('span', { text: block.text }),
+      block.unblock ? h('button', { class: 'btn', text: 'Разблокировать', onclick: () => setBlocked(block.unblock, false) }) : null);
+  }
+}
+
+/* ---------- «печатает…» (через Realtime Broadcast, в базу не пишется) ---------- */
+function joinTyping(chatId) {
+  leaveTyping();
+  state.typing.channel = sb.channel('typing:' + chatId)
+    .on('broadcast', { event: 'typing' }, ({ payload }) => {
+      if (!payload || payload.user === state.me?.id || state.activeId !== chatId || state.blocked.has(payload.user)) return;
+      state.typing.until = Date.now() + 3500;
+      state.typing.who = payload.user;
+      renderHeader();
+      clearTimeout(state.typing.timer);
+      state.typing.timer = setTimeout(renderHeader, 3600);
+    })
+    .subscribe();
+}
+function leaveTyping() {
+  if (state.typing.channel) sb.removeChannel(state.typing.channel);
+  state.typing.channel = null;
+  state.typing.until = 0;
+}
+function sendTyping() {
+  if (!state.typing.channel || Date.now() - state.typing.sentAt < 2000) return;
+  state.typing.sentAt = Date.now();
+  state.typing.channel.send({ type: 'broadcast', event: 'typing', payload: { user: state.me.id } }).catch?.(() => {});
+}
+
+async function loadReads(chatId) {
+  const { data } = await sb.from('conversation_members').select('user_id, last_read_at').eq('conversation_id', chatId);
+  state.reads = new Map((data || []).map((r) => [r.user_id, r.last_read_at]));
 }
 
 async function openChat(id) {
   if (!state.chats.has(id)) await loadChats();
   if (!state.chats.has(id)) return;
+  if (state.activeId !== id) setCompose(null);
   state.activeId = id;
   document.body.classList.add('in-chat');
   $('placeholder').hidden = true;
   $('messages').hidden = false;
-  $('composer').hidden = false;
   renderHeader();
+  renderComposer();
   markRead(id);
   renderChats();
+  joinTyping(id);
+  loadReads(id).then(() => { if (state.activeId === id && state.history.has(id)) renderMessages(); });
 
   if (!state.history.has(id)) {
     $('messages').replaceChildren(h('div', { class: 'day', text: 'Загрузка…' }));
-    const { data, error } = await sb.from('messages').select('id, conversation_id, sender_id, ct, iv, created_at')
+    const { data, error } = await sb.from('messages').select(MSG_COLUMNS)
       .eq('conversation_id', id).order('created_at', { ascending: false }).limit(200);
     if (error) { $('messages').replaceChildren(h('div', { class: 'inline-err', text: humanError(error) })); return; }
     const merged = new Map([...(state.history.get(id) || []), ...data].map((m) => [m.id, m]));
@@ -648,8 +753,18 @@ function renderMessages() {
 function bubble(m, { showName, continued }) {
   const p = m.p;
   const mine = m.sender_id === state.me.id;
-  const el = h('div', { class: ['msg', mine && 'mine', p?.img && 'photo', (!p || p.bad) && 'locked', continued && 'cont'].filter(Boolean).join(' ') });
-  if (showName) el.append(h('div', { class: 'msg-from', vars: { '--h': hueOfUser(m.sender_id) }, text: nameOf(m.sender_id) }));
+  if (!mine && state.blocked.has(m.sender_id)) {
+    return h('div', { class: 'msg hidden-msg', dataset: { id: m.id } }, 'Сообщение от заблокированного пользователя');
+  }
+  const classes = ['msg', mine && 'mine', p?.img && 'photo', (!p || p.bad) && 'locked', continued && 'cont'];
+  const el = h('div', { class: classes.filter(Boolean).join(' '), dataset: { id: m.id } });
+  if (showName) {
+    el.append(h('div', { class: 'msg-from', vars: { '--h': hueOfUser(m.sender_id) } }, nameLine(nameOf(m.sender_id), roleBadge(m.sender_id))));
+  }
+  if (p?.r) {
+    el.append(h('button', { class: 'msg-quote', type: 'button', onclick: () => jumpTo(p.r.id) },
+      h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t || 'Фото' })));
+  }
   if (p?.img) {
     const img = h('img', { class: 'msg-img', alt: 'Фото', dataset: { path: p.img.path, iv: p.img.iv, mime: p.img.mime || 'image/jpeg', chat: m.conversation_id } });
     if (p.img.w && p.img.h) img.style.aspectRatio = `${p.img.w} / ${p.img.h}`;
@@ -658,8 +773,110 @@ function bubble(m, { showName, continued }) {
   }
   const text = !p ? 'Сообщение ещё не расшифровано' : p.bad ? 'Не удалось расшифровать' : p.t;
   if (text) el.append(h('div', { class: 'msg-text', text }));
-  el.append(h('span', { class: 'msg-time', text: timeOf(m.created_at) }));
+
+  const meta = h('span', { class: 'msg-meta' });
+  if (m.edited_at) meta.append(h('span', { text: 'изменено' }));
+  meta.append(h('span', { class: 'time', text: timeOf(m.created_at) }));
+  if (mine) {
+    const read = isReadByOthers(m);
+    meta.append(h('span', { class: 'ticks' + (read ? ' read' : ''), title: read ? 'Прочитано' : 'Отправлено', text: read ? '✓✓' : '✓' }));
+  }
+  el.append(meta);
+  attachMenu(el, m);
   return el;
+}
+
+/** Прочитано ли моё сообщение: в личном чате — собеседником, в группе — хотя бы одним участником */
+function isReadByOthers(m) {
+  for (const [uid, at] of state.reads) if (uid !== state.me.id && ts(at) >= ts(m.created_at)) return true;
+  return false;
+}
+
+function jumpTo(id) {
+  const el = $('messages').querySelector(`[data-id="${id}"]`);
+  if (!el) return;
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+}
+
+/* ---------- Меню сообщения: правый клик или долгое нажатие ---------- */
+function attachMenu(el, m) {
+  el.addEventListener('contextmenu', (e) => { e.preventDefault(); openMenu(m, e.clientX, e.clientY); });
+  let timer = null;
+  el.addEventListener('touchstart', (e) => {
+    const t = e.touches[0];
+    timer = setTimeout(() => { timer = null; navigator.vibrate?.(10); openMenu(m, t.clientX, t.clientY); }, 450);
+  }, { passive: true });
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  el.addEventListener('touchend', cancel);
+  el.addEventListener('touchmove', cancel, { passive: true });
+}
+
+function closeMenu() { document.querySelector('.menu')?.remove(); }
+function openMenu(m, x, y) {
+  closeMenu();
+  if (!m.p || m.p.bad) return;
+  const mine = m.sender_id === state.me.id;
+  const c = state.chats.get(m.conversation_id);
+  const items = [];
+  if (c && !writeBlock(c)) items.push(['reply', 'Ответить', () => setCompose({ mode: 'reply', msg: m })]);
+  if (m.p.t) items.push(['copy', 'Копировать', () => navigator.clipboard?.writeText(m.p.t)]);
+  if (mine && !m.p.img && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
+  if (mine) items.push(['trash', 'Удалить у всех', () => deleteMessage(m), 'danger']);
+  if (!items.length) return;
+  const menu = h('div', { class: 'menu', role: 'menu' }, ...items.map(([ic, label, fn, cls]) =>
+    h('button', { class: cls || '', role: 'menuitem', onclick: () => { closeMenu(); fn(); } }, icon(ic), label)));
+  document.body.append(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+  menu.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+}
+addEventListener('pointerdown', (e) => { if (!e.target.closest('.menu')) closeMenu(); });
+addEventListener('resize', closeMenu);
+document.addEventListener('scroll', closeMenu, true);
+
+async function deleteMessage(m) {
+  if (!confirm('Удалить сообщение у всех?')) return;
+  const { error } = await sb.from('messages').delete().eq('id', m.id);
+  if (error) return inlineError('Не удалилось: ' + humanError(error));
+  removeMessage(m.id);
+}
+
+function removeMessage(id) {
+  for (const [chatId, list] of state.history) {
+    const i = list.findIndex((x) => x.id === id);
+    if (i === -1) continue;
+    list.splice(i, 1);
+    const c = state.chats.get(chatId);
+    if (c) {
+      const lastMsg = list[list.length - 1];
+      Object.assign(c, lastMsg
+        ? { last_ct: lastMsg.ct, last_iv: lastMsg.iv, last_p: lastMsg.p, last_sender: lastMsg.sender_id }
+        : { last_ct: null, last_iv: null, last_p: null, last_sender: null });
+    }
+    if (chatId === state.activeId) renderMessages();
+    renderChats();
+    return;
+  }
+  loadChats();   // сообщения не было в открытой истории — просто обновим список
+}
+
+/* ---------- Ответ / изменение ---------- */
+function setCompose(next) {
+  const wasEdit = state.compose?.mode === 'edit';
+  state.compose = next;
+  if (!next) {
+    $('composeBar').hidden = true;
+    if (wasEdit) { textArea.value = ''; autosize(); }
+    return;
+  }
+  const p = next.msg.p;
+  setIcon($('composeBar'), next.mode === 'edit' ? 'edit' : 'reply');
+  $('composeTitle').textContent = next.mode === 'edit' ? 'Изменение' : 'Ответ ' + nameOf(next.msg.sender_id);
+  $('composeText').textContent = p.t || 'Фото';
+  $('composeBar').hidden = false;
+  if (next.mode === 'edit') { textArea.value = p.t || ''; autosize(); }
+  textArea.focus();
 }
 
 function resolveImages(root) {
@@ -702,7 +919,8 @@ function autosize() {
   textArea.style.height = 'auto';
   textArea.style.height = Math.min(textArea.scrollHeight + 2, 140) + 'px';
 }
-textArea.addEventListener('input', autosize);
+textArea.addEventListener('input', () => { autosize(); if (textArea.value) sendTyping(); });
+$('composeCancel').onclick = () => setCompose(null);
 textArea.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && isDesktop()) { e.preventDefault(); $('composer').requestSubmit(); }
 });
@@ -721,10 +939,26 @@ async function insertMessage(chatId, payload) {
   const { ct, iv } = await E2E.sealJson(keys.chat.get(chatId), payload, aadMsg(chatId, state.me.id));
   const { data, error } = await sb.from('messages')
     .insert({ conversation_id: chatId, sender_id: state.me.id, ct, iv })
-    .select('id, conversation_id, sender_id, ct, iv, created_at').single();
+    .select(MSG_COLUMNS).single();
   if (error) throw error;
   data.p = payload;
   return data;
+}
+
+/** Цитата для ответа: кто, что (коротко) и id исходного сообщения — всё внутри шифра */
+function replyRef() {
+  if (state.compose?.mode !== 'reply') return undefined;
+  const m = state.compose.msg;
+  return { id: m.id, s: m.sender_id, t: (m.p.t || (m.p.img ? 'Фото' : '')).slice(0, 120) };
+}
+
+async function editMessage(m, newText) {
+  const payload = { ...m.p, t: newText };
+  const { ct, iv } = await E2E.sealJson(keys.chat.get(m.conversation_id), payload, aadMsg(m.conversation_id, state.me.id));
+  const { data, error } = await sb.from('messages').update({ ct, iv }).eq('id', m.id).select(MSG_COLUMNS).single();
+  if (error) throw error;
+  data.p = payload;
+  upsertMessage(data);
 }
 
 $('composer').onsubmit = async (e) => {
@@ -732,16 +966,27 @@ $('composer').onsubmit = async (e) => {
   const content = textArea.value.trim();
   const chatId = state.activeId;
   if (!content || !chatId || !(await canSend(chatId))) return;
+  const compose = state.compose;
+  const payload = { t: content, r: replyRef() };
   textArea.value = '';
   autosize();
+  setCompose(null);
   try {
-    addMessage(await insertMessage(chatId, { t: content }));
+    if (compose?.mode === 'edit') await editMessage(compose.msg, content);
+    else addMessage(await insertMessage(chatId, payload));
   } catch (err) {
     textArea.value = content;
     autosize();
-    inlineError('Не отправилось: ' + humanError(err));
+    if (compose) setCompose(compose);
+    inlineError(sendError(err));
   }
 };
+
+function sendError(err) {
+  const m = String(err?.message || err);
+  if (/row-level security/i.test(m)) return 'Не отправилось: вы не можете писать в этот чат';
+  return 'Не отправилось: ' + humanError(err);
+}
 
 $('fileInput').onchange = () => {
   const f = $('fileInput').files[0];
@@ -765,11 +1010,12 @@ async function sendImage(file) {
       { contentType: 'application/octet-stream' });
     if (error) throw error;
     state.images.set(path, URL.createObjectURL(blob));
-    const msg = await insertMessage(chatId, { t: caption, img: { path, iv: sealed.iv, mime: type, w, h: height } });
+    const msg = await insertMessage(chatId, { t: caption, img: { path, iv: sealed.iv, mime: type, w, h: height }, r: replyRef() });
     if (caption) { textArea.value = ''; autosize(); }
+    setCompose(null);
     addMessage(msg);
   } catch (err) {
-    inlineError('Фото не отправилось: ' + humanError(err));
+    inlineError(sendError(err).replace('Не отправилось', 'Фото не отправилось'));
   } finally {
     $('uploading').hidden = true;
   }
@@ -794,6 +1040,17 @@ function subscribe() {
   const me = state.me.id;
   state.channel = sb.channel('inbox-' + me)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (p) => addMessage(p.new, true))
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, async (p) => {
+      if (p.new?.id) upsertMessage(await decryptMessage({ ...p.new, p: null }));
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (p) => { if (p.old?.id) removeMessage(p.old.id); })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversation_members' }, (p) => {
+      const r = p.new;
+      if (!r) return;
+      if (r.conversation_id === state.activeId && r.user_id !== me) { state.reads.set(r.user_id, r.last_read_at); renderMessages(); }
+      const c = state.chats.get(r.conversation_id);
+      if (r.user_id === me && c && c.archived !== r.archived) { c.archived = r.archived; renderChats(); }
+    })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversation_members', filter: `user_id=eq.${me}` },
       async () => { await loadChats(); shareAllChatKeys(); })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_keys', filter: `user_id=eq.${me}` },
@@ -820,6 +1077,17 @@ async function onChatKeysArrived() {
   if (got.includes(state.activeId)) renderMessages();
 }
 
+/** Заменить изменённое сообщение в истории и в списке */
+function upsertMessage(m) {
+  const list = state.history.get(m.conversation_id);
+  const i = list ? list.findIndex((x) => x.id === m.id) : -1;
+  if (i !== -1) list[i] = m;
+  const c = state.chats.get(m.conversation_id);
+  if (c && list && list[list.length - 1]?.id === m.id) Object.assign(c, { last_ct: m.ct, last_iv: m.iv, last_p: m.p });
+  if (m.conversation_id === state.activeId) renderMessages();
+  renderChats();
+}
+
 async function addMessage(m, fromServer = false) {
   if (!state.me) return;
   let c = state.chats.get(m.conversation_id);
@@ -842,7 +1110,8 @@ async function addMessage(m, fromServer = false) {
     if (hist) renderMessages();
     if (m.sender_id !== state.me.id) markRead(c.id);
   }
-  if (fromServer && isNew && m.sender_id !== state.me.id && !visible && prefs.sound) ding();
+  if (fromServer && isNew && m.sender_id !== state.me.id && !visible && prefs.sound && !state.blocked.has(m.sender_id)) ding();
+  if (m.sender_id !== state.me.id && state.typing.who === m.sender_id) { state.typing.until = 0; renderHeader(); }
   renderChats();
 }
 
@@ -931,6 +1200,46 @@ $('newGroupBtn').onclick = () => {
 };
 
 /* =====================================================================
+   Действия: архив, блокировка, удаление
+   ===================================================================== */
+async function setArchived(chatId, value) {
+  const c = state.chats.get(chatId);
+  const { error } = await sb.from('conversation_members').update({ archived: value })
+    .eq('conversation_id', chatId).eq('user_id', state.me.id);
+  if (error) throw error;
+  if (c) c.archived = value;
+  if (value && state.activeId === chatId) closeChat();
+  renderChats();
+}
+
+async function setBlocked(userId, value) {
+  const r = value
+    ? await sb.from('blocks').insert({ blocker: state.me.id, blocked: userId })
+    : await sb.from('blocks').delete().eq('blocker', state.me.id).eq('blocked', userId);
+  if (r.error && !/duplicate/i.test(r.error.message)) throw r.error;
+  value ? state.blocked.add(userId) : state.blocked.delete(userId);
+  renderChats();
+  if (state.activeId) { renderComposer(); renderMessages(); }
+}
+
+function closeChat() {
+  state.activeId = null;
+  document.body.classList.remove('in-chat');
+  showPlaceholder();
+}
+
+function forgetChat(chatId) {
+  state.chats.delete(chatId); state.history.delete(chatId); keys.chat.delete(chatId);
+  if (state.activeId === chatId) closeChat();
+  renderChats();
+}
+
+/** Кнопка-действие для окна: подпись, иконка, обработчик, сообщение об ошибке в msg */
+const actionBtn = (label, ic, msg, fn, cls = '') => h('button', { class: 'btn btn-block ' + cls, onclick: async () => {
+  try { await fn(); } catch (err) { say(msg, humanError(err)); }
+} }, icon(ic), label);
+
+/* =====================================================================
    О чате
    ===================================================================== */
 async function openChatInfo(id) {
@@ -943,11 +1252,25 @@ async function openChatInfo(id) {
     const codeBox = theirs?.fp
       ? h('div', { class: 'safety' }, ...(await E2E.safetyCode(keys.fp, theirs.fp)).map((g) => h('span', { text: g })))
       : h('p', { text: 'Собеседник ещё не включил шифрование — попросите его открыть новую версию приложения.' });
+    const msg = note();
+    const blocked = state.blocked.has(other);
     openModal({ title: 'Профиль' },
       h('div', { class: 'profile-head' }, userAvatar(other, 'lg'),
-        h('div', { class: 'profile-name', text: nameOf(other) }), h('div', { class: 'profile-nick', text: nickOf(other) })),
+        h('div', { class: 'profile-name' }, nameLine(nameOf(other), roleBadge(other))), h('div', { class: 'profile-nick', text: nickOf(other) })),
       section('Код безопасности', codeBox,
-        h('p', { text: 'Сравните с кодом на телефоне друга — при встрече или по звонку. Совпадает — значит, переписку никто не подменяет.' })));
+        h('p', { text: 'Сравните с кодом на телефоне друга — при встрече или по звонку. Совпадает — значит, переписку никто не подменяет.' })),
+      msg,
+      actionBtn(c.archived ? 'Вернуть из архива' : 'В архив', 'archive', msg, async () => { await setArchived(id, !c.archived); closeModal(); }),
+      actionBtn(blocked ? 'Разблокировать' : 'Заблокировать', 'block', msg, async () => {
+        if (!blocked && !confirm(`Заблокировать ${nameOf(other)}? Он не сможет вам писать и добавлять вас в группы.`)) return;
+        await setBlocked(other, !blocked); openChatInfo(id);
+      }),
+      actionBtn('Удалить чат', 'trash', msg, async () => {
+        if (!confirm(`Удалить чат с ${nameOf(other)}? Переписка удалится у вас обоих.`)) return;
+        const { error } = await sb.rpc('delete_dm', { conv: id });
+        if (error) throw error;
+        closeModal(); forgetChat(id);
+      }, 'btn-danger'));
     return;
   }
 
@@ -957,11 +1280,23 @@ async function openChatInfo(id) {
   const msg = note();
   const members = (c.member_ids || []).map((uid) => h('div', { class: 'member' }, userAvatar(uid, 'xs'),
     h('div', { class: 'row-text' },
-      h('b', { text: nameOf(uid) + (uid === state.me.id ? ' (вы)' : '') }),
+      h('b', {}, nameLine(nameOf(uid) + (uid === state.me.id ? ' (вы)' : ''), roleBadge(uid))),
       h('small', { text: nickOf(uid) + (keys.pub.get(uid)?.fp ? '' : ' · ещё не включил шифрование') }))));
 
-  openModal({ title: 'Группа' },
+  const officialRow = roleOf(state.me.id) === 'creator'
+    ? section('Команда', h('div', { class: 'row' },
+        h('div', { class: 'row-text' }, h('b', { text: 'Официальный чат' }), h('small', { text: 'Галочка, закреплён сверху, писать может только команда' })),
+        toggle(!!c.is_official, async (e) => {
+          const { error } = await sb.rpc('set_official', { conv: id, value: e.target.checked });
+          if (error) { e.target.checked = !e.target.checked; return say(msg, humanError(error)); }
+          c.is_official = e.target.checked;
+          renderChats(); renderHeader(); renderComposer();
+        })))
+    : null;
+
+  openModal({ title: c.is_official ? 'Официальный чат' : 'Группа' },
     h('div', { class: 'profile-head' }, chatAvatar(c, 'lg')),
+    officialRow,
     section('Название', h('div', { class: 'inline' }, title, h('button', { class: 'btn', text: 'Сохранить', onclick: async () => {
       const { error } = await sb.rpc('rename_group', { conv: id, new_title: title.value });
       if (error) return say(msg, humanError(error));
@@ -980,16 +1315,13 @@ async function openChatInfo(id) {
         if (missing.length) inlineError('Не нашли: ' + missing.map((n) => '@' + n).join(', '));
       } }, icon('plus')))),
     msg,
-    h('button', { class: 'btn btn-danger btn-block', text: 'Выйти из группы', onclick: async () => {
+    actionBtn(c.archived ? 'Вернуть из архива' : 'В архив', 'archive', msg, async () => { await setArchived(id, !c.archived); closeModal(); }),
+    actionBtn('Выйти из группы', 'trash', msg, async () => {
       if (!confirm(`Выйти из группы «${c.title || ''}»?`)) return;
       const { error } = await sb.from('conversation_members').delete().eq('conversation_id', id).eq('user_id', state.me.id);
-      if (error) return say(msg, humanError(error));
-      closeModal();
-      state.chats.delete(id); state.history.delete(id); keys.chat.delete(id);
-      state.activeId = null;
-      document.body.classList.remove('in-chat');
-      showPlaceholder(); renderChats();
-    } }));
+      if (error) throw error;
+      closeModal(); forgetChat(id);
+    }, 'btn-danger'));
 }
 
 /* =====================================================================
@@ -1061,8 +1393,51 @@ function openSettings() {
   // Аккаунт
   const pass = h('input', { type: 'password', placeholder: 'Новый пароль', autocomplete: 'new-password' });
 
+  // Заблокированные
+  const blockedList = h('div', { style: { display: 'grid', gap: '10px' } });
+  (async () => {
+    await loadPeople([...state.blocked]);
+    blockedList.replaceChildren(...(state.blocked.size ? [...state.blocked].map((uid) => h('div', { class: 'member' },
+      userAvatar(uid, 'xs'),
+      h('div', { class: 'row-text', style: { flex: '1' } }, h('b', { text: nameOf(uid) }), h('small', { text: nickOf(uid) })),
+      h('button', { class: 'btn', text: 'Разблокировать', onclick: async () => {
+        try { await setBlocked(uid, false); openSettings(); } catch (err) { say(msg, humanError(err)); }
+      } }))) : [h('p', { text: 'Никого нет.' })]));
+  })();
+
+  // Команда (только для создателей)
+  let teamSection = null;
+  if (roleOf(state.me.id) === 'creator') {
+    const teamList = h('div', { style: { display: 'grid', gap: '10px' } });
+    const nick = h('input', { placeholder: 'Ник тестера', autocapitalize: 'off', spellcheck: 'false' });
+    const drawTeam = async () => {
+      const { data } = await sb.from('profiles').select('id, username, display_name, avatar_hue, role').in('role', ['creator', 'tester']);
+      for (const pp of data || []) state.people.set(pp.id, pp);
+      teamList.replaceChildren(...(data || []).map((pp) => h('div', { class: 'member' },
+        userAvatar(pp.id, 'xs'),
+        h('div', { class: 'row-text', style: { flex: '1' } }, h('b', {}, nameLine(nameOf(pp.id), roleBadge(pp.id))), h('small', { text: nickOf(pp.id) })),
+        pp.role === 'tester' ? h('button', { class: 'btn', text: 'Убрать', onclick: async () => {
+          const { error } = await sb.rpc('set_role', { p_username: pp.username, p_role: null });
+          if (error) return say(msg, humanError(error));
+          pp.role = null; drawTeam(); renderMe(); renderChats();
+        } }) : null)));
+    };
+    drawTeam();
+    teamSection = section('Команда', teamList, h('div', { class: 'inline' }, nick, h('button', { class: 'btn', text: 'Сделать тестером', onclick: async () => {
+      const u = nick.value.trim().replace(/^@/, '').toLowerCase();
+      if (!u) return;
+      const { error } = await sb.rpc('set_role', { p_username: u, p_role: 'tester' });
+      if (error) return say(msg, /not found/i.test(error.message) ? `Не нашли @${u}` : humanError(error));
+      nick.value = '';
+      for (const pp of state.people.values()) if (pp.username === u) pp.role = 'tester';
+      say(msg, `@${u} теперь тестер`, 'ok');
+      drawTeam(); renderChats();
+    } })),
+      h('p', { text: 'Тестеры получают значок и могут писать в официальные чаты.' }));
+  }
+
   openModal({ title: 'Настройки' },
-    h('div', { class: 'profile-head' }, avatarSlot, h('div', { class: 'profile-nick', text: '@' + p.username })),
+    h('div', { class: 'profile-head' }, avatarSlot, roleBadge(state.me.id), h('div', { class: 'profile-nick', text: '@' + p.username })),
     section('Профиль', name, swatches, h('button', { class: 'btn btn-primary btn-block', text: 'Сохранить', onclick: async () => {
       const display_name = name.value.trim() || null;
       const { error } = await sb.from('profiles').update({ display_name, avatar_hue: hue }).eq('id', state.me.id);
@@ -1080,6 +1455,7 @@ function openSettings() {
       h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('b', { text: 'Звук' }), h('small', { text: 'Когда приложение открыто' })),
         toggle(prefs.sound, (e) => { prefs.sound = e.target.checked; savePrefs(); if (prefs.sound) ding(); }))),
     section('Приложение', appBlock),
+    teamSection,
     section('Шифрование',
       h('div', { class: 'row-text' }, h('small', { text: 'Ключ этого устройства' }),
         h('span', { class: 'fp', text: (keys.fp || '').slice(0, 24).replace(/(.{4})/g, '$1 ').trim() })),
@@ -1093,10 +1469,31 @@ function openSettings() {
         pass.value = '';
         say(msg, 'Пароль изменён', 'ok');
       } }))),
+    section('Заблокированные', blockedList),
     msg,
-    h('button', { class: 'btn btn-danger btn-block', text: 'Выйти из аккаунта', onclick: async () => {
+    h('button', { class: 'btn btn-danger btn-block', text: 'Выйти из аккаунта', onclick: signOut }),
+    h('button', { class: 'btn btn-danger btn-block', text: 'Удалить аккаунт', onclick: () => deleteAccountDialog(p.username) }));
+}
+
+async function signOut() {
+  await setupPush(false).catch(() => {});
+  await E2E.store.del('me:' + state.me.id).catch(() => {});   // на этом устройстве при следующем входе понадобится код
+  await sb.auth.signOut();
+}
+
+function deleteAccountDialog(username) {
+  const confirmInput = h('input', { placeholder: username, autocapitalize: 'off', spellcheck: 'false' });
+  const msg = note();
+  openModal({ title: 'Удалить аккаунт' },
+    h('p', { text: 'Удалятся профиль, все ваши сообщения, ключи и личные чаты. Отменить это нельзя.' }),
+    h('label', { class: 'field' }, h('span', { text: `Введите свой ник «${username}», чтобы подтвердить` }), confirmInput),
+    msg,
+    h('button', { class: 'btn btn-danger btn-block', text: 'Удалить навсегда', onclick: async () => {
+      if (confirmInput.value.trim().toLowerCase() !== username) return say(msg, 'Ник не совпадает');
       await setupPush(false).catch(() => {});
-      await E2E.store.del('me:' + state.me.id).catch(() => {});   // на этом устройстве при следующем входе понадобится код
+      const { error } = await sb.rpc('delete_account');
+      if (error) return say(msg, humanError(error));
+      await E2E.store.del('me:' + state.me.id).catch(() => {});
       await sb.auth.signOut();
     } }));
 }
