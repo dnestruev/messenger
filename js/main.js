@@ -1,6 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js';
 import * as E2E from './crypto.js';
+import { createNet } from './net.js';
 
 /* =====================================================================
    Утилиты
@@ -86,6 +87,7 @@ if (SUPABASE_URL.includes('ВАШ') || SUPABASE_KEY.includes('ВАШ')) {
   throw new Error('config.js не заполнен');
 }
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+const net = createNet(sb);
 
 /* =====================================================================
    Состояние
@@ -110,6 +112,8 @@ const keys = {
   chat: new Map(),          // id чата -> ключ AES-GCM
   pub: new Map(),           // id пользователя -> { jwk, fp }
   trusted: {},              // id пользователя -> отпечаток, которому доверяем (на этом устройстве)
+  sign: null,               // мой ключ подписи (неизвлекаемый)
+  verify: new Map(),        // id пользователя -> ключ проверки подписи
 };
 
 /* =====================================================================
@@ -228,8 +232,12 @@ function writeBlock(c) {
 async function loadPubKeys(ids, force = false) {
   const need = [...new Set(ids)].filter((id) => force || !keys.pub.has(id));
   if (!need.length) return;
-  const { data } = await sb.from('user_keys').select('user_id, public_key, fingerprint').in('user_id', need);
-  for (const r of data || []) keys.pub.set(r.user_id, { jwk: r.public_key, fp: r.fingerprint });
+  const { data } = await sb.from('user_keys').select('user_id, public_key, fingerprint, signing_key').in('user_id', need);
+  for (const r of data || []) {
+    keys.pub.set(r.user_id, { jwk: r.public_key, fp: r.fingerprint });
+    if (r.signing_key) keys.verify.set(r.user_id, await E2E.importVerify(r.signing_key).catch(() => null));
+    else keys.verify.delete(r.user_id);
+  }
 }
 
 async function useIdentity(privateJwk, publicJwk, fp) {
@@ -262,6 +270,31 @@ async function ensureIdentity() {
     await identityDialog(row);
   }
   keys.trusted = (await E2E.store.get('trusted:' + state.me.id).catch(() => null)) || {};
+  await ensureSigning();
+}
+
+/** Ключ подписи: берём с устройства, открываем с сервера (через мой ключ ECDH) или создаём новый. */
+async function ensureSigning() {
+  const id = state.me.id;
+  const local = await E2E.store.get('me:' + id).catch(() => null);
+  if (local?.sign && local.fp === keys.fp) { keys.sign = local.sign; return; }
+  const [{ data: kb }, { data: uk }] = await Promise.all([
+    sb.from('key_backups').select('signing_wrapped').eq('user_id', id).maybeSingle(),
+    sb.from('user_keys').select('public_key, signing_key').eq('user_id', id).maybeSingle(),
+  ]);
+  if (!uk) return;
+  if (kb?.signing_wrapped && uk.signing_key) {
+    keys.sign = await E2E.unwrapSigning(kb.signing_wrapped, keys.priv, uk.public_key).catch(() => null);
+  }
+  if (!keys.sign) {
+    const s = await E2E.generateSigning();
+    const wrapped = await E2E.wrapSigning(s.privateJwk, keys.priv, uk.public_key);
+    const r1 = await sb.from('key_backups').update({ signing_wrapped: wrapped }).eq('user_id', id);
+    const r2 = await sb.from('user_keys').update({ signing_key: s.publicJwk }).eq('user_id', id);
+    if (r1.error || r2.error) return;               // база ещё не обновлена — работаем без подписи
+    keys.sign = await E2E.importSigning(s.privateJwk);
+  }
+  await E2E.store.set('me:' + id, { priv: keys.priv, fp: keys.fp, sign: keys.sign });
 }
 const saveTrusted = () => E2E.store.set('trusted:' + state.me.id, keys.trusted).catch(() => {});
 
@@ -379,10 +412,52 @@ async function shareAllChatKeys() {
   for (const id of keys.chat.keys()) if (state.chats.has(id)) await shareChatKey(id).catch(() => {});
 }
 
+const sigText = (m) => `msg-v1|${m.conversation_id}|${m.sender_id}|${m.cid}|${m.ct_hash}|${m.iv}`;
+
+/** Расшифровать сообщение: шифр берём из центра или с узлов (с проверкой хеша), затем проверяем подпись. */
 async function decryptMessage(m) {
-  if (m.p && !m.p.bad) return m;
-  m.p = await E2E.openJson(keys.chat.get(m.conversation_id), m.ct, m.iv, aadMsg(m.conversation_id, m.sender_id));
+  if (m.p && !m.p.bad && !m.p.missing) return m;
+  const key = keys.chat.get(m.conversation_id);
+  if (!key) { m.p = null; return m; }
+  let ct = m.ct;
+  if (!ct && m.ct_hash && m.nodes?.length) {
+    const bytes = await net.get(m.nodes, `${m.conversation_id}/${m.ct_hash}`, m.ct_hash);
+    if (!bytes) { m.p = { missing: true }; return m; }
+    ct = E2E.b64.enc(bytes);
+  }
+  m.p = await E2E.openJson(key, ct, m.iv, aadMsg(m.conversation_id, m.sender_id));
+  m.sigOk = await checkSignature(m);
   return m;
+}
+
+/** true — подпись верна, false — подделка, null — подписи нет (старое сообщение) или ключ неизвестен. */
+async function checkSignature(m) {
+  if (!m.sig || !m.cid || !m.ct_hash) return null;
+  if (!keys.verify.has(m.sender_id)) await loadPubKeys([m.sender_id], true);
+  const vk = keys.verify.get(m.sender_id);
+  return vk ? E2E.verifyText(vk, m.sig, sigText(m)) : null;
+}
+
+/** Подготовить строку сообщения: шифр, хеш, подпись; содержимое — на узлы (если они есть) */
+async function sealMessage(chatId, payload, cid = crypto.randomUUID()) {
+  const { ct, iv } = await E2E.sealJson(keys.chat.get(chatId), payload, aadMsg(chatId, state.me.id));
+  const bytes = E2E.b64.dec(ct);
+  const ct_hash = await E2E.sha256hex(bytes);
+  const nodes = await net.put(`${chatId}/${ct_hash}`, bytes).catch(() => []);
+  const row = { cid, iv, ct_hash, ct: nodes.length ? null : ct, nodes: nodes.length ? nodes : null, sig: null };
+  if (keys.sign) row.sig = await E2E.signText(keys.sign, sigText({ conversation_id: chatId, sender_id: state.me.id, ...row }));
+  return row;
+}
+
+/** Последнее сообщение для списка чатов (из полей my_chats) */
+const lastMessageOf = (c) => ({
+  conversation_id: c.id, sender_id: c.last_sender, ct: c.last_ct, iv: c.last_iv,
+  ct_hash: c.last_hash, nodes: c.last_nodes, cid: c.last_cid, sig: c.last_sig,
+});
+function setLast(c, m) {
+  Object.assign(c, m
+    ? { last_ct: m.ct, last_iv: m.iv, last_p: m.p, last_sender: m.sender_id, last_hash: m.ct_hash, last_nodes: m.nodes, last_cid: m.cid, last_sig: m.sig }
+    : { last_ct: null, last_iv: null, last_p: null, last_sender: null, last_hash: null, last_nodes: null, last_cid: null, last_sig: null });
 }
 
 /* =====================================================================
@@ -472,7 +547,7 @@ function stopApp() {
   leaveTyping();
   for (const url of state.images.values()) URL.revokeObjectURL(url);
   state.images.clear();
-  keys.priv = null; keys.fp = null; keys.chat.clear(); keys.pub.clear(); keys.trusted = {};
+  keys.priv = null; keys.fp = null; keys.chat.clear(); keys.pub.clear(); keys.trusted = {}; keys.sign = null; keys.verify.clear();
   if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
   closeModal();
   $('app').hidden = true;
@@ -504,17 +579,22 @@ async function loadChats() {
   if (error) { $('chatList').replaceChildren(h('div', { class: 'list-empty', text: humanError(error) })); return; }
   const previous = new Map(state.chats);
   state.chats.clear();
-  for (const c of data) {
+  await Promise.all(data.map(async (c) => {
     c.keyWarn = previous.get(c.id)?.keyWarn;
-    c.last_p = await E2E.openJson(keys.chat.get(c.id), c.last_ct, c.last_iv, aadMsg(c.id, c.last_sender));
-    state.chats.set(c.id, c);
-  }
+    const prevLast = previous.get(c.id);
+    // если последнее сообщение не изменилось — не скачиваем его с узлов заново
+    c.last_p = prevLast && prevLast.last_cid === c.last_cid && prevLast.last_hash === c.last_hash && prevLast.last_p && !prevLast.last_p.missing
+      ? prevLast.last_p
+      : c.last_sender ? (await decryptMessage(lastMessageOf(c))).p : null;
+  }));
+  for (const c of data) state.chats.set(c.id, c);
   await loadPeople(data.flatMap((c) => c.member_ids || []));
   renderChats();
 }
 
 function previewText(p) {
   if (!p) return 'Зашифровано';
+  if (p.missing) return 'Сообщение недоступно';
   if (p.bad) return 'Не удалось расшифровать';
   return p.img ? 'Фото' + (p.t ? ': ' + p.t : '') : p.t;
 }
@@ -587,7 +667,7 @@ $('findForm').onsubmit = async (e) => {
 /* =====================================================================
    Открытый чат
    ===================================================================== */
-const MSG_COLUMNS = 'id, conversation_id, sender_id, ct, iv, created_at, edited_at';
+const MSG_COLUMNS = 'id, conversation_id, sender_id, ct, iv, created_at, edited_at, cid, ct_hash, sig, nodes';
 
 function showPlaceholder() {
   leaveTyping();
@@ -756,7 +836,7 @@ function bubble(m, { showName, continued }) {
   if (!mine && state.blocked.has(m.sender_id)) {
     return h('div', { class: 'msg hidden-msg', dataset: { id: m.id } }, 'Сообщение от заблокированного пользователя');
   }
-  const classes = ['msg', mine && 'mine', p?.img && 'photo', (!p || p.bad) && 'locked', continued && 'cont'];
+  const classes = ['msg', mine && 'mine', p?.img && 'photo', (!p || p.bad || p.missing) && 'locked', continued && 'cont', m.sigOk === false && 'forged'];
   const el = h('div', { class: classes.filter(Boolean).join(' '), dataset: { id: m.id } });
   if (showName) {
     el.append(h('div', { class: 'msg-from', vars: { '--h': hueOfUser(m.sender_id) } }, nameLine(nameOf(m.sender_id), roleBadge(m.sender_id))));
@@ -766,13 +846,19 @@ function bubble(m, { showName, continued }) {
       h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t || 'Фото' })));
   }
   if (p?.img) {
-    const img = h('img', { class: 'msg-img', alt: 'Фото', dataset: { path: p.img.path, iv: p.img.iv, mime: p.img.mime || 'image/jpeg', chat: m.conversation_id } });
+    const img = h('img', { class: 'msg-img', alt: 'Фото', dataset: {
+      ref: p.img.path || p.img.hash, path: p.img.path || '', hash: p.img.hash || '', nodes: (p.img.nodes || []).join(','),
+      aad: p.img.a === 2 ? 'img|' + m.conversation_id : p.img.path, iv: p.img.iv, mime: p.img.mime || 'image/jpeg', chat: m.conversation_id,
+    } });
     if (p.img.w && p.img.h) img.style.aspectRatio = `${p.img.w} / ${p.img.h}`;
     img.onclick = () => img.src && openLightbox(img.src);
     el.append(img);
   }
-  const text = !p ? 'Сообщение ещё не расшифровано' : p.bad ? 'Не удалось расшифровать' : p.t;
+  const text = !p ? 'Сообщение ещё не расшифровано'
+    : p.missing ? 'Сообщение сейчас недоступно: узлы сети не отвечают'
+    : p.bad ? 'Не удалось расшифровать' : p.t;
   if (text) el.append(h('div', { class: 'msg-text', text }));
+  if (m.sigOk === false) el.append(h('div', { class: 'msg-forged' }, icon('warn'), 'Подпись не совпадает — возможна подделка'));
 
   const meta = h('span', { class: 'msg-meta' });
   if (m.edited_at) meta.append(h('span', { text: 'изменено' }));
@@ -815,7 +901,7 @@ function attachMenu(el, m) {
 function closeMenu() { document.querySelector('.menu')?.remove(); }
 function openMenu(m, x, y) {
   closeMenu();
-  if (!m.p || m.p.bad) return;
+  if (!m.p || m.p.bad || m.p.missing) return;
   const mine = m.sender_id === state.me.id;
   const c = state.chats.get(m.conversation_id);
   const items = [];
@@ -837,6 +923,8 @@ document.addEventListener('scroll', closeMenu, true);
 
 async function deleteMessage(m) {
   if (!confirm('Удалить сообщение у всех?')) return;
+  if (m.nodes?.length && m.ct_hash) net.del(m.nodes, `${m.conversation_id}/${m.ct_hash}`);
+  if (m.p?.img?.hash && m.p.img.nodes?.length) net.del(m.p.img.nodes, `${m.conversation_id}/${m.p.img.hash}`);
   const { error } = await sb.from('messages').delete().eq('id', m.id);
   if (error) return inlineError('Не удалилось: ' + humanError(error));
   removeMessage(m.id);
@@ -848,12 +936,7 @@ function removeMessage(id) {
     if (i === -1) continue;
     list.splice(i, 1);
     const c = state.chats.get(chatId);
-    if (c) {
-      const lastMsg = list[list.length - 1];
-      Object.assign(c, lastMsg
-        ? { last_ct: lastMsg.ct, last_iv: lastMsg.iv, last_p: lastMsg.p, last_sender: lastMsg.sender_id }
-        : { last_ct: null, last_iv: null, last_p: null, last_sender: null });
-    }
+    if (c) setLast(c, list[list.length - 1]);
     if (chatId === state.activeId) renderMessages();
     renderChats();
     return;
@@ -880,18 +963,25 @@ function setCompose(next) {
 }
 
 function resolveImages(root) {
-  for (const img of root.querySelectorAll('img[data-path]')) {
-    const { path, iv, mime, chat } = img.dataset;
-    if (state.images.has(path)) { img.src = state.images.get(path); continue; }
+  for (const img of root.querySelectorAll('img[data-ref]')) {
+    const { ref, path, hash, nodes, aad, iv, mime, chat } = img.dataset;
+    if (state.images.has(ref)) { img.src = state.images.get(ref); continue; }
     (async () => {
       try {
         const key = keys.chat.get(chat);
         if (!key) return;
-        const { data, error } = await sb.storage.from(BUCKET).download(path);
-        if (error) throw error;
-        const plain = await E2E.openBytes(key, await data.arrayBuffer(), iv, path);
+        let cipher;
+        if (path) {
+          const { data, error } = await sb.storage.from(BUCKET).download(path);
+          if (error) throw error;
+          cipher = await data.arrayBuffer();
+        } else {
+          cipher = await net.get(nodes.split(',').filter(Boolean), `${chat}/${hash}`, hash);
+          if (!cipher) throw new Error('missing');
+        }
+        const plain = await E2E.openBytes(key, cipher, iv, aad);
         const url = URL.createObjectURL(new Blob([plain], { type: mime }));
-        state.images.set(path, url);
+        state.images.set(ref, url);
         img.src = url;
         const box = $('messages');
         if (box.scrollHeight - box.scrollTop - box.clientHeight < 500) box.scrollTop = box.scrollHeight;
@@ -936,12 +1026,13 @@ async function canSend(chatId) {
 }
 
 async function insertMessage(chatId, payload) {
-  const { ct, iv } = await E2E.sealJson(keys.chat.get(chatId), payload, aadMsg(chatId, state.me.id));
+  const row = await sealMessage(chatId, payload);
   const { data, error } = await sb.from('messages')
-    .insert({ conversation_id: chatId, sender_id: state.me.id, ct, iv })
+    .insert({ conversation_id: chatId, sender_id: state.me.id, ...row })
     .select(MSG_COLUMNS).single();
   if (error) throw error;
   data.p = payload;
+  data.sigOk = row.sig ? true : null;
   return data;
 }
 
@@ -954,10 +1045,14 @@ function replyRef() {
 
 async function editMessage(m, newText) {
   const payload = { ...m.p, t: newText };
-  const { ct, iv } = await E2E.sealJson(keys.chat.get(m.conversation_id), payload, aadMsg(m.conversation_id, state.me.id));
-  const { data, error } = await sb.from('messages').update({ ct, iv }).eq('id', m.id).select(MSG_COLUMNS).single();
+  const row = await sealMessage(m.conversation_id, payload, m.cid || crypto.randomUUID());
+  delete row.cid;                                         // id сообщения при правке не меняется
+  const oldKey = m.nodes?.length && m.ct_hash ? [m.nodes, `${m.conversation_id}/${m.ct_hash}`] : null;
+  const { data, error } = await sb.from('messages').update(row).eq('id', m.id).select(MSG_COLUMNS).single();
   if (error) throw error;
+  if (oldKey) net.del(...oldKey);                         // старую версию убираем с узлов
   data.p = payload;
+  data.sigOk = data.sig ? true : null;
   upsertMessage(data);
 }
 
@@ -1004,13 +1099,20 @@ async function sendImage(file) {
   try {
     const { blob, type, w, h: height } = await shrinkImage(file);
     if (blob.size > 6 * 1024 * 1024) throw new Error('Картинка слишком большая');
-    const path = `${chatId}/${crypto.randomUUID()}.bin`;
-    const sealed = await E2E.sealBytes(keys.chat.get(chatId), await blob.arrayBuffer(), path);
-    const { error } = await sb.storage.from(BUCKET).upload(path, new Blob([sealed.data], { type: 'application/octet-stream' }),
-      { contentType: 'application/octet-stream' });
-    if (error) throw error;
-    state.images.set(path, URL.createObjectURL(blob));
-    const msg = await insertMessage(chatId, { t: caption, img: { path, iv: sealed.iv, mime: type, w, h: height }, r: replyRef() });
+    const sealed = await E2E.sealBytes(keys.chat.get(chatId), await blob.arrayBuffer(), 'img|' + chatId);
+    const bytes = new Uint8Array(sealed.data);
+    const hash = await E2E.sha256hex(bytes);
+    const img = { iv: sealed.iv, mime: type, w, h: height, a: 2, hash };
+    const nodes = await net.put(`${chatId}/${hash}`, bytes).catch(() => []);
+    if (nodes.length) img.nodes = nodes;
+    else {                                                // узлов нет — кладём в хранилище центра, как раньше
+      img.path = `${chatId}/${crypto.randomUUID()}.bin`;
+      const { error } = await sb.storage.from(BUCKET).upload(img.path, new Blob([bytes], { type: 'application/octet-stream' }),
+        { contentType: 'application/octet-stream' });
+      if (error) throw error;
+    }
+    state.images.set(img.path || hash, URL.createObjectURL(blob));
+    const msg = await insertMessage(chatId, { t: caption, img, r: replyRef() });
     if (caption) { textArea.value = ''; autosize(); }
     setCompose(null);
     addMessage(msg);
@@ -1069,7 +1171,7 @@ async function onChatKeysArrived() {
   if (!got.length) return;
   for (const id of got) {
     const c = state.chats.get(id);
-    if (c) c.last_p = await E2E.openJson(keys.chat.get(id), c.last_ct, c.last_iv, aadMsg(id, c.last_sender));
+    if (c && c.last_sender) c.last_p = (await decryptMessage(lastMessageOf(c))).p;
     for (const m of state.history.get(id) || []) { m.p = null; await decryptMessage(m); }
     shareChatKey(id).catch(() => {});
   }
@@ -1083,7 +1185,7 @@ function upsertMessage(m) {
   const i = list ? list.findIndex((x) => x.id === m.id) : -1;
   if (i !== -1) list[i] = m;
   const c = state.chats.get(m.conversation_id);
-  if (c && list && list[list.length - 1]?.id === m.id) Object.assign(c, { last_ct: m.ct, last_iv: m.iv, last_p: m.p });
+  if (c && list && list[list.length - 1]?.id === m.id) setLast(c, m);
   if (m.conversation_id === state.activeId) renderMessages();
   renderChats();
 }
@@ -1101,7 +1203,8 @@ async function addMessage(m, fromServer = false) {
   if (hist && isNew) { hist.push(m); hist.sort(byTime); }
 
   if (!c.last_message_at || ts(c.last_message_at) <= ts(m.created_at)) {
-    Object.assign(c, { last_message_at: m.created_at, last_ct: m.ct, last_iv: m.iv, last_p: m.p, last_sender: m.sender_id });
+    c.last_message_at = m.created_at;
+    setLast(c, m);
   }
   if (m.sender_id === state.me.id) c.last_read_at = m.created_at;
 
@@ -1469,10 +1572,100 @@ function openSettings() {
         pass.value = '';
         say(msg, 'Пароль изменён', 'ok');
       } }))),
+    networkSection(msg),
     section('Заблокированные', blockedList),
     msg,
     h('button', { class: 'btn btn-danger btn-block', text: 'Выйти из аккаунта', onclick: signOut }),
     h('button', { class: 'btn btn-danger btn-block', text: 'Удалить аккаунт', onclick: () => deleteAccountDialog(p.username) }));
+}
+
+/* =====================================================================
+   Сеть партнёров
+   ===================================================================== */
+const PARTNER_GUIDE = 'https://github.com/dnestruev/messenger/blob/main/partner/README.md';
+const STATUS_LABEL = { active: 'в сети', pending: 'ждёт подтверждения', disabled: 'отключён' };
+
+function networkSection(msg) {
+  const body = h('div', { style: { display: 'grid', gap: '10px' } }, h('p', { text: 'Загрузка…' }));
+  const isCreator = roleOf(state.me.id) === 'creator';
+  (async () => {
+    await net.load(true);
+    const { data: stats } = await sb.rpc('node_stats');
+    const activeCount = net.active().length;
+    const list = (stats || []).map((n) => nodeRow(n, isCreator, msg));
+    body.replaceChildren(
+      h('p', { text: activeCount
+        ? `Узлов-партнёров в сети: ${activeCount}. Сообщения и фото хранятся на них в двух копиях — зашифрованными.`
+        : 'Узлов-партнёров пока нет: всё хранится на основном сервере.' }),
+      ...list,
+      h('button', { class: 'btn btn-block', onclick: partnerDialog }, icon('plus'), 'Стать партнёром'));
+  })();
+  return section(isCreator ? 'Сеть партнёров' : 'Сеть', body);
+}
+
+function nodeRow(n, isCreator, msg) {
+  const host = n.url.replace('https://', '').replace('.supabase.co', '');
+  const info = h('div', { class: 'row-text', style: { flex: '1' } },
+    h('b', { text: host }),
+    h('small', { text: [STATUS_LABEL[n.status] + (n.disabled_reason ? ` (${n.disabled_reason})` : ''),
+      n.owner_username ? '@' + n.owner_username : null,
+      isCreator && n.reports_24h ? `жалоб за сутки: ${n.reports_24h}` : null].filter(Boolean).join(' · ') }));
+  const check = h('button', { class: 'btn', text: 'Проверить', onclick: async () => {
+    check.disabled = true;
+    say(msg, (await net.health(n.url)) ? `${host}: узел отвечает` : `${host}: узел не отвечает`, 'ok');
+    check.disabled = false;
+  } });
+  const actions = [check];
+  if (isCreator) {
+    const next = n.status === 'active' ? 'disabled' : 'active';
+    actions.push(h('button', { class: 'btn', text: next === 'active' ? 'Включить' : 'Отключить', onclick: async () => {
+      if (next === 'active' && !(await net.health(n.url))) return say(msg, 'Узел не отвечает — включать нельзя. Проверьте функцию node у партнёра.');
+      const { error } = await sb.rpc('set_node_status', { p_node: n.id, p_status: next });
+      if (error) return say(msg, humanError(error));
+      openSettings();
+    } }));
+  }
+  if (isCreator || n.owner_username === state.people.get(state.me.id)?.username) {
+    actions.push(h('button', { class: 'icon-btn', title: 'Удалить узел', onclick: async () => {
+      if (!confirm('Удалить узел из сети? Данные с него будут недоступны, если других копий нет.')) return;
+      const { error } = await sb.rpc('delete_node', { p_node: n.id });
+      if (error) return say(msg, humanError(error));
+      openSettings();
+    } }, icon('trash')));
+  }
+  return h('div', { class: 'node-row' }, h('span', { class: 'node-dot ' + n.status }), info, h('div', { class: 'node-actions' }, ...actions));
+}
+
+function partnerDialog() {
+  const url = h('input', { placeholder: 'https://xxxxxxxxxxxxxxxxxxxx.supabase.co', autocapitalize: 'off', spellcheck: 'false', inputmode: 'url' });
+  const msg = note();
+  const go = h('button', { class: 'btn btn-primary btn-block', text: 'Проверить и отправить заявку' });
+  openModal({ title: 'Стать партнёром' },
+    h('p', { text: 'Партнёр отдаёт сети свой бесплатный проект Supabase: на нём хранятся зашифрованные копии сообщений и фото. Прочитать или подделать их партнёр не может — всё проверяется по хешам и подписям.' }),
+    section('Как подключить узел',
+      h('p', {}, '1. Создайте бесплатный проект на supabase.com.'),
+      h('p', {}, '2. SQL Editor → выполните файл ', h('b', { text: 'partner/node.sql' }), '.'),
+      h('p', {}, '3. Edge Functions → Via Editor → имя ', h('b', { text: 'node' }), ', вставьте ', h('b', { text: 'partner/functions/node/index.ts' }), ', Deploy, затем выключите Verify JWT.'),
+      h('p', {}, '4. Вставьте ниже адрес проекта (Project URL).'),
+      h('a', { href: PARTNER_GUIDE, target: '_blank', rel: 'noopener', class: 'btn btn-block' }, 'Подробная инструкция и файлы')),
+    h('label', { class: 'field' }, h('span', { text: 'Адрес вашего проекта' }), url),
+    go, msg);
+  go.onclick = async () => {
+    const value = url.value.trim().toLowerCase().replace(/\/+$/, '');
+    if (!/^https:\/\/[a-z0-9]{20}\.supabase\.co$/.test(value)) return say(msg, 'Адрес должен быть вида https://xxxxxxxxxxxxxxxxxxxx.supabase.co');
+    if (value === SUPABASE_URL) return say(msg, 'Это адрес основного сервера — нужен отдельный проект');
+    go.disabled = true;
+    say(msg, 'Проверяю узел…', 'ok');
+    if (!(await net.health(value))) {
+      go.disabled = false;
+      return say(msg, 'Узел не отвечает. Проверьте, что функция называется node, развёрнута и Verify JWT выключен.');
+    }
+    const { error } = await sb.rpc('register_node', { p_url: value });
+    go.disabled = false;
+    if (error) return say(msg, /already/i.test(error.message) ? 'Этот узел уже зарегистрирован' : humanError(error));
+    say(msg, 'Заявка отправлена! Узел заработает, когда создатель его подтвердит.', 'ok');
+    url.value = '';
+  };
 }
 
 async function signOut() {
