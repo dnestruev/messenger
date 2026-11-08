@@ -104,12 +104,13 @@ const state = {
   reads: new Map(),         // id участника -> last_read_at (для открытого чата)
   showArchive: false,
   compose: null,            // { mode: 'reply' | 'edit', msg }
+  more: new Map(),          // id чата -> есть ли более ранние сообщения
   typing: { channel: null, until: 0, sentAt: 0, timer: null },
 };
 const keys = {
   priv: null,               // мой секретный ключ (неизвлекаемый)
   fp: null,                 // отпечаток моего публичного ключа
-  chat: new Map(),          // id чата -> ключ AES-GCM
+  chat: new Map(),          // '<id чата>:<версия>' -> ключ AES-GCM
   pub: new Map(),           // id пользователя -> { jwk, fp }
   trusted: {},              // id пользователя -> отпечаток, которому доверяем (на этом устройстве)
   sign: null,               // мой ключ подписи (неизвлекаемый)
@@ -354,41 +355,77 @@ function identityDialog(row) {
    ===================================================================== */
 const aadMsg = (chatId, senderId) => chatId + '|' + senderId;
 
-async function loadChatKeys() {
-  const { data } = await sb.from('conversation_keys').select('conversation_id, for_fingerprint, wrapped').eq('user_id', state.me.id);
-  const got = [];
-  for (const r of data || []) {
-    if (r.for_fingerprint !== keys.fp || keys.chat.has(r.conversation_id)) continue;
-    try { keys.chat.set(r.conversation_id, await E2E.unwrapChatKey(r.wrapped, keys.priv)); got.push(r.conversation_id); } catch {}
+const kid = (chatId, v) => chatId + ':' + (v || 1);
+const chatKey = (chatId, v) => keys.chat.get(kid(chatId, v));
+const currentVersion = (chatId) => state.chats.get(chatId)?.key_version || 1;
+const hasCurrentKey = (chatId) => !!chatKey(chatId, currentVersion(chatId));
+const versionsHeld = (chatId) => [...keys.chat.keys()].filter((k) => k.startsWith(chatId + ':')).map((k) => +k.split(':')[1]);
+
+/** Развернуть ключ и сверить с отпечатком в чате. Чужой или испорченный ключ — удаляем, его выдадут заново. */
+async function acceptChatKey(row, checks) {
+  let key;
+  try { key = await E2E.unwrapChatKey(row.wrapped, keys.priv); } catch { key = null; }
+  const expected = checks?.[String(row.version || 1)];
+  if (key && expected && (await E2E.chatKeyCheck(key)) !== expected) key = null;
+  if (!key) {
+    await sb.from('conversation_keys').delete()
+      .eq('conversation_id', row.conversation_id).eq('user_id', state.me.id).eq('version', row.version || 1);
+    return null;
   }
-  return got;
+  keys.chat.set(kid(row.conversation_id, row.version), key);
+  return key;
 }
 
-/** true — ключ чата есть (получен или только что создан). */
+async function loadChecks(chatIds) {
+  const need = [...new Set(chatIds)];
+  if (!need.length) return new Map();
+  const { data } = await sb.from('conversations').select('id, key_checks').in('id', need);
+  return new Map((data || []).map((r) => [r.id, r.key_checks || {}]));
+}
+
+async function loadChatKeys() {
+  const { data } = await sb.from('conversation_keys').select('conversation_id, version, for_fingerprint, wrapped').eq('user_id', state.me.id);
+  const rows = (data || []).filter((r) => r.for_fingerprint === keys.fp && !keys.chat.has(kid(r.conversation_id, r.version)));
+  const checks = await loadChecks(rows.map((r) => r.conversation_id));
+  const got = new Set();
+  for (const r of rows) if (await acceptChatKey(r, checks.get(r.conversation_id))) got.add(r.conversation_id);
+  return [...got];
+}
+
+/** true — есть ключ текущей версии (получен или только что создан). */
 async function ensureChatKey(chatId) {
-  if (keys.chat.has(chatId)) return true;
-  const { data: r } = await sb.from('conversation_keys').select('for_fingerprint, wrapped')
-    .eq('conversation_id', chatId).eq('user_id', state.me.id).maybeSingle();
+  const v = currentVersion(chatId);
+  if (chatKey(chatId, v)) return true;
+  const { data: r } = await sb.from('conversation_keys').select('conversation_id, version, for_fingerprint, wrapped')
+    .eq('conversation_id', chatId).eq('user_id', state.me.id).eq('version', v).maybeSingle();
   if (r) {
-    if (r.for_fingerprint !== keys.fp) return false;              // зашифрован для старого ключа — ждём друзей
-    try { keys.chat.set(chatId, await E2E.unwrapChatKey(r.wrapped, keys.priv)); return true; } catch { return false; }
+    if (r.for_fingerprint !== keys.fp) return false;              // выдан для моего старого ключа — ждём друзей
+    const checks = (await loadChecks([chatId])).get(chatId);
+    return !!(await acceptChatKey(r, checks));
   }
-  const { data: won, error } = await sb.rpc('claim_conversation_key', { conv: chatId });
+  const key = await E2E.newChatKey();
+  const { data: won, error } = await sb.rpc('claim_conversation_key', { conv: chatId, p_check: await E2E.chatKeyCheck(key) });
   if (error || !won) return false;
-  keys.chat.set(chatId, await E2E.newChatKey());
+  keys.chat.set(kid(chatId, v), key);
+  const c = state.chats.get(chatId);
+  if (c) c.key_checks = { ...(c.key_checks || {}), [v]: await E2E.chatKeyCheck(key) };
   await shareChatKey(chatId);
   return true;
 }
 
-/** Отдать ключ чата участникам, у которых его нет. Сменившиеся ключи — только после подтверждения. */
+/** Отдать ключи чата (все версии, что есть у меня) участникам, у которых их нет.
+    Сменившиеся ключи людей — только после подтверждения. Бывшим участникам база выдать не даст. */
 async function shareChatKey(chatId) {
-  const key = keys.chat.get(chatId);
   const c = state.chats.get(chatId);
-  if (!key || !c) return;
-  const members = c.member_ids || [];
+  const versions = versionsHeld(chatId);
+  if (!c || !versions.length) return;
+  // список участников берём свежий: в группу могли добавить людей с другого устройства
+  const { data: mem } = await sb.from('conversation_members').select('user_id').eq('conversation_id', chatId);
+  const members = mem?.length ? mem.map((r) => r.user_id) : (c.member_ids || []);
+  c.member_ids = members;
   await loadPubKeys(members);
-  const { data: rows } = await sb.from('conversation_keys').select('user_id, for_fingerprint').eq('conversation_id', chatId);
-  const have = new Map((rows || []).map((r) => [r.user_id, r.for_fingerprint]));
+  const { data: rows } = await sb.from('conversation_keys').select('user_id, version, for_fingerprint').eq('conversation_id', chatId);
+  const have = new Map((rows || []).map((r) => [r.user_id + ':' + r.version, r.for_fingerprint]));
   const out = [], warn = [];
   let trustedChanged = false;
   for (const uid of members) {
@@ -398,18 +435,24 @@ async function shareChatKey(chatId) {
       if (!keys.trusted[uid]) { keys.trusted[uid] = pk.fp; trustedChanged = true; }
       if (keys.trusted[uid] !== pk.fp) { warn.push(uid); continue; }
     }
-    if (have.get(uid) === pk.fp) continue;
-    out.push({ conversation_id: chatId, user_id: uid, for_fingerprint: pk.fp, wrapped: await E2E.wrapChatKey(key, pk.jwk) });
+    for (const v of versions) {
+      if (have.get(uid + ':' + v) === pk.fp) continue;
+      out.push({ conversation_id: chatId, user_id: uid, version: v, for_fingerprint: pk.fp,
+        wrapped: await E2E.wrapChatKey(chatKey(chatId, v), pk.jwk) });
+    }
   }
   if (trustedChanged) await saveTrusted();
-  if (out.length) await sb.from('conversation_keys').upsert(out, { onConflict: 'conversation_id,user_id' });
+  for (const row of out) {                       // по одной: если одна запись не пройдёт проверку базы, остальные всё равно выдадутся
+    await sb.from('conversation_keys').upsert(row, { onConflict: 'conversation_id,user_id,version' });
+  }
   const changed = (c.keyWarn || []).join() !== warn.join();
   c.keyWarn = warn;
   if (changed && chatId === state.activeId) renderMessages();
 }
 
 async function shareAllChatKeys() {
-  for (const id of keys.chat.keys()) if (state.chats.has(id)) await shareChatKey(id).catch(() => {});
+  const chats = new Set([...keys.chat.keys()].map((k) => k.split(':')[0]));
+  for (const id of chats) if (state.chats.has(id)) await shareChatKey(id).catch(() => {});
 }
 
 const sigText = (m) => `msg-v1|${m.conversation_id}|${m.sender_id}|${m.cid}|${m.ct_hash}|${m.iv}`;
@@ -417,7 +460,7 @@ const sigText = (m) => `msg-v1|${m.conversation_id}|${m.sender_id}|${m.cid}|${m.
 /** Расшифровать сообщение: шифр берём из центра или с узлов (с проверкой хеша), затем проверяем подпись. */
 async function decryptMessage(m) {
   if (m.p && !m.p.bad && !m.p.missing) return m;
-  const key = keys.chat.get(m.conversation_id);
+  const key = chatKey(m.conversation_id, m.key_version);
   if (!key) { m.p = null; return m; }
   let ct = m.ct;
   if (!ct && m.ct_hash && m.nodes?.length) {
@@ -440,11 +483,12 @@ async function checkSignature(m) {
 
 /** Подготовить строку сообщения: шифр, хеш, подпись; содержимое — на узлы (если они есть) */
 async function sealMessage(chatId, payload, cid = crypto.randomUUID()) {
-  const { ct, iv } = await E2E.sealJson(keys.chat.get(chatId), payload, aadMsg(chatId, state.me.id));
+  const v = currentVersion(chatId);
+  const { ct, iv } = await E2E.sealJson(chatKey(chatId, v), payload, aadMsg(chatId, state.me.id));
   const bytes = E2E.b64.dec(ct);
   const ct_hash = await E2E.sha256hex(bytes);
   const nodes = await net.put(`${chatId}/${ct_hash}`, bytes).catch(() => []);
-  const row = { cid, iv, ct_hash, ct: nodes.length ? null : ct, nodes: nodes.length ? nodes : null, sig: null };
+  const row = { cid, iv, ct_hash, ct: nodes.length ? null : ct, nodes: nodes.length ? nodes : null, sig: null, key_version: v };
   if (keys.sign) row.sig = await E2E.signText(keys.sign, sigText({ conversation_id: chatId, sender_id: state.me.id, ...row }));
   return row;
 }
@@ -452,12 +496,12 @@ async function sealMessage(chatId, payload, cid = crypto.randomUUID()) {
 /** Последнее сообщение для списка чатов (из полей my_chats) */
 const lastMessageOf = (c) => ({
   conversation_id: c.id, sender_id: c.last_sender, ct: c.last_ct, iv: c.last_iv,
-  ct_hash: c.last_hash, nodes: c.last_nodes, cid: c.last_cid, sig: c.last_sig,
+  ct_hash: c.last_hash, nodes: c.last_nodes, cid: c.last_cid, sig: c.last_sig, key_version: c.last_key_version,
 });
 function setLast(c, m) {
   Object.assign(c, m
-    ? { last_ct: m.ct, last_iv: m.iv, last_p: m.p, last_sender: m.sender_id, last_hash: m.ct_hash, last_nodes: m.nodes, last_cid: m.cid, last_sig: m.sig }
-    : { last_ct: null, last_iv: null, last_p: null, last_sender: null, last_hash: null, last_nodes: null, last_cid: null, last_sig: null });
+    ? { last_ct: m.ct, last_iv: m.iv, last_p: m.p, last_sender: m.sender_id, last_hash: m.ct_hash, last_nodes: m.nodes, last_cid: m.cid, last_sig: m.sig, last_key_version: m.key_version }
+    : { last_ct: null, last_iv: null, last_p: null, last_sender: null, last_hash: null, last_nodes: null, last_cid: null, last_sig: null, last_key_version: null });
 }
 
 /* =====================================================================
@@ -667,7 +711,8 @@ $('findForm').onsubmit = async (e) => {
 /* =====================================================================
    Открытый чат
    ===================================================================== */
-const MSG_COLUMNS = 'id, conversation_id, sender_id, ct, iv, created_at, edited_at, cid, ct_hash, sig, nodes';
+const PAGE = 200;
+const MSG_COLUMNS = 'id, conversation_id, sender_id, ct, iv, created_at, edited_at, cid, ct_hash, sig, nodes, key_version';
 
 function showPlaceholder() {
   leaveTyping();
@@ -758,10 +803,11 @@ async function openChat(id) {
   if (!state.history.has(id)) {
     $('messages').replaceChildren(h('div', { class: 'day', text: 'Загрузка…' }));
     const { data, error } = await sb.from('messages').select(MSG_COLUMNS)
-      .eq('conversation_id', id).order('created_at', { ascending: false }).limit(200);
+      .eq('conversation_id', id).order('created_at', { ascending: false }).limit(PAGE);
     if (error) { $('messages').replaceChildren(h('div', { class: 'inline-err', text: humanError(error) })); return; }
     const merged = new Map([...(state.history.get(id) || []), ...data].map((m) => [m.id, m]));
     state.history.set(id, [...merged.values()].sort(byTime));
+    state.more.set(id, data.length === PAGE);
     await loadPeople(state.history.get(id).map((m) => m.sender_id));
   }
   await ensureChatKey(id).catch(() => false);
@@ -790,14 +836,41 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden && state.activeId) { markRead(state.activeId); renderChats(); }
 });
 
-function renderMessages() {
+async function loadOlder(chatId, button) {
+  const list = state.history.get(chatId) || [];
+  if (!list.length) return;
+  button.disabled = true;
+  button.textContent = 'Загрузка…';
+  const { data, error } = await sb.from('messages').select(MSG_COLUMNS)
+    .eq('conversation_id', chatId).lt('created_at', list[0].created_at)
+    .order('created_at', { ascending: false }).limit(PAGE);
+  if (error) { button.disabled = false; button.textContent = 'Не получилось — ещё раз'; return; }
+  await loadPeople(data.map((m) => m.sender_id));
+  await Promise.all(data.map(decryptMessage));
+  const merged = new Map([...data, ...list].map((m) => [m.id, m]));
+  state.history.set(chatId, [...merged.values()].sort(byTime));
+  state.more.set(chatId, data.length === PAGE);
+  if (state.activeId !== chatId) return;
+  const box = $('messages');
+  const fromBottom = box.scrollHeight - box.scrollTop;
+  renderMessages({ keepScroll: true });
+  box.scrollTop = box.scrollHeight - fromBottom;          // остаёмся на том же месте
+}
+
+function renderMessages({ keepScroll = false } = {}) {
   const box = $('messages');
   const c = state.chats.get(state.activeId);
   const list = state.history.get(state.activeId) || [];
   const nodes = [];
+  if (state.more.get(state.activeId)) {
+    const chatId = state.activeId;
+    const more = h('button', { class: 'btn load-more', type: 'button', text: 'Показать более ранние' });
+    more.onclick = () => loadOlder(chatId, more);
+    nodes.push(more);
+  }
 
   nodes.push(h('div', { class: 'sys-note' }, icon('lock'),
-    h('span', { text: keys.chat.has(state.activeId)
+    h('span', { text: hasCurrentKey(state.activeId)
       ? 'Сквозное шифрование: прочитать сообщения и фото могут только участники чата.'
       : 'Ждём ключ шифрования — он придёт, когда собеседник откроет приложение.' })));
 
@@ -825,9 +898,10 @@ function renderMessages() {
     nodes.push(bubble(m, { showName: c?.is_group && m.sender_id !== state.me.id && !continued, continued }));
     prev = m;
   }
+  const prevTop = box.scrollTop;
   box.replaceChildren(...nodes);
   resolveImages(box);
-  box.scrollTop = box.scrollHeight;
+  box.scrollTop = keepScroll ? prevTop : box.scrollHeight;
 }
 
 function bubble(m, { showName, continued }) {
@@ -849,6 +923,7 @@ function bubble(m, { showName, continued }) {
     const img = h('img', { class: 'msg-img', alt: 'Фото', dataset: {
       ref: p.img.path || p.img.hash, path: p.img.path || '', hash: p.img.hash || '', nodes: (p.img.nodes || []).join(','),
       aad: p.img.a === 2 ? 'img|' + m.conversation_id : p.img.path, iv: p.img.iv, mime: p.img.mime || 'image/jpeg', chat: m.conversation_id,
+      kv: p.img.kv || m.key_version || 1,
     } });
     if (p.img.w && p.img.h) img.style.aspectRatio = `${p.img.w} / ${p.img.h}`;
     img.onclick = () => img.src && openLightbox(img.src);
@@ -968,7 +1043,7 @@ function resolveImages(root) {
     if (state.images.has(ref)) { img.src = state.images.get(ref); continue; }
     (async () => {
       try {
-        const key = keys.chat.get(chat);
+        const key = chatKey(chat, +img.dataset.kv || 1);
         if (!key) return;
         let cipher;
         if (path) {
@@ -1025,11 +1100,21 @@ async function canSend(chatId) {
   return false;
 }
 
-async function insertMessage(chatId, payload) {
+/** Ключ чата сменился (кто-то вышел из группы)? Обновляем версию и получаем новый ключ. */
+async function refreshKeyVersion(chatId) {
+  const before = currentVersion(chatId);
+  await loadChats();
+  if (currentVersion(chatId) === before) return false;
+  return ensureChatKey(chatId);
+}
+const isRlsError = (e) => /row-level security|stale key/i.test(String(e?.message || e));
+
+async function insertMessage(chatId, payload, retried = false) {
   const row = await sealMessage(chatId, payload);
   const { data, error } = await sb.from('messages')
     .insert({ conversation_id: chatId, sender_id: state.me.id, ...row })
     .select(MSG_COLUMNS).single();
+  if (error && !retried && isRlsError(error) && (await refreshKeyVersion(chatId))) return insertMessage(chatId, payload, true);
   if (error) throw error;
   data.p = payload;
   data.sigOk = row.sig ? true : null;
@@ -1043,12 +1128,13 @@ function replyRef() {
   return { id: m.id, s: m.sender_id, t: (m.p.t || (m.p.img ? 'Фото' : '')).slice(0, 120) };
 }
 
-async function editMessage(m, newText) {
+async function editMessage(m, newText, retried = false) {
   const payload = { ...m.p, t: newText };
   const row = await sealMessage(m.conversation_id, payload, m.cid || crypto.randomUUID());
   delete row.cid;                                         // id сообщения при правке не меняется
   const oldKey = m.nodes?.length && m.ct_hash ? [m.nodes, `${m.conversation_id}/${m.ct_hash}`] : null;
   const { data, error } = await sb.from('messages').update(row).eq('id', m.id).select(MSG_COLUMNS).single();
+  if (error && !retried && isRlsError(error) && (await refreshKeyVersion(m.conversation_id))) return editMessage(m, newText, true);
   if (error) throw error;
   if (oldKey) net.del(...oldKey);                         // старую версию убираем с узлов
   data.p = payload;
@@ -1096,14 +1182,18 @@ async function sendImage(file) {
   if (!(await canSend(chatId))) return;
   const caption = textArea.value.trim();
   $('uploading').hidden = false;
+  let uploadedNodes = [], uploadedKey = null;
   try {
     const { blob, type, w, h: height } = await shrinkImage(file);
     if (blob.size > 6 * 1024 * 1024) throw new Error('Картинка слишком большая');
-    const sealed = await E2E.sealBytes(keys.chat.get(chatId), await blob.arrayBuffer(), 'img|' + chatId);
+    const kv = currentVersion(chatId);
+    const sealed = await E2E.sealBytes(chatKey(chatId, kv), await blob.arrayBuffer(), 'img|' + chatId);
     const bytes = new Uint8Array(sealed.data);
     const hash = await E2E.sha256hex(bytes);
-    const img = { iv: sealed.iv, mime: type, w, h: height, a: 2, hash };
+    uploadedKey = `${chatId}/${hash}`;
+    const img = { iv: sealed.iv, mime: type, w, h: height, a: 2, hash, kv };
     const nodes = await net.put(`${chatId}/${hash}`, bytes).catch(() => []);
+    uploadedNodes = nodes;
     if (nodes.length) img.nodes = nodes;
     else {                                                // узлов нет — кладём в хранилище центра, как раньше
       img.path = `${chatId}/${crypto.randomUUID()}.bin`;
@@ -1117,6 +1207,7 @@ async function sendImage(file) {
     setCompose(null);
     addMessage(msg);
   } catch (err) {
+    if (uploadedNodes.length && uploadedKey) net.del(uploadedNodes, uploadedKey);   // не оставляем фото без сообщения
     inlineError(sendError(err).replace('Не отправилось', 'Фото не отправилось'));
   } finally {
     $('uploading').hidden = true;
@@ -1195,7 +1286,7 @@ async function addMessage(m, fromServer = false) {
   let c = state.chats.get(m.conversation_id);
   if (!c) { await loadChats(); c = state.chats.get(m.conversation_id); if (!c) return; }
   await loadPeople([m.sender_id]);
-  if (!keys.chat.has(c.id)) await loadChatKeys();
+  if (!chatKey(c.id, m.key_version)) await loadChatKeys();
   await decryptMessage(m);
 
   const hist = state.history.get(c.id);
@@ -1332,7 +1423,8 @@ function closeChat() {
 }
 
 function forgetChat(chatId) {
-  state.chats.delete(chatId); state.history.delete(chatId); keys.chat.delete(chatId);
+  state.chats.delete(chatId); state.history.delete(chatId);
+  for (const k of [...keys.chat.keys()]) if (k.startsWith(chatId + ':')) keys.chat.delete(k);
   if (state.activeId === chatId) closeChat();
   renderChats();
 }

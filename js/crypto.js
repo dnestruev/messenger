@@ -195,3 +195,12 @@ export async function sha256hex(bytes) {
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   return [...h].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+/** Отпечаток ключа чата: по нему проверяют, что выданный ключ — тот самый, а не подсунутый. */
+export async function chatKeyCheck(chatKey) {
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', chatKey));
+  const label = te.encode('messenger-keycheck-v1|');
+  const buf = new Uint8Array(label.length + raw.length);
+  buf.set(label); buf.set(raw, label.length);
+  return sha256hex(buf);
+}

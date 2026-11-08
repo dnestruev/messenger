@@ -338,6 +338,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   background: var(--surface); border-radius: 999px;
 }
 [data-style="dot"] .day { font-family: var(--font-mono); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .12em; background: transparent; }
+.load-more { align-self: center; min-height: 34px; margin: 4px 0 10px; font-size: 13px; }
 .inline-err { align-self: center; font-size: 13px; color: var(--danger); margin: 6px 0; text-align: center; }
 .empty-chat { margin: auto; text-align: center; color: var(--muted); font-size: 14px; }
 
