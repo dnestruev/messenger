@@ -1858,7 +1858,7 @@ function networkSection(msg) {
 
 function nodeRow(n, isCreator, msg) {
   const host = n.url.replace('https://', '').replace('.supabase.co', '');
-  const info = h('div', { class: 'row-text', style: { flex: '1' } },
+  const info = h('div', { class: 'row-text' },
     h('b', { text: host }),
     h('small', { text: [STATUS_LABEL[n.status] + (n.disabled_reason ? ` (${n.disabled_reason})` : ''),
       n.owner_username ? '@' + n.owner_username : null,

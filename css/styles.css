@@ -556,7 +556,9 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .danger-zone { border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); background: transparent; }
 
 /* ---------- Сеть партнёров ---------- */
-.node-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.node-row { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.node-row > .row-text { flex: 1 1 calc(100% - 30px); }
+.node-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: 18px; }
 .node-row .row-text b { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
 .node-actions { display: flex; gap: 6px; align-items: center; margin-left: auto; }
 .node-actions .btn { min-height: 34px; padding: 0 12px; font-size: 13px; }
