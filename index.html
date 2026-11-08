@@ -22,7 +22,8 @@
     const mode = p.mode === 'auto' || !p.mode
       ? (p.theme === 'dark' ? 'dark' : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
       : p.mode;
-    document.documentElement.dataset.style = p.style || 'classic';
+    const plusOnly = p.style === 'paper' || p.style === 'neon';
+    document.documentElement.dataset.style = plusOnly && !p.plus ? 'classic' : p.style || 'classic';
     document.documentElement.dataset.mode = mode;
   } catch {}
 </script>

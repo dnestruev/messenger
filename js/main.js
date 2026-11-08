@@ -75,6 +75,12 @@ function humanError(err) {
     [/Failed to fetch|NetworkError/i, 'Нет связи с сервером. Проверьте интернет'],
     [/should be different/i, 'Новый пароль совпадает со старым'],
     [/Password should be/i, 'Пароль слишком короткий: нужно от 6 символов'],
+    [/group limit reached/i, 'Достигнут лимит групп. С Плюсом можно до 100 групп'],
+    [/group is full/i, 'Группа заполнена. С Плюсом у создателя группы — до 500 человек'],
+    [/frame needs plus/i, 'Рамки доступны только с Плюсом'],
+    [/only partners can gift/i, 'Дарить Плюс могут только партнёры с работающим узлом'],
+    [/gift limit reached/i, 'Можно подарить Плюс только 5 друзьям'],
+    [/cannot gift yourself/i, 'Себе подарить нельзя'],
   ];
   for (const [re, text] of rules) if (re.test(m)) return text;
   if (/(user_keys|key_backups|conversation_keys|messages_e2ee|last_ct|my_chats|conversation)/i.test(m)
@@ -106,6 +112,7 @@ const state = {
   compose: null,            // { mode: 'reply' | 'edit', msg }
   more: new Map(),          // id чата -> есть ли более ранние сообщения
   typing: { channel: null, until: 0, sentAt: 0, timer: null },
+  perks: new Map(),         // id -> 'partner' | 'plus' (награды за узел-партнёр)
 };
 const keys = {
   priv: null,               // мой секретный ключ (неизвлекаемый)
@@ -120,7 +127,7 @@ const keys = {
 /* =====================================================================
    Оформление и настройки устройства
    ===================================================================== */
-const prefs = { style: 'classic', mode: 'auto', sound: true, notify: false };
+const prefs = { style: 'classic', mode: 'auto', sound: true, notify: false, accent: null, plus: false };
 try {
   const saved = JSON.parse(localStorage.getItem('prefs') || '{}');
   if (saved.theme && !saved.mode) saved.mode = saved.theme;   // старый формат
@@ -130,10 +137,17 @@ const savePrefs = () => { try { localStorage.setItem('prefs', JSON.stringify(pre
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 const resolvedMode = () => (prefs.mode === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : prefs.mode);
 
+const PLUS_STYLES = ['paper', 'neon'];
 function applyTheme() {
   const root = document.documentElement;
-  root.dataset.style = prefs.style;
+  const plus = prefs.plus;                                  // запоминаем, чтобы тема не мигала при запуске
+  root.dataset.style = !plus && PLUS_STYLES.includes(prefs.style) ? 'classic' : prefs.style;
   root.dataset.mode = resolvedMode();
+  if (plus && prefs.accent != null) {
+    const dark = resolvedMode() === 'dark';
+    root.style.setProperty('--accent', `hsl(${prefs.accent} 72% ${dark ? 60 : 50}%)`);
+    root.style.setProperty('--accent-soft', `hsl(${prefs.accent} ${dark ? '35% 18%' : '85% 94%'})`);
+  } else { root.style.removeProperty('--accent'); root.style.removeProperty('--accent-soft'); }
   setIcon($('modeBtn'), resolvedMode() === 'dark' ? 'sun' : 'moon');
   const bg = getComputedStyle(root).getPropertyValue('--surface').trim();
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', bg || '#ffffff');
@@ -194,7 +208,7 @@ function segmented(options, value, onpick) {
 async function loadPeople(ids) {
   const missing = [...new Set(ids)].filter((id) => id && !state.people.has(id));
   if (!missing.length) return;
-  const { data } = await sb.from('profiles').select('id, username, display_name, avatar_hue, role').in('id', missing);
+  const { data } = await sb.from('profiles').select('id, username, display_name, avatar_hue, role, frame').in('id', missing);
   for (const p of data || []) state.people.set(p.id, p);
 }
 const nameOf = (id) => { const p = state.people.get(id); return p ? (p.display_name || p.username) : '…'; };
@@ -207,13 +221,33 @@ function avatar(label, hue, size = '', badge = null, extra = '') {
 }
 const roleOf = (id) => state.people.get(id)?.role || null;
 const ROLE_LABEL = { creator: 'Создатель', tester: 'Тестер' };
+const perkOf = (id) => state.perks.get(id) || null;
+const hasPlus = (id = state.me?.id) => !!perkOf(id);
+const PERK_LABEL = { partner: 'Партнёр', plus: 'Плюс' };
+const PERK_TITLE = { partner: 'Держит узел сети: хранит зашифрованные сообщения для всех', plus: 'Плюс в подарок от партнёра сети' };
 function roleBadge(id) {
-  const r = roleOf(id);
-  return r ? h('span', { class: 'role ' + r, title: r === 'creator' ? 'Создатель мессенджера' : 'Тестер мессенджера', text: ROLE_LABEL[r] }) : null;
+  const r = roleOf(id), k = perkOf(id);
+  return [
+    r ? h('span', { class: 'role ' + r, title: r === 'creator' ? 'Создатель мессенджера' : 'Тестер мессенджера', text: ROLE_LABEL[r] }) : null,
+    k ? h('span', { class: 'role ' + k, title: PERK_TITLE[k], text: PERK_LABEL[k] }) : null,
+  ];
+}
+/** Рамка видна, только пока у человека есть Плюс */
+const frameOf = (id) => (hasPlus(id) && state.people.get(id)?.frame) || null;
+async function loadPerks() {
+  const { data, error } = await sb.rpc('perks_list');
+  if (error) return;                                        // база ещё без update-7
+  const next = new Map((data || []).map((r) => [r.user_id, r.kind]));
+  const changed = next.size !== state.perks.size || [...next].some(([k, v]) => state.perks.get(k) !== v);
+  state.perks = next;
+  const plus = hasPlus();
+  if (plus !== prefs.plus) { prefs.plus = plus; savePrefs(); applyTheme(); }
+  if (changed) { renderMe(); renderChats(); if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); } }
+  $('fileInput').multiple = plus;
 }
 /** Имя + значок роли (или галочка официального чата) с обрезкой длинного текста */
 const nameLine = (text, ...after) => h('span', { class: 'name-line' }, h('span', { class: 't', text }), ...after);
-const userAvatar = (id, size) => avatar(nameOf(id), hueOfUser(id), size, null, roleOf(id));
+const userAvatar = (id, size) => avatar(nameOf(id), hueOfUser(id), size, null, [roleOf(id), frameOf(id) && 'frame frame-' + frameOf(id)].filter(Boolean).join(' '));
 const isStaffMe = () => !!roleOf(state.me.id);
 const otherOf = (c) => (c.member_ids || []).find((id) => id !== state.me.id);
 const titleOf = (c) => (c.is_group ? c.title || 'Группа' : nameOf(otherOf(c)));
@@ -573,7 +607,10 @@ async function startApp(user) {
   }
   await loadChatKeys();
   await loadBlocks();
+  await loadPerks();
   await loadChats();
+  clearInterval(state.perksTimer);
+  state.perksTimer = setInterval(loadPerks, 5 * 60 * 1000);
   subscribe();
   shareAllChatKeys();
   if (prefs.notify && 'Notification' in window && Notification.permission === 'granted') setupPush(true).catch(() => {});
@@ -587,6 +624,7 @@ function stopApp() {
   state.activeId = null;
   state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
   state.showArchive = false;
+  clearInterval(state.perksTimer); state.perks.clear();
   setCompose(null);
   leaveTyping();
   for (const url of state.images.values()) URL.revokeObjectURL(url);
@@ -1169,10 +1207,14 @@ function sendError(err) {
   return 'Не отправилось: ' + humanError(err);
 }
 
-$('fileInput').onchange = () => {
-  const f = $('fileInput').files[0];
+const ALBUM_MAX = 10;
+$('fileInput').onchange = async () => {
+  const files = [...$('fileInput').files];
   $('fileInput').value = '';
-  if (f) sendImage(f);
+  if (!files.length) return;
+  if (!hasPlus() && files.length > 1) inlineError('Альбомы до 10 фото — с Плюсом. Отправляю первое фото.');
+  const list = hasPlus() ? files.slice(0, ALBUM_MAX) : files.slice(0, 1);
+  for (const f of list) await sendImage(f);
 };
 
 async function sendImage(file) {
@@ -1214,14 +1256,15 @@ async function sendImage(file) {
   }
 }
 
-/** Уменьшаем фото до 1600 px — экономит бесплатный 1 ГБ хранилища. */
+/** Уменьшаем фото до 1600 px (с Плюсом — до 2560 px): экономит бесплатный 1 ГБ хранилища. */
 async function shrinkImage(file) {
   const bmp = await createImageBitmap(file);
   if (file.type === 'image/gif' && file.size < 4 * 1024 * 1024) return { blob: file, type: 'image/gif', w: bmp.width, h: bmp.height };
-  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const max = hasPlus() ? 2560 : 1600;                   // с Плюсом — фото в высоком качестве
+  const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const canvas = h('canvas', { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
   canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
-  const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.82));
+  const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', hasPlus() ? 0.9 : 0.82));
   return { blob, type: 'image/jpeg', w: canvas.width, h: canvas.height };
 }
 
@@ -1534,7 +1577,7 @@ function openSettings() {
   // Профиль
   const avatarSlot = h('span');
   const name = h('input', { value: p.display_name || '', maxLength: 40, placeholder: 'Имя, которое видят друзья' });
-  const drawAvatar = () => avatarSlot.replaceChildren(avatar(name.value.trim() || p.username, hue, 'lg'));
+  const drawAvatar = () => avatarSlot.replaceChildren(avatar(name.value.trim() || p.username, hue, 'lg', null, frameOf(state.me.id) ? 'frame frame-' + frameOf(state.me.id) : ''));
   const swatches = h('div', { class: 'swatches' });
   const drawSwatches = () => swatches.replaceChildren(...HUES.map((hh) => h('button', {
     class: 'swatch' + (hh === hue ? ' on' : ''), vars: { '--h': hh }, title: 'Цвет',
@@ -1632,7 +1675,7 @@ function openSettings() {
   }
 
   openModal({ title: 'Настройки' },
-    h('div', { class: 'profile-head' }, avatarSlot, roleBadge(state.me.id), h('div', { class: 'profile-nick', text: '@' + p.username })),
+    h('div', { class: 'profile-head' }, avatarSlot, h('div', { class: 'name-line' }, roleBadge(state.me.id)), h('div', { class: 'profile-nick', text: '@' + p.username })),
     section('Профиль', name, swatches, h('button', { class: 'btn btn-primary btn-block', text: 'Сохранить', onclick: async () => {
       const display_name = name.value.trim() || null;
       const { error } = await sb.from('profiles').update({ display_name, avatar_hue: hue }).eq('id', state.me.id);
@@ -1642,6 +1685,7 @@ function openSettings() {
       if (state.activeId) { renderHeader(); renderMessages(); }
       say(msg, 'Профиль сохранён', 'ok');
     } })),
+    perksSection(msg),
     section('Оформление',
       segmented([['classic', 'Обычный'], ['dot', 'Dot']], prefs.style, (v) => { prefs.style = v; savePrefs(); applyTheme(); }),
       segmented([['light', 'Светлая'], ['dark', 'Тёмная'], ['auto', 'Авто']], prefs.mode, (v) => { prefs.mode = v; savePrefs(); applyTheme(); })),
@@ -1674,6 +1718,123 @@ function openSettings() {
 /* =====================================================================
    Сеть партнёров
    ===================================================================== */
+/* =====================================================================
+   Награды партнёрам: «Партнёр» и «Плюс»
+   ===================================================================== */
+const FRAMES = [[null, 'Нет'], ['gold', 'Золото'], ['aurora', 'Сияние'], ['neon', 'Неон'], ['dots', 'Точки']];
+const PERKS = [
+  'Значок у ника — его видят все',
+  'Фото в высоком качестве и альбомы до 10 фото',
+  'До 100 групп и до 500 человек в группе',
+  'Свой цвет акцента, темы «Бумага» и «Неон», рамки аватарки',
+];
+
+function perksSection(msg) {
+  const me = state.me.id;
+  const kind = perkOf(me);
+  const body = h('div', { style: { display: 'grid', gap: '12px' } });
+
+  const status = kind === 'partner'
+    ? h('div', { class: 'perk-card on' }, h('b', { text: 'Вы партнёр сети' }), h('small', { text: 'Ваш узел в сети — все награды включены. Спасибо!' }))
+    : kind === 'plus'
+      ? h('div', { class: 'perk-card on' }, h('b', { text: 'У вас Плюс' }), h('small', { text: 'Подарок от партнёра. Действует, пока его узел в сети.' }))
+      : h('div', { class: 'perk-card' }, h('b', { text: 'Обычный аккаунт' }),
+        h('small', { text: 'Всё общение бесплатно и без ограничений. Партнёры сети получают сверху:' }));
+  const list = h('ul', { class: 'perk-list' }, ...PERKS.map((t) => h('li', { class: kind ? 'on' : '' }, kind ? '✓ ' : '· ', t)));
+  body.append(status, list);
+
+  if (!kind) {
+    body.append(
+      h('button', { class: 'btn btn-primary btn-block', onclick: partnerDialog }, 'Стать партнёром — это бесплатно'),
+      h('p', { class: 'muted', text: 'Или попросите друга-партнёра подарить вам Плюс.' }));
+  } else {
+    // Рамка
+    const frames = h('div', { class: 'frames' });
+    const drawFrames = () => frames.replaceChildren(...FRAMES.map(([f, label]) => h('button', {
+      class: 'frame-pick' + ((state.people.get(me)?.frame || null) === f ? ' on' : ''), title: label, type: 'button',
+      onclick: async () => {
+        const { error } = await sb.from('profiles').update({ frame: f }).eq('id', me);
+        if (error) return say(msg, humanError(error));
+        state.people.get(me).frame = f;
+        drawFrames(); renderMe(); renderChats();
+        say(msg, f ? 'Рамка «' + label + '» включена' : 'Рамка убрана', 'ok');
+      },
+    }, avatar(nameOf(me), hueOfUser(me), 'xs', null, f ? 'frame frame-' + f : ''), h('small', { text: label }))));
+    drawFrames();
+
+    // Акцент
+    const accents = h('div', { class: 'swatches accent-swatches' });
+    const drawAccents = () => accents.replaceChildren(
+      h('button', { class: 'swatch none' + (prefs.accent == null ? ' on' : ''), title: 'Как в теме', type: 'button',
+        onclick: () => { prefs.accent = null; savePrefs(); applyTheme(); drawAccents(); } }),
+      ...[...HUES, 200, 120, 0].map((hh) => h('button', {
+        class: 'swatch' + (hh === prefs.accent ? ' on' : ''), vars: { '--h': hh }, title: 'Акцент', type: 'button',
+        onclick: () => { prefs.accent = hh; savePrefs(); applyTheme(); drawAccents(); },
+      })));
+    drawAccents();
+
+    body.append(
+      h('div', { class: 'row-text' }, h('b', { text: 'Рамка аватарки' }), h('small', { text: 'Видна всем, пока у вас есть Плюс' })), frames,
+      h('div', { class: 'row-text' }, h('b', { text: 'Цвет акцента' }), h('small', { text: 'Кнопки и ваши сообщения' })), accents,
+      h('div', { class: 'row-text' }, h('b', { text: 'Темы' })),
+      segmented([['classic', 'Обычная'], ['dot', 'Dot'], ['paper', 'Бумага'], ['neon', 'Неон']], prefs.style,
+        (v) => { prefs.style = v; savePrefs(); applyTheme(); }));
+  }
+
+  if (kind === 'partner') body.append(giftsBlock(msg));
+  body.append(topBlock());
+  return section('Партнёрство', body);
+}
+
+function giftsBlock(msg) {
+  const wrap = h('div', { style: { display: 'grid', gap: '10px' } });
+  const nick = h('input', { placeholder: 'Ник друга', autocapitalize: 'off', spellcheck: 'false' });
+  const draw = async () => {
+    const { data } = await sb.from('partner_gifts').select('friend_id, created_at').eq('partner_id', state.me.id).order('created_at', { ascending: true });
+    const ids = (data || []).map((g) => g.friend_id);
+    await loadPeople(ids);
+    wrap.replaceChildren(
+      h('div', { class: 'row-text' }, h('b', { text: `Подарить Плюс друзьям: ${ids.length} из 5` }),
+        h('small', { text: 'Друзья получают все награды, пока ваш узел в сети' })),
+      ...ids.map((uid) => h('div', { class: 'member' }, userAvatar(uid, 'xs'),
+        h('div', { class: 'row-text', style: { flex: '1' } }, h('b', { text: nameOf(uid) }), h('small', { text: nickOf(uid) })),
+        h('button', { class: 'btn', text: 'Забрать', onclick: async () => {
+          const { error } = await sb.rpc('ungift_plus', { p_friend: uid });
+          if (error) return say(msg, humanError(error));
+          await loadPerks(); draw();
+        } }))),
+      ids.length < 5 ? h('div', { class: 'inline' }, nick, h('button', { class: 'btn', text: 'Подарить', onclick: async () => {
+        const u = nick.value.trim().replace(/^@/, '').toLowerCase();
+        if (!u) return;
+        const { error } = await sb.rpc('gift_plus', { p_username: u });
+        if (error) return say(msg, /not found/i.test(error.message) ? `Не нашли @${u}` : humanError(error));
+        nick.value = '';
+        say(msg, `@${u} получил Плюс`, 'ok');
+        await loadPerks(); draw();
+      } })) : null);
+  };
+  draw();
+  return wrap;
+}
+
+function topBlock() {
+  const wrap = h('div', { style: { display: 'grid', gap: '8px' } }, h('b', { text: 'Лучшие партнёры' }));
+  (async () => {
+    const { data, error } = await sb.rpc('partner_top');
+    if (error) return;
+    if (!data?.length) return wrap.append(h('p', { class: 'muted', text: 'Пока никого. Станьте первым — место №1 свободно.' }));
+    data.forEach((r) => state.people.has(r.user_id) || state.people.set(r.user_id, { username: r.username, display_name: r.display_name }));
+    await loadPeople(data.map((r) => r.user_id));
+    wrap.append(...data.map((r, i) => h('div', { class: 'member top-row' + (r.user_id === state.me.id ? ' me' : '') },
+      h('span', { class: 'top-place', text: String(i + 1) }),
+      userAvatar(r.user_id, 'xs'),
+      h('div', { class: 'row-text', style: { flex: '1' } }, h('b', { text: r.display_name || r.username }),
+        h('small', { text: `${r.msgs} ${plural(r.msgs, 'сообщение', 'сообщения', 'сообщений')} · ${r.days} ${plural(r.days, 'день', 'дня', 'дней')} в сети` })),
+      h('span', { class: 'top-score', text: String(r.score) }))));
+  })();
+  return wrap;
+}
+
 const PARTNER_GUIDE = 'https://github.com/dnestruev/messenger/blob/main/partner/README.md';
 const STATUS_LABEL = { active: 'в сети', pending: 'ждёт подтверждения', disabled: 'отключён' };
 
