@@ -1,10 +1,10 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109190528';
-import * as CONFIG from '../config.js?v=20261109190528';
-import * as E2E from './crypto.js?v=20261109190528';
-import { createNet } from './net.js?v=20261109190528';
-import { qrSvg } from './qr.js?v=20261109190528';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109190528';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109191113';
+import * as CONFIG from '../config.js?v=20261109191113';
+import * as E2E from './crypto.js?v=20261109191113';
+import { createNet } from './net.js?v=20261109191113';
+import { qrSvg } from './qr.js?v=20261109191113';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109191113';
 
 /* =====================================================================
    Утилиты
@@ -1748,6 +1748,23 @@ async function shrinkImage(file) {
    ===================================================================== */
 const ICE_SERVERS = CONFIG.ICE_SERVERS || [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
 const RING_TIMEOUT = 45000;
+/** Камера в HD: при слабом интернете браузер сам снизит качество, не обрывая звонок */
+const camConstraints = (facing = 'user') => ({ facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } });
+const VIDEO_BITRATE = 2_500_000;
+async function tuneSenders(pc) {
+  for (const sender of pc.getSenders()) {
+    if (sender.track?.kind !== 'video') continue;
+    try {
+      sender.track.contentHint = 'detail';
+      const prm = sender.getParameters();
+      if (!prm.encodings || !prm.encodings.length) prm.encodings = [{}];
+      prm.encodings[0].maxBitrate = VIDEO_BITRATE;
+      prm.encodings[0].maxFramerate = 30;
+      prm.degradationPreference = 'maintain-resolution';   // лучше меньше кадров, чем мыло
+      await sender.setParameters(prm);
+    } catch {}
+  }
+}
 let call = null;
 let callInbox = null;
 const callOut = new Map();
@@ -1804,6 +1821,8 @@ async function onSignal(env) {
   if (msg.t === 'end') finishCall(msg.why === 'declined' ? 'declined' : call.connectedAt ? 'ok' : call.dir === 'in' ? 'missed' : 'cancel', { remote: true });
 }
 
+/** Подсказка в SDP: разрешаем видео до VIDEO_BITRATE (некоторые браузеры иначе держат ~600 кбит/с) */
+const withBitrate = (sdp) => sdp.replace(/(m=video[^\r\n]*\r?\n(?:(?!m=)[^\r\n]*\r?\n)*?c=[^\r\n]*\r?\n)/, `$1b=AS:${Math.round(VIDEO_BITRATE / 1000)}\r\n`);
 const gathered = (pc, ms = 2500) => new Promise((res) => {
   if (pc.iceGatheringState === 'complete') return res();
   const t = setTimeout(res, ms);
@@ -1814,7 +1833,7 @@ async function getMedia(video) {
   try {
     return await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: video ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false,
+      video: video ? camConstraints('user') : false,
     });
   } catch (e) {
     if (video) { toast('Камера недоступна — звоню без видео'); return getMedia(false); }
@@ -1834,7 +1853,7 @@ function makePeer() {
     const st = pc.connectionState;
     if (st === 'connected') {
       clearTimeout(call.lostTimer);
-      if (!call.connectedAt) { call.connectedAt = Date.now(); stopTone(); call.clock = setInterval(updateCallUi, 1000); }
+      if (!call.connectedAt) { call.connectedAt = Date.now(); stopTone(); call.clock = setInterval(updateCallUi, 1000); tuneSenders(pc); }
       updateCallUi();
     }
     if (st === 'disconnected') { setCallStatus('Связь пропала…'); call.lostTimer = setTimeout(() => finishCall(call?.connectedAt ? 'ok' : 'failed'), 10000); }
@@ -1865,7 +1884,7 @@ async function startCall(video) {
     await pc.setLocalDescription(await pc.createOffer());
     await gathered(pc);
     if (!call || call.id !== id) return;
-    const sdp = pc.localDescription.sdp;
+    const sdp = withBitrate(pc.localDescription.sdp);
     // запись о звонке в чате: заодно отправит push «новое сообщение», если приложение у собеседника закрыто
     insertMessage(c.id, { call: { id, v: video, s: 'ring' } }).then((m) => { if (call?.id === id) call.log = m; addMessage(m); }).catch(() => {});
     const offer = () => sendSignal(c.id, peer, { t: 'offer', id, video, sdp }).catch(() => {});
@@ -1908,7 +1927,7 @@ async function acceptCall(withVideo) {
     await cur.pc.setRemoteDescription({ type: 'offer', sdp: cur.offer });
     await cur.pc.setLocalDescription(await cur.pc.createAnswer());
     await gathered(cur.pc);
-    await sendSignal(cur.conv, cur.peer, { t: 'answer', id: cur.id, sdp: cur.pc.localDescription.sdp });
+    await sendSignal(cur.conv, cur.peer, { t: 'answer', id: cur.id, sdp: withBitrate(cur.pc.localDescription.sdp) });
     updateCallUi();
   } catch (e) { toast(e.message || 'Не получилось ответить'); finishCall('failed'); }
 }
@@ -2000,10 +2019,11 @@ async function flipCamera() {
   if (!old) return;
   cur.facing = cur.facing === 'environment' ? 'user' : 'environment';
   try {
-    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: cur.facing }, width: { ideal: 640 }, height: { ideal: 480 } } });
+    const s = await navigator.mediaDevices.getUserMedia({ video: { ...camConstraints(), facingMode: { exact: cur.facing } } });
     const track = s.getVideoTracks()[0];
     const sender = cur.pc.getSenders().find((x) => x.track?.kind === 'video');
     await sender?.replaceTrack(track);
+    tuneSenders(cur.pc);
     cur.local.removeTrack(old); old.stop(); cur.local.addTrack(track);
     cur.ui.local.srcObject = null; updateCallUi();
   } catch { cur.facing = cur.facing === 'environment' ? 'user' : 'environment'; toast('Другой камеры нет'); }
