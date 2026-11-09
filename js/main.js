@@ -1,11 +1,12 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109200911';
-import * as CONFIG from '../config.js?v=20261109200911';
-import * as E2E from './crypto.js?v=20261109200911';
-import { createNet } from './net.js?v=20261109200911';
-import { qrSvg } from './qr.js?v=20261109200911';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109200911';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109200911';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109201711';
+import * as CONFIG from '../config.js?v=20261109201711';
+import * as E2E from './crypto.js?v=20261109201711';
+import { createNet } from './net.js?v=20261109201711';
+import { qrSvg } from './qr.js?v=20261109201711';
+import { findEmbed } from './embeds.js?v=20261109201711';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109201711';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109201711';
 
 /* =====================================================================
    Утилиты
@@ -1321,9 +1322,12 @@ async function loadOlder(chatId, button) {
 }
 
 const imgPool = new Map();   // ref -> уже загруженный <img> из прошлой отрисовки
+const embedPool = new Map(); // id сообщения -> уже открытый плеер (не перезагружаем при перерисовке)
 function renderMessages({ keepScroll = false } = {}) {
   const box = $('messages');
   imgPool.clear();
+  embedPool.clear();
+  for (const fr of box.querySelectorAll('.embed-open[data-mid]')) embedPool.set(fr.dataset.mid, fr);
   for (const im of box.querySelectorAll('img.msg-img[data-ref]')) if (im.src) imgPool.set(im.dataset.ref, im);
   const c = state.chats.get(state.activeId);
   const list = state.history.get(state.activeId) || [];
@@ -1431,6 +1435,8 @@ function bubble(m, { showName, continued, fresh }) {
   if (text) el.append(p?.t && text === p.t ? h('div', { class: 'msg-text md' }, renderMarkdown(text)) : h('div', { class: 'msg-text', text }));
   if (m.sigOk === false) el.append(h('div', { class: 'msg-forged' }, icon('warn'), 'Подпись не совпадает — возможна подделка'));
 
+  const emb = p?.t && !p.bad ? findEmbed(p.t) : null;
+  if (emb) el.append(embedCard(m, emb));
   const rx = reactionChips(m);
   if (rx) el.append(rx);
   const meta = h('span', { class: 'msg-meta' });
@@ -2013,6 +2019,26 @@ async function decodeReaction(r) {
   const v = await E2E.openJson(chatKey(r.conversation_id, r.kv), r.ct, r.iv, reactAad(r.message_id, r.user_id));
   return v && !v.bad && typeof v.e === 'string' && v.e.length <= 16 ? v.e : null;
 }
+/** Карточка плеера: по нажатию превращается в плеер сервиса */
+function embedCard(m, emb) {
+  const reused = embedPool.get(String(m.id));
+  if (reused) { embedPool.delete(String(m.id)); return reused; }
+  const card = h('button', { type: 'button', class: 'embed-card', vars: { '--svc': emb.color }, title: 'Открыть плеер ' + emb.service },
+    h('span', { class: 'embed-play' }, icon('play')),
+    h('span', { class: 'row-text' }, h('b', { text: emb.service }), h('small', { text: (emb.kind ? emb.kind[0].toUpperCase() + emb.kind.slice(1) : 'Ссылка') + (emb.kind === 'видео' ? ' · смотреть здесь' : ' · слушать здесь') })));
+  card.onclick = (e) => {
+    e.stopPropagation();
+    const frame = h('iframe', { src: emb.src, loading: 'lazy', title: emb.service, allow: 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture',
+      referrerpolicy: 'no-referrer', allowfullscreen: true });
+    frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation');
+    if (emb.height) frame.style.height = emb.height + 'px';
+    if (emb.ratio) frame.style.aspectRatio = emb.ratio;
+    const wrap = h('div', { class: 'embed-open', dataset: { mid: String(m.id) } }, frame);
+    card.replaceWith(wrap);
+  };
+  return card;
+}
+
 /** Обновить реакции только у одного сообщения, не трогая ленту (иначе прыгает прокрутка) */
 function patchReactions(msgId) {
   const box = $('messages');
@@ -2021,8 +2047,12 @@ function patchReactions(msgId) {
   const m = (state.history.get(state.activeId) || []).find((x) => x.id === msgId);
   if (!m) return;
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-  const next = reactionChips(m);
   const cur = el.querySelector(':scope > .reactions');
+  const had = new Set([...(cur?.querySelectorAll('.rx-e') || [])].map((x) => x.textContent));
+  const next = reactionChips(m);
+  const sig = (x) => (x ? [...x.querySelectorAll('.rx')].map((c) => c.className.replace(/\s*rx-new/, '') + c.textContent).join('|') : '');
+  if (sig(cur) === sig(next)) return;                      // ничего не поменялось (например, сервер подтвердил нашу же реакцию)
+  for (const chip of next?.querySelectorAll('.rx') || []) if (!had.has(chip.querySelector('.rx-e').textContent)) chip.classList.add('rx-new');   // анимируем только новую
   if (cur && next) cur.replaceWith(next);
   else if (cur) cur.remove();
   else if (next) el.insertBefore(next, el.querySelector(':scope > .msg-meta'));
