@@ -76,6 +76,7 @@ function plural(n, one, few, many) {
   if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
   return many;
 }
+const fmtDur = (sec) => { sec = Math.max(0, Math.round(sec || 0)); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); };
 const timeOf = (iso) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 function shortTime(iso) {
   const d = new Date(iso);
@@ -861,6 +862,7 @@ function previewText(p) {
   if (p.missing) return 'Сообщение недоступно';
   if (p.bad) return 'Не удалось расшифровать';
   const t = p.t ? stripMarkdown(p.t) : p.t;
+  if (p.v) return '🎤 Голосовое ' + fmtDur(p.v.dur);
   return p.img ? 'Фото' + (t ? ': ' + t : '') : t;
 }
 function previewOf(c) {
@@ -1055,6 +1057,11 @@ async function saveToFavorites(m) {
   try {
     if (!(await canSend(target))) return;
     const f = { s: m.sender_id, n: nameOf(m.sender_id) };
+    if (m.p.v) {
+      const blob = await voiceBlob(m);
+      await sendVoice(blob, m.p.v.dur, m.p.v.w, target, { f });
+      return toast('Сохранено в избранное');
+    }
     if (m.p.img) {
       const src = state.images.get(m.p.img.path || m.p.img.hash);
       if (!src) return inlineError('Фото ещё не загрузилось — подождите секунду');
@@ -1171,6 +1178,7 @@ function renderHeader() {
 }
 
 function renderComposer() {
+  syncMic();
   const c = state.chats.get(state.activeId);
   const block = c && writeBlock(c);
   $('composer').hidden = !c || !!block;
@@ -1214,6 +1222,7 @@ async function loadReads(chatId) {
 
 async function openChat(id) {
   state.seen.delete(id);                                  // при открытии — без анимации каждого пузыря
+  if (rec && rec.chat !== id) stopVoice(false);
   if (!state.chats.has(id)) await loadChats();
   if (!state.chats.has(id)) return;
   if (state.activeId !== id) setCompose(null);
@@ -1361,7 +1370,7 @@ function bubble(m, { showName, continued, fresh }) {
   if (p?.f) el.append(h('div', { class: 'msg-fwd' }, icon('bookmark'), p.f.s === state.me.id ? 'Ваше сообщение' : 'От ' + (state.people.has(p.f.s) ? nameOf(p.f.s) : p.f.n || '…')));
   if (p?.r) {
     el.append(h('button', { class: 'msg-quote', type: 'button', onclick: () => jumpTo(p.r.id) },
-      h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : 'Фото' })));
+      h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : p.r.v ? '🎤 Голосовое' : 'Фото' })));
   }
   if (p?.img) {
     // уже показанное фото переносим в новый пузырь как есть — чтобы оно не мигало при перерисовке
@@ -1376,6 +1385,7 @@ function bubble(m, { showName, continued, fresh }) {
     img.onclick = () => img.src && openLightbox(img.src);
     el.append(img);
   }
+  if (p?.v) { el.classList.add('voice'); el.append(voiceBubble(m)); }
   const text = !p ? 'Сообщение ещё не расшифровано'
     : p.missing ? 'Сообщение сейчас недоступно: узлы сети не отвечают'
     : p.bad ? 'Не удалось расшифровать' : p.t;
@@ -1430,7 +1440,7 @@ function openMenu(m, x, y) {
   if (c && !writeBlock(c)) items.push(['reply', 'Ответить', () => setCompose({ mode: 'reply', msg: m })]);
   if (m.p.t) items.push(['copy', 'Копировать', () => navigator.clipboard?.writeText(m.p.t)]);
   if (state.savedId && m.conversation_id !== state.savedId) items.push(['bookmark', 'В избранное', () => saveToFavorites(m)]);
-  if (mine && !m.p.img && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
+  if (mine && !m.p.img && !m.p.v && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
   if (mine) items.push(['trash', 'Удалить у всех', () => deleteMessage(m), 'danger']);
   if (!items.length) return;
   const menu = h('div', { class: 'menu', role: 'menu' }, ...items.map(([ic, label, fn, cls]) =>
@@ -1448,6 +1458,7 @@ async function deleteMessage(m) {
   if (!confirm('Удалить сообщение у всех?')) return;
   if (m.nodes?.length && m.ct_hash) net.del(m.nodes, `${m.conversation_id}/${m.ct_hash}`);
   if (m.p?.img?.hash && m.p.img.nodes?.length) net.del(m.p.img.nodes, `${m.conversation_id}/${m.p.img.hash}`);
+  if (m.p?.v?.hash && m.p.v.nodes?.length) net.del(m.p.v.nodes, `${m.conversation_id}/${m.p.v.hash}`);
   const { error } = await sb.from('messages').delete().eq('id', m.id);
   if (error) return inlineError('Не удалилось: ' + humanError(error));
   removeMessage(m.id);
@@ -1471,6 +1482,7 @@ function removeMessage(id) {
 function setCompose(next) {
   const wasEdit = state.compose?.mode === 'edit';
   state.compose = next;
+  queueMicrotask(syncMic);
   if (!next) {
     $('composeBar').hidden = true;
     if (wasEdit) { textArea.value = ''; autosize(); }
@@ -1479,7 +1491,7 @@ function setCompose(next) {
   const p = next.msg.p;
   setIcon($('composeBar'), next.mode === 'edit' ? 'edit' : 'reply');
   $('composeTitle').textContent = next.mode === 'edit' ? 'Изменение' : 'Ответ ' + nameOf(next.msg.sender_id);
-  $('composeText').textContent = p.t ? stripMarkdown(p.t) : 'Фото';
+  $('composeText').textContent = p.t ? stripMarkdown(p.t) : p.v ? '🎤 Голосовое' : 'Фото';
   $('composeBar').hidden = false;
   if (next.mode === 'edit') { textArea.value = p.t || ''; autosize(); }
   textArea.focus();
@@ -1548,8 +1560,14 @@ const textArea = $('text');
 function autosize() {
   textArea.style.height = 'auto';
   textArea.style.height = Math.min(textArea.scrollHeight + 2, 140) + 'px';
+  syncMic();
 }
-textArea.addEventListener('input', () => { autosize(); if (textArea.value) sendTyping(); });
+textArea.addEventListener('input', () => { autosize(); if (textArea.value) sendTyping(); syncMic(); });
+/** Пустое поле — показываем микрофон, есть текст — кнопку «Отправить» */
+function syncMic() {
+  const voice = !textArea.value.trim() && state.compose?.mode !== 'edit' && !!window.MediaRecorder;
+  $('composer').classList.toggle('can-voice', voice);
+}
 $('composeCancel').onclick = () => setCompose(null);
 /** Ctrl/⌘ + B, I, U, E, Shift+X, Shift+P — обернуть выделенный текст разметкой */
 const MD_KEYS = { b: '**', i: '*', u: '__', e: '`', X: '~~', P: '||' };
@@ -1605,7 +1623,7 @@ async function insertMessage(chatId, payload, retried = false) {
 function replyRef() {
   if (state.compose?.mode !== 'reply') return undefined;
   const m = state.compose.msg;
-  return { id: m.id, s: m.sender_id, t: (m.p.t || (m.p.img ? 'Фото' : '')).slice(0, 120) };
+  return { id: m.id, s: m.sender_id, t: (m.p.t || (m.p.img ? 'Фото' : '')).slice(0, 120), v: m.p.v ? 1 : undefined };
 }
 
 async function editMessage(m, newText, retried = false) {
@@ -1713,6 +1731,213 @@ async function shrinkImage(file) {
   const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', hasPlus() ? 0.9 : 0.82));
   return { blob, type: 'image/jpeg', w: canvas.width, h: canvas.height };
 }
+
+/* =====================================================================
+   Голосовые сообщения
+   ===================================================================== */
+const VOICE_MAX = 300;          // 5 минут
+const WAVE_BARS = 40;
+let rec = null;
+const pickVoiceMime = () => ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
+  .find((t) => window.MediaRecorder?.isTypeSupported?.(t)) || '';
+
+async function startVoice() {
+  if (rec) return;
+  const chatId = state.activeId;
+  if (!chatId) return;
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return inlineError('Этот браузер не умеет записывать голос');
+  if (!(await canSend(chatId))) return;
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+  catch { return inlineError('Нет доступа к микрофону. Разрешите его: значок замка у адреса сайта → Микрофон (на iPhone: Настройки → Safari → Микрофон).'); }
+  const mime = pickVoiceMime();
+  let mr;
+  try { mr = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : undefined); }
+  catch { mr = new MediaRecorder(stream); }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  const an = ctx.createAnalyser(); an.fftSize = 512;
+  ctx.createMediaStreamSource(stream).connect(an);
+  const buf = new Uint8Array(an.fftSize);
+  rec = { mr, stream, ctx, an, chunks: [], levels: [], start: Date.now(), chat: chatId };
+  mr.ondataavailable = (e) => { if (e.data && e.data.size) rec?.chunks.push(e.data); };
+  mr.start(250);
+  $('composer').classList.add('recording');
+  $('recBar').hidden = false;
+  $('recWave').replaceChildren();
+  rec.timer = setInterval(() => {
+    if (!rec) return;
+    an.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (const v of buf) sum += (v - 128) ** 2;
+    const level = Math.min(1, Math.sqrt(sum / buf.length) / 40);
+    rec.levels.push(level);
+    const sec = (Date.now() - rec.start) / 1000;
+    $('recTime').textContent = fmtDur(sec);
+    const bar = h('i'); bar.style.height = Math.max(3, Math.round(level * 26)) + 'px';
+    const w = $('recWave'); w.append(bar);
+    while (w.children.length > 60) w.firstChild.remove();
+    if (sec >= VOICE_MAX) stopVoice(true);
+  }, 100);
+  sendTyping();
+}
+
+async function stopVoice(send) {
+  const r = rec;
+  if (!r) return;
+  rec = null;
+  clearInterval(r.timer);
+  const stopped = new Promise((res) => { r.mr.onstop = res; });
+  try { if (r.mr.state !== 'inactive') r.mr.stop(); else r.mr.onstop(); } catch {}
+  await Promise.race([stopped, new Promise((res) => setTimeout(res, 1500))]);
+  r.stream.getTracks().forEach((t) => t.stop());
+  r.ctx.close().catch(() => {});
+  $('composer').classList.remove('recording');
+  $('recBar').hidden = true;
+  const dur = (Date.now() - r.start) / 1000;
+  if (!send) return;
+  if (dur < 0.8 || !r.chunks.length) return toast('Слишком коротко — держите запись хотя бы секунду');
+  const blob = new Blob(r.chunks, { type: r.mr.mimeType || r.chunks[0].type || 'audio/webm' });
+  await sendVoice(blob, dur, waveOf(r.levels), r.chat);
+}
+
+/** Сжать уровни громкости до WAVE_BARS столбиков 0…31 */
+function waveOf(levels) {
+  const peak = Math.max(0.05, ...levels);
+  levels = levels.map((x) => x / peak);                    // тихая запись тоже даёт заметную волну
+  const out = [];
+  for (let i = 0; i < WAVE_BARS; i++) {
+    const a = Math.floor((i * levels.length) / WAVE_BARS), b = Math.max(a + 1, Math.floor(((i + 1) * levels.length) / WAVE_BARS));
+    const part = levels.slice(a, b);
+    out.push(Math.max(2, Math.round(31 * Math.min(1, part.length ? Math.max(...part) : 0))));
+  }
+  return out;
+}
+
+async function sendVoice(blob, dur, wave, chatId, extra = null) {
+  if (!(await canSend(chatId))) return;
+  if (blob.size > 6 * 1024 * 1024) return inlineError('Голосовое слишком длинное');
+  $('uploading').hidden = false;
+  let uploadedNodes = [], key = null;
+  try {
+    const kv = currentVersion(chatId);
+    const sealed = await E2E.sealBytes(chatKey(chatId, kv), await blob.arrayBuffer(), 'voice|' + chatId);
+    const bytes = new Uint8Array(sealed.data);
+    const hash = await E2E.sha256hex(bytes);
+    key = `${chatId}/${hash}`;
+    const v = { iv: sealed.iv, mime: blob.type, dur: Math.round(dur * 10) / 10, w: wave, hash, kv };
+    const nodes = await net.put(key, bytes).catch(() => []);
+    uploadedNodes = nodes;
+    if (nodes.length) v.nodes = nodes;
+    else {
+      v.path = `${chatId}/${uuid()}.bin`;
+      const { error } = await sb.storage.from(BUCKET).upload(v.path, new Blob([bytes], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream' });
+      if (error) throw error;
+    }
+    state.images.set('v:' + (v.path || hash), URL.createObjectURL(blob));
+    const msg = await insertMessage(chatId, extra ? { v, f: extra.f } : { v, r: replyRef() });
+    if (!extra) setCompose(null);
+    addMessage(msg);
+  } catch (err) {
+    if (uploadedNodes.length && key) net.del(uploadedNodes, key);
+    inlineError(sendError(err).replace('Не отправилось', 'Голосовое не отправилось'));
+  } finally {
+    $('uploading').hidden = true;
+  }
+}
+
+/** Расшифрованное голосовое (кешируется на время сеанса) */
+async function voiceBlobUrl(m) {
+  const v = m.p.v, ref = 'v:' + (v.path || v.hash);
+  if (state.images.has(ref)) return state.images.get(ref);
+  const key = chatKey(m.conversation_id, v.kv || m.key_version || 1);
+  if (!key) throw new Error('нет ключа');
+  let cipher;
+  if (v.path) {
+    const { data, error } = await sb.storage.from(BUCKET).download(v.path);
+    if (error) throw error;
+    cipher = await data.arrayBuffer();
+  } else {
+    cipher = await net.get(v.nodes || [], `${m.conversation_id}/${v.hash}`, v.hash);
+    if (!cipher) throw new Error('missing');
+  }
+  const plain = await E2E.openBytes(key, cipher, v.iv, 'voice|' + m.conversation_id);
+  const url = URL.createObjectURL(new Blob([plain], { type: v.mime || 'audio/mp4' }));
+  state.images.set(ref, url);
+  return url;
+}
+const voiceBlob = async (m) => (await fetch(await voiceBlobUrl(m))).blob();
+
+let playing = null;             // { audio, stop } — одновременно играет одно голосовое
+const voiceAudio = new Map();   // ref -> Audio (чтобы перерисовка не сбивала воспроизведение)
+function voiceBubble(m) {
+  const v = m.p.v, ref = 'v:' + (v.path || v.hash);
+  const bars = h('div', { class: 'voice-wave', title: 'Перемотать' }, ...(v.w || new Array(WAVE_BARS).fill(4)).map((x) => {
+    const b = h('i'); b.style.height = Math.max(3, Math.round((x / 31) * 24)) + 'px'; return b;
+  }));
+  const time = h('span', { class: 'voice-time', text: fmtDur(v.dur) });
+  const btn = h('button', { class: 'voice-play', type: 'button', title: 'Слушать' }, icon('play'));
+  const speed = h('button', { class: 'voice-speed', type: 'button', title: 'Скорость', text: '1×' });
+  const paint = (a) => {
+    const ratio = a && a.duration && isFinite(a.duration) ? a.currentTime / a.duration : a ? a.currentTime / (v.dur || 1) : 0;
+    const n = Math.round(ratio * bars.children.length);
+    [...bars.children].forEach((b, i) => b.classList.toggle('on', i < n));
+    time.textContent = a && !a.paused ? fmtDur(a.currentTime) : fmtDur(v.dur);
+    btn.replaceChildren(icon(a && !a.paused ? 'pause' : 'play'));
+    speed.textContent = (a?.playbackRate || 1) + '×';
+  };
+  const getAudio = async () => {
+    let a = voiceAudio.get(ref);
+    if (a) return a;
+    btn.classList.add('loading');
+    try { a = new Audio(await voiceBlobUrl(m)); } finally { btn.classList.remove('loading'); }
+    a.preload = 'auto';
+    voiceAudio.set(ref, a);
+    a.ontimeupdate = () => a._paint?.(a);
+    a.onended = () => { a.currentTime = 0; a._paint?.(a); if (playing?.audio === a) playing = null; };
+    a.onpause = () => a._paint?.(a);
+    a.onplay = () => a._paint?.(a);
+    return a;
+  };
+  const existing = voiceAudio.get(ref);
+  if (existing) { existing._paint = paint; paint(existing); }
+  btn.onclick = async (e) => {
+    e.stopPropagation();
+    try {
+      const a = await getAudio();
+      a._paint = paint;
+      if (!a.paused) return a.pause();
+      if (playing && playing.audio !== a) playing.audio.pause();
+      playing = { audio: a };
+      await a.play();
+    } catch (err) {
+      toast(/missing/.test(err?.message) ? 'Голосовое сейчас недоступно: узлы сети не отвечают' : 'Не получилось воспроизвести на этом устройстве');
+    }
+  };
+  bars.onclick = async (e) => {
+    e.stopPropagation();
+    const a = await getAudio().catch(() => null);
+    if (!a) return;
+    a._paint = paint;
+    const r = bars.getBoundingClientRect();
+    const total = a.duration && isFinite(a.duration) ? a.duration : v.dur;
+    a.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * total;
+    paint(a);
+  };
+  speed.onclick = async (e) => {
+    e.stopPropagation();
+    const a = await getAudio().catch(() => null);
+    if (!a) return;
+    a._paint = paint;
+    a.playbackRate = a.playbackRate === 1 ? 1.5 : a.playbackRate === 1.5 ? 2 : 1;
+    paint(a);
+  };
+  return h('div', { class: 'voice-box' }, btn, h('div', { class: 'voice-mid' }, bars, h('div', { class: 'voice-meta' }, time, speed)));
+}
+
+$('micBtn').onclick = () => startVoice();
+$('recCancel').onclick = () => stopVoice(false);
+$('recSend').onclick = () => stopVoice(true);
 
 /* =====================================================================
    Реальное время

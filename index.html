@@ -48,6 +48,9 @@
     <symbol id="i-reply" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v4"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16Z"/><path d="m14 6 4 4"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5.5v13M16 5.5v13" stroke-width="3.2"/></symbol>
     <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4-6.5 4v-16a1 1 0 0 1 1-1z"/></symbol>
     <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></symbol>
     <symbol id="i-qr" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="6" height="6" rx="1"/><rect x="14.5" y="3.5" width="6" height="6" rx="1"/><rect x="3.5" y="14.5" width="6" height="6" rx="1"/><path d="M14.5 14.5h2.5v2.5M20.5 14.5v.01M14.5 20.5h.01M17.5 18h3v2.5h-3"/></symbol>
@@ -131,7 +134,7 @@
       <p>Найдите друга по нику или создайте группу.</p>
     </div>
     <div class="messages" id="messages" hidden></div>
-    <div class="uploading" id="uploading" hidden>Отправляю фото…</div>
+    <div class="uploading" id="uploading" hidden>Отправляю…</div>
     <div class="locked-bar" id="lockedBar" hidden></div>
     <div class="compose-bar" id="composeBar" hidden>
       <svg class="i" id="composeIcon"><use href="#i-reply"/></svg>
@@ -141,7 +144,14 @@
     <form class="composer" id="composer" hidden>
       <label class="icon-btn" title="Фото"><svg class="i"><use href="#i-attach"/></svg><input type="file" id="fileInput" accept="image/*" hidden></label>
       <textarea id="text" rows="1" placeholder="Сообщение" autocomplete="off" maxlength="4000" enterkeyhint="send"></textarea>
-      <button type="submit" class="send" title="Отправить"><svg class="i"><use href="#i-send"/></svg></button>
+      <button type="submit" class="send" id="sendBtn" title="Отправить"><svg class="i"><use href="#i-send"/></svg></button>
+      <button type="button" class="send mic" id="micBtn" title="Голосовое сообщение"><svg class="i"><use href="#i-mic"/></svg></button>
+      <div class="rec-bar" id="recBar" hidden>
+        <button type="button" class="icon-btn rec-cancel" id="recCancel" title="Отменить"><svg class="i"><use href="#i-trash"/></svg></button>
+        <span class="rec-dot"></span><span class="rec-time" id="recTime">0:00</span>
+        <div class="rec-wave" id="recWave"></div>
+        <button type="button" class="send" id="recSend" title="Отправить голосовое"><svg class="i"><use href="#i-send"/></svg></button>
+      </div>
     </form>
   </main>
 </section>
@@ -153,6 +163,6 @@
   <p>Откройте файл <b>config.js</b> и вставьте туда адрес проекта и ключ из Supabase. Подробно — в README.md.</p>
 </div>
 
-<script type="module" src="js/main.js?v=20261109183541"></script>
+<script type="module" src="js/main.js?v=20261109184529"></script>
 </body>
 </html>
