@@ -1,10 +1,10 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109191113';
-import * as CONFIG from '../config.js?v=20261109191113';
-import * as E2E from './crypto.js?v=20261109191113';
-import { createNet } from './net.js?v=20261109191113';
-import { qrSvg } from './qr.js?v=20261109191113';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109191113';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109191401';
+import * as CONFIG from '../config.js?v=20261109191401';
+import * as E2E from './crypto.js?v=20261109191401';
+import { createNet } from './net.js?v=20261109191401';
+import { qrSvg } from './qr.js?v=20261109191401';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109191401';
 
 /* =====================================================================
    Утилиты
@@ -1983,6 +1983,17 @@ function showCallUi() {
   const controls = h('div', { class: 'call-controls' });
   const peerBox = h('div', { class: 'call-peer' }, userAvatar(cur.peer, 'xl'), h('div', { class: 'call-name', text: nameOf(cur.peer) }), status);
   const root = h('div', { class: 'call-screen' + (cur.video ? ' is-video' : ''), role: 'dialog', 'aria-label': 'Звонок' }, remote, peerBox, local, controls);
+  // Вертикальное видео с телефона на широком экране не растягиваем (иначе кадр режется и мылится).
+  // Двойное нажатие — переключить «вписать / на весь экран».
+  const fit = () => {
+    if (root.dataset.fill) return;
+    const va = remote.videoWidth / (remote.videoHeight || 1), sa = innerWidth / (innerHeight || 1);
+    root.classList.toggle('fit-contain', !!remote.videoWidth && (va / sa < 0.75 || va / sa > 1.6));
+  };
+  remote.addEventListener('resize', fit);
+  remote.addEventListener('loadedmetadata', fit);
+  addEventListener('resize', fit);
+  remote.addEventListener('dblclick', () => { root.dataset.fill = '1'; root.classList.toggle('fit-contain'); });
   cur.ui = { root, remote, local, status, controls };
   document.body.append(root);
   updateCallUi();

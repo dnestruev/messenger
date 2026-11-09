@@ -1001,3 +1001,5 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .msg.mine .call-again { background: rgba(255, 255, 255, .2); color: inherit; }
 .msg.mine .call-box .row-text small { color: inherit; opacity: .8; }
 .msg.mine .call-box-ic { background: rgba(255, 255, 255, .2); }
+.call-screen.fit-contain .call-remote { object-fit: contain; }
+.call-remote { cursor: zoom-in; }
