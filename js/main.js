@@ -137,6 +137,9 @@ const state = {
   typing: { channel: null, until: 0, sentAt: 0, timer: null },
   perks: new Map(),         // id -> 'partner' | 'plus' (награды за узел-партнёр)
   seen: new Map(),          // chatId -> Set: какие сообщения уже показаны (новые появляются с анимацией)
+  online: new Set(),        // кто сейчас в сети (Realtime Presence)
+  lastSeen: new Map(),      // id -> { at: Date|null, recently }
+  hideSeen: false,
 };
 const keys = {
   priv: null,               // мой секретный ключ (неизвлекаемый)
@@ -342,8 +345,13 @@ const isSaved = (c) => !!c && c.id === state.savedId;
 const otherOf = (c) => (c.member_ids || []).find((id) => id !== state.me.id);
 const titleOf = (c) => (isSaved(c) ? 'Избранное' : c.is_group ? c.title || 'Группа' : nameOf(otherOf(c)));
 const savedAvatar = (size) => h('span', { class: ['avatar', 'saved-avatar', size].filter(Boolean).join(' ') }, icon('bookmark'));
-const chatAvatar = (c, size) => (isSaved(c) ? savedAvatar(size)
-  : c.is_group ? avatar(c.title, hueOf(c.title), size, c.is_official ? 'verified' : 'users') : userAvatar(otherOf(c), size));
+const chatAvatar = (c, size) => {
+  if (isSaved(c)) return savedAvatar(size);
+  if (c.is_group) return avatar(c.title, hueOf(c.title), size, c.is_official ? 'verified' : 'users');
+  const el = userAvatar(otherOf(c), size);
+  if (isOnline(otherOf(c))) el.classList.add('is-online');
+  return el;
+};
 function verifiedIcon() { const v = icon('verified'); v.setAttribute('class', 'i verified'); return v; }
 const chatBadge = (c, compact = false) => (c.is_official ? verifiedIcon() : c.is_group || isSaved(c) ? null : roleBadge(otherOf(c), compact));
 /** Почему нельзя писать в чат (или null, если можно) */
@@ -707,6 +715,7 @@ async function startApp(user) {
   clearInterval(state.perksTimer);
   state.perksTimer = setInterval(loadPerks, 2 * 60 * 1000);
   subscribe();
+  startPresence();
   shareAllChatKeys();
   if (prefs.notify && 'Notification' in window && Notification.permission === 'granted') setupPush(true).catch(() => {});
 
@@ -735,12 +744,69 @@ async function checkUpdate() {
 checkUpdate();
 setInterval(checkUpdate, 3 * 60 * 1000);
 
+/* =====================================================================
+   В сети / был(а) недавно
+   ===================================================================== */
+let presence = null, seenTimer = null;
+function startPresence() {
+  stopPresence();
+  const me = state.me.id;
+  presence = sb.channel('online', { config: { presence: { key: me } } });
+  presence.on('presence', { event: 'sync' }, () => {
+    const next = new Set(Object.keys(presence.presenceState() || {}));
+    const changed = next.size !== state.online.size || [...next].some((id) => !state.online.has(id));
+    const left = [...state.online].some((id) => !next.has(id));
+    state.online = next;
+    if (changed) { renderChats(); if (state.activeId) renderHeader(); }
+    if (left) setTimeout(loadSeen, 1500);                  // кто-то вышел — узнаём, когда он был в последний раз
+  });
+  presence.subscribe((status) => { if (status === 'SUBSCRIBED' && !document.hidden) presence.track({ at: Date.now() }); });
+  sb.rpc('touch_seen').then(() => {}, () => {});
+  seenTimer = setInterval(() => { if (!document.hidden) sb.rpc('touch_seen').then(() => {}, () => {}); loadSeen(); }, 2 * 60 * 1000);
+  loadSeen();
+}
+function stopPresence() {
+  clearInterval(seenTimer);
+  if (presence) { try { presence.untrack(); } catch {} sb.removeChannel(presence); presence = null; }
+  state.online.clear();
+}
+document.addEventListener('visibilitychange', () => {
+  if (!presence || !state.me) return;
+  if (document.hidden) { presence.untrack(); sb.rpc('touch_seen').then(() => {}, () => {}); }
+  else { presence.track({ at: Date.now() }); sb.rpc('touch_seen').then(() => {}, () => {}); loadSeen(); }
+});
+/** Время последнего визита собеседников из личных чатов */
+async function loadSeen() {
+  const ids = [...new Set([...state.chats.values()].filter((c) => !c.is_group && !isSaved(c)).map(otherOf).filter(Boolean))];
+  if (!ids.length) return;
+  const { data, error } = await sb.rpc('seen_of', { p_ids: ids });
+  if (error) return;                                      // база ещё без update-9
+  for (const r of data || []) state.lastSeen.set(r.user_id, { at: r.seen_at ? new Date(r.seen_at) : null, recently: r.recently });
+  if (state.activeId) renderHeader();
+}
+const isOnline = (id) => !!id && id !== state.me?.id && state.online.has(id);
+function seenText(id) {
+  if (isOnline(id)) return 'в сети';
+  const s = state.lastSeen.get(id);
+  if (!s) return null;
+  if (!s.at) return s.recently ? 'был(а) недавно' : 'был(а) давно';
+  const min = Math.floor((Date.now() - s.at) / 60000);
+  if (min < 1) return 'был(а) только что';
+  if (min < 60) return `был(а) ${min} ${plural(min, 'минуту', 'минуты', 'минут')} назад`;
+  const today = new Date().toDateString() === s.at.toDateString();
+  const yest = new Date(Date.now() - 864e5).toDateString() === s.at.toDateString();
+  if (today) return 'был(а) в ' + timeOf(s.at);
+  if (yest) return 'был(а) вчера в ' + timeOf(s.at);
+  return 'был(а) ' + s.at.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
 function stopApp() {
   state.me = null;
   state.activeId = null;
   state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
   state.showArchive = false;
   clearInterval(state.perksTimer); state.perks.clear(); state.seen.clear(); state.savedId = null;
+  stopPresence(); state.lastSeen.clear();
   setCompose(null);
   leaveTyping();
   for (const url of state.images.values()) URL.revokeObjectURL(url);
@@ -929,6 +995,27 @@ async function setAvatarPhoto(file) {
   renderMe(); renderChats();
   if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); }
 }
+function privacySection(msg) {
+  const box = section('Приватность',
+    h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('b', { text: 'Скрывать, когда я был в сети' }),
+      h('small', { text: 'Другие увидят «был(а) недавно». Как в Telegram: тогда и вы не видите чужое время.' })),
+      toggle(state.hideSeen, async (e) => {
+        const want = e.target.checked;
+        const { error } = await sb.rpc('set_hide_seen', { p_hidden: want });
+        if (error) { e.target.checked = !want; return say(msg, humanError(error)); }
+        state.hideSeen = want; loadSeen();
+        say(msg, want ? 'Время визита скрыто' : 'Время визита видно друзьям', 'ok');
+      })));
+  box.hidden = true;                                       // показываем, только если база уже с update-9
+  sb.rpc('seen_of', { p_ids: [state.me.id] }).then(({ data, error }) => {
+    if (error) return;
+    state.hideSeen = !!data?.[0]?.hidden;
+    box.querySelector('input').checked = state.hideSeen;
+    box.hidden = false;
+  });
+  return box;
+}
+
 /** Удалить из своей папки все старые аватарки, кроме текущей */
 async function cleanAvatarFolder(keep, old) {
   const me = state.me.id;
@@ -1074,9 +1161,13 @@ function renderHeader() {
     return;
   }
   const n = (c.member_ids || []).length;
-  const members = `${n} ${plural(n, 'участник', 'участника', 'участников')}`;
+  const on = (c.member_ids || []).filter(isOnline).length;
+  const members = `${n} ${plural(n, 'участник', 'участника', 'участников')}` + (on ? `, ${on} в сети` : '');
+  const seen = !c.is_group && !isSaved(c) ? seenText(otherOf(c)) : null;
   $('chatStatus').replaceChildren(icon('lock'),
-    isSaved(c) ? 'Только для вас: заметки и сохранённое' : c.is_group ? (c.is_official ? 'Официальный чат · ' + members : members) : nickOf(otherOf(c)));
+    isSaved(c) ? 'Только для вас: заметки и сохранённое'
+      : c.is_group ? (c.is_official ? 'Официальный чат · ' + members : members)
+      : seen ? h('span', { class: isOnline(otherOf(c)) ? 'online-text' : '', text: seen }) : nickOf(otherOf(c)));
 }
 
 function renderComposer() {
@@ -2105,6 +2196,7 @@ function openSettings() {
       h('div', { class: 'row-text' }, h('small', { text: 'Ключ этого устройства' }),
         h('span', { class: 'fp', text: (keys.fp || '').slice(0, 24).replace(/(.{4})/g, '$1 ').trim() })),
       oldCode, h('div', { class: 'inline' }, newCode, codeBtn)),
+    privacySection(msg),
     section('Аккаунт',
       h('div', { class: 'row-text' }, h('small', { text: 'Email' }), h('b', { text: state.me.email || '' })),
       h('div', { class: 'inline' }, pass, h('button', { class: 'btn', text: 'Сменить', onclick: async () => {

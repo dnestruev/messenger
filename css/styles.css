@@ -900,3 +900,13 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 }
 .update-bar .btn { min-height: 34px; padding: 0 14px; }
 @keyframes update-in { from { opacity: 0; transform: translate(-50%, -20px); } }
+
+/* ---------- В сети ---------- */
+.avatar.is-online::after {
+  content: ""; position: absolute; right: 0; bottom: 0; width: 26%; height: 26%; min-width: 9px; min-height: 9px;
+  border-radius: 50%; background: var(--ok, #22c55e); box-shadow: 0 0 0 2px var(--surface);
+  animation: online-pop .3s var(--spring);
+}
+.chat-item.active .avatar.is-online::after { box-shadow: 0 0 0 2px var(--surface-2); }
+@keyframes online-pop { from { transform: scale(0); } }
+.online-text { color: var(--accent); font-weight: 500; }
