@@ -1,11 +1,11 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109192617';
-import * as CONFIG from '../config.js?v=20261109192617';
-import * as E2E from './crypto.js?v=20261109192617';
-import { createNet } from './net.js?v=20261109192617';
-import { qrSvg } from './qr.js?v=20261109192617';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109192617';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109192617';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109194252';
+import * as CONFIG from '../config.js?v=20261109194252';
+import * as E2E from './crypto.js?v=20261109194252';
+import { createNet } from './net.js?v=20261109194252';
+import { qrSvg } from './qr.js?v=20261109194252';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109194252';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109194252';
 
 /* =====================================================================
    Утилиты
@@ -714,6 +714,7 @@ async function startApp(user) {
   $('chatList').classList.add('list-enter');
   await loadChats();
   await ensureSaved();
+  scheduleCleanup();
   setTimeout(() => $('chatList').classList.remove('list-enter'), 600);
   clearInterval(state.perksTimer);
   state.perksTimer = setInterval(loadPerks, 2 * 60 * 1000);
@@ -866,7 +867,7 @@ function previewText(p) {
   if (p.missing) return 'Сообщение недоступно';
   if (p.bad) return 'Не удалось расшифровать';
   const t = p.t ? stripMarkdown(p.t) : p.t;
-  if (p.v) return '🎤 Голосовое ' + fmtDur(p.v.dur);
+  if (p.v) return '🎤 Голосовое ' + fmtDur(p.v.dur) + (p.v.gone ? ' (удалено)' : '');
   if (p.call) return callLabel(p.call, null);
   if (p.st) return '🙂 Стикер «' + stickerLabel(p.st) + '»';
   if (p.img?.st) return '🙂 Стикер';
@@ -1384,7 +1385,8 @@ function bubble(m, { showName, continued, fresh }) {
     el.append(h('button', { class: 'msg-quote', type: 'button', onclick: () => jumpTo(p.r.id) },
       h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : p.r.v ? '🎤 Голосовое' : p.r.st ? '🙂 Стикер' : 'Фото' })));
   }
-  if (p?.img) {
+  if (p?.img?.gone) el.append(h('div', { class: 'media-gone' }, icon('attach'), p.img.st ? 'Стикер удалён через 30 дней' : 'Фото удалено через 30 дней, чтобы освободить место'));
+  else if (p?.img) {
     // уже показанное фото переносим в новый пузырь как есть — чтобы оно не мигало при перерисовке
     const reused = imgPool.get(p.img.path || p.img.hash);
     if (reused) imgPool.delete(p.img.path || p.img.hash);
@@ -1397,7 +1399,8 @@ function bubble(m, { showName, continued, fresh }) {
     img.onclick = () => img.src && openLightbox(img.src);
     el.append(img);
   }
-  if (p?.v) { el.classList.add('voice'); el.append(voiceBubble(m)); }
+  if (p?.v?.gone) el.append(h('div', { class: 'media-gone' }, icon('mic'), 'Голосовое ' + fmtDur(p.v.dur) + ' удалено через 30 дней'));
+  else if (p?.v) { el.classList.add('voice'); el.append(voiceBubble(m)); }
   if (p?.call) { el.classList.add('call-msg'); el.append(callBubble(m)); }
   if (p?.st) {
     el.classList.add('sticker');
@@ -1405,7 +1408,7 @@ function bubble(m, { showName, continued, fresh }) {
     box.innerHTML = stickerSvg(p.st, 150);                // только наши нарисованные части
     el.append(box);
   }
-  if (p?.img?.st) el.classList.add('sticker', 'sticker-img');
+  if (p?.img?.st && !p.img.gone) el.classList.add('sticker', 'sticker-img');
   const text = !p ? 'Сообщение ещё не расшифровано'
     : p.missing ? 'Сообщение сейчас недоступно: узлы сети не отвечают'
     : p.bad ? 'Не удалось расшифровать' : p.t;
@@ -1413,7 +1416,7 @@ function bubble(m, { showName, continued, fresh }) {
   if (m.sigOk === false) el.append(h('div', { class: 'msg-forged' }, icon('warn'), 'Подпись не совпадает — возможна подделка'));
 
   const meta = h('span', { class: 'msg-meta' });
-  if (m.edited_at && !p?.call) meta.append(h('span', { text: 'изменено' }));
+  if (m.edited_at && !p?.call && !p?.img?.gone && !p?.v?.gone) meta.append(h('span', { text: 'изменено' }));
   meta.append(h('span', { class: 'time', text: timeOf(m.created_at) }));
   if (mine) {
     const read = isReadByOthers(m);
@@ -1459,8 +1462,8 @@ function openMenu(m, x, y) {
   const items = [];
   if (c && !writeBlock(c)) items.push(['reply', 'Ответить', () => setCompose({ mode: 'reply', msg: m })]);
   if (m.p.t) items.push(['copy', 'Копировать', () => navigator.clipboard?.writeText(m.p.t)]);
-  if (state.savedId && m.conversation_id !== state.savedId) items.push(['bookmark', 'В избранное', () => saveToFavorites(m)]);
-  if (m.p.img?.st) items.push(['smile', 'В мои стикеры', () => saveCustomSticker(m)]);
+  if (state.savedId && m.conversation_id !== state.savedId && !m.p.img?.gone && !m.p.v?.gone) items.push(['bookmark', 'В избранное', () => saveToFavorites(m)]);
+  if (m.p.img?.st && !m.p.img.gone) items.push(['smile', 'В мои стикеры', () => saveCustomSticker(m)]);
   if (mine && !m.p.img && !m.p.v && !m.p.call && !m.p.st && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
   if (mine) items.push(['trash', 'Удалить у всех', () => deleteMessage(m), 'danger']);
   if (!items.length) return;
@@ -1754,6 +1757,53 @@ async function shrinkImage(file) {
   return { blob, type: 'image/jpeg', w: canvas.width, h: canvas.height };
 }
 
+
+/* =====================================================================
+   Автоочистка: свои фото и голосовые старше 30 дней убираем с узлов партнёров
+   (у каждого узла всего 1 ГБ). Текст остаётся навсегда, «Избранное» не трогаем.
+   ===================================================================== */
+const MEDIA_TTL_DAYS = 30;
+let cleaning = false;
+async function cleanupOldMedia() {
+  if (cleaning || !state.me || !state.savedId) return;     // ждём, пока узнаем «Избранное», чтобы его не тронуть
+  cleaning = true;
+  const me = state.me.id, cursorKey = 'cleanup-cursor-' + me;
+  const cutoff = new Date(Date.now() - MEDIA_TTL_DAYS * 864e5).toISOString();
+  let cursor = localStorage.getItem(cursorKey) || '1970-01-01T00:00:00Z';
+  let cleaned = 0;
+  try {
+    for (let page = 0; page < 5; page++) {                  // не больше 500 сообщений за раз
+      const { data, error } = await sb.from('messages').select(MSG_COLUMNS)
+        .eq('sender_id', me).gt('created_at', cursor).lt('created_at', cutoff)
+        .order('created_at', { ascending: true }).limit(100);
+      if (error || !data?.length) break;
+      for (const m of data) {
+        cursor = m.created_at;
+        if (m.conversation_id === state.savedId) continue;
+        if (!chatKey(m.conversation_id, m.key_version)) continue;
+        await decryptMessage(m).catch(() => {});
+        const p = m.p;
+        if (!p || p.bad || p.missing) continue;
+        const media = p.img && !p.img.gone ? ['img', p.img] : p.v && !p.v.gone ? ['v', p.v] : null;
+        if (!media || !media[1].nodes?.length || !media[1].hash) continue;   // старые фото в центре удалить нельзя — не трогаем
+        const [kind, obj] = media;
+        await net.del(obj.nodes, `${m.conversation_id}/${obj.hash}`).catch(() => {});
+        const gone = { gone: 1, w: obj.w, h: obj.h, dur: obj.dur, st: obj.st };
+        await updatePayload(m, { ...p, [kind]: gone }).catch(() => {});
+        cleaned++;
+      }
+      localStorage.setItem(cursorKey, cursor);
+      if (data.length < 100) break;
+    }
+  } catch {}
+  cleaning = false;
+  localStorage.setItem('cleanup-at-' + me, String(Date.now()));
+  return cleaned;
+}
+function scheduleCleanup() {
+  const last = +localStorage.getItem('cleanup-at-' + state.me.id) || 0;
+  if (Date.now() - last > 864e5) setTimeout(cleanupOldMedia, 30000);   // раз в сутки, через 30 с после запуска
+}
 
 /* =====================================================================
    Стикеры: свой набор «Точка» + стикеры из своих картинок

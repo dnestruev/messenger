@@ -1039,3 +1039,6 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .sticker-hint { grid-column: 1 / -1; margin: 6px 2px 0; font-size: 12.5px; }
 #stickerBtn.on { color: var(--accent); }
 .toast { max-width: calc(100vw - 32px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.media-gone { display: flex; align-items: center; gap: 8px; padding: 10px 12px; margin: 2px 0; border-radius: 10px; background: rgba(127, 127, 127, .14); font-size: 13px; opacity: .8; }
+.media-gone .i { width: 16px; height: 16px; flex-shrink: 0; }
+.msg.photo .media-gone { margin: 4px; }
