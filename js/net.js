@@ -38,6 +38,23 @@ export function createNet(sb) {
   const active = () => [...nodes.values()].filter((n) => n.status === 'active');
   const ordered = (list) => [...shuffle(list.filter((n) => !isSleepy(n.id))), ...list.filter((n) => isSleepy(n.id))];
 
+  /** Копии — на узлах РАЗНЫХ владельцев: если один партнёр уйдёт, вторая копия останется.
+      Владельцы выбираются поровну, сколько бы узлов у каждого ни было. */
+  function spread(list) {
+    const byOwner = new Map();
+    for (const n of list) {
+      const k = n.owner || n.id;
+      if (!byOwner.has(k)) byOwner.set(k, []);
+      byOwner.get(k).push(n);
+    }
+    const groups = shuffle([...byOwner.values()]);
+    const out = [];
+    for (let round = 0; out.length < list.length; round++) {
+      for (const g of groups) if (g[round]) out.push(g[round]);
+    }
+    return out;
+  }
+
   async function token() {
     const { data } = await sb.auth.getSession();
     return data.session?.access_token || '';
@@ -65,7 +82,8 @@ export function createNet(sb) {
   /** Положить кусок на COPIES узлов. Возвращает id узлов, где он сохранился (может быть пусто). */
   async function put(key, bytes) {
     await load();
-    const list = ordered(active());
+    const all = active();
+    const list = [...spread(all.filter((n) => !isSleepy(n.id))), ...spread(all.filter((n) => isSleepy(n.id)))];
     if (!list.length) return [];
     const auth = await token();
     const data = b64.enc(bytes);

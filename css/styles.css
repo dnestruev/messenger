@@ -159,6 +159,8 @@
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { overscroll-behavior: none; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -273,7 +275,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 }
 
 /* ---------- Вход ---------- */
-.auth { height: 100%; overflow-y: auto; display: grid; place-items: center; padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom)); }
+.auth { height: 100%; height: var(--app-h, 100%); overflow-y: auto; -webkit-overflow-scrolling: touch; display: grid; place-items: center; padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom)); }
 .auth-card {
   width: 100%; max-width: 380px;
   display: grid; gap: 14px;
@@ -295,6 +297,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .app {
   height: 100vh;
   height: 100dvh;
+  height: var(--app-h, 100dvh);
   display: flex;
   gap: 12px;
   padding: 12px;
@@ -553,14 +556,13 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 }
 .locked-bar .btn { min-height: 36px; }
 .typing { color: var(--accent); }
-.danger-zone { border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); background: transparent; }
+.danger-zone { border: 1px solid rgba(220, 40, 40, .4); border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); background: transparent; }
 
 /* ---------- Сеть партнёров ---------- */
 .node-row { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
 .node-row > .row-text { flex: 1 1 calc(100% - 30px); }
 .node-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: 18px; }
 .node-row .row-text b { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
-.node-actions { display: flex; gap: 6px; align-items: center; margin-left: auto; }
 .node-actions .btn { min-height: 34px; padding: 0 12px; font-size: 13px; }
 .node-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--muted); }
 .node-dot.active { background: var(--ok); }
@@ -570,7 +572,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 
 /* ---------- Окна ---------- */
 .overlay {
-  position: fixed; inset: 0; z-index: 10;
+  position: fixed; top: 0; left: 0; right: 0; height: 100%; height: var(--app-h, 100%); z-index: 10;
   display: grid; place-items: center;
   padding: 16px;
   background: rgba(10, 10, 16, .45);
@@ -579,7 +581,9 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 }
 .modal {
   width: 100%; max-width: 440px;
-  max-height: calc(100dvh - 32px);
+  max-height: calc(100vh - 32px);
+  max-height: calc(var(--app-h, 100vh) - 32px);
+  -webkit-overflow-scrolling: touch;
   overflow-y: auto; overscroll-behavior: contain;
   display: grid; gap: 14px; align-content: start;
   padding: 20px;
@@ -629,7 +633,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .switch input:checked + span::before { transform: translateX(18px); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.lightbox { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .9); cursor: zoom-out; animation: fade .15s ease; }
+.lightbox { position: fixed; top: 0; left: 0; right: 0; height: 100%; height: var(--app-h, 100%); z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .9); cursor: zoom-out; animation: fade .15s ease; }
 .lightbox img { max-width: 100%; max-height: 100%; border-radius: 10px; }
 
 .config-warn { max-width: 560px; margin: 40px auto; padding: 24px; line-height: 1.6; }
@@ -657,7 +661,8 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   .overlay { place-items: end center; padding: 0; }
   .modal {
     max-width: none;
-    max-height: 92dvh;
+    max-height: 92vh;
+    max-height: calc(var(--app-h, 100vh) * .92);
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     padding-bottom: max(20px, env(safe-area-inset-bottom));
     animation: sheet .22s ease;
@@ -707,3 +712,110 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 }
 @keyframes aurora { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .avatar.frame-aurora::before { animation: none; } }
+.push-help { display: grid; gap: 6px; padding: 12px 14px; border-radius: var(--radius); background: var(--surface-2); }
+.push-help small, .push-help li { color: var(--muted); font-size: 13.5px; }
+.push-help ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.push-test { align-items: center; justify-content: space-between; }
+.push-status { color: var(--muted); font-size: 13px; }
+.share-me { display: grid; justify-items: center; gap: 10px; text-align: center; }
+.share-me p { margin: 0; font-size: 13.5px; }
+.qr-card { padding: 12px; background: #fff; border-radius: var(--radius); box-shadow: 0 4px 20px rgba(0, 0, 0, .12); line-height: 0; animation: pop .35s cubic-bezier(.2, 1.4, .4, 1); }
+.qr-card svg { width: min(220px, 60vw); height: auto; }
+
+/* =====================================================================
+   Анимации и полировка
+   ===================================================================== */
+:root { --spring: cubic-bezier(.2, 1.3, .4, 1); --ease-out: cubic-bezier(.2, .8, .2, 1); }
+
+/* плавная смена темы */
+.theming, .theming *, .theming *::before, .theming *::after {
+  transition: background-color .4s ease, color .4s ease, border-color .4s ease, fill .4s ease, box-shadow .4s ease !important;
+}
+
+/* новое сообщение «выпрыгивает» со своей стороны */
+.msg.msg-in { animation: msg-in .32s var(--spring) both; transform-origin: left bottom; }
+.msg.mine.msg-in { transform-origin: right bottom; }
+@keyframes msg-in { from { opacity: 0; transform: translateY(10px) scale(.92); } }
+
+/* открыли чат — лента мягко проявляется */
+.messages.chat-enter > * { animation: fade-up .28s var(--ease-out) both; }
+.messages.chat-enter > :nth-last-child(-n+6) { animation-delay: .03s; }
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } }
+
+/* мои сообщения — лёгкий объём */
+.msg.mine { background-image: linear-gradient(160deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, 0) 60%); }
+[data-style="dot"] .msg.mine { background-image: none; }
+.msg { transition: transform .15s ease; }
+.msg:active { transform: scale(.985); }
+
+/* кнопка отправки: вылет стрелки */
+.send.sent .i { animation: send-fly .45s var(--ease-out); }
+@keyframes send-fly {
+  40% { transform: translate(5px, -9px) rotate(12deg); opacity: 0; }
+  41% { transform: translate(-5px, 9px); opacity: 0; }
+}
+.send.sent { animation: pop .35s var(--spring); }
+@keyframes pop { 0% { transform: scale(.85); } 100% { transform: scale(1); } }
+
+/* кнопки и иконки */
+.icon-btn { transition: background .15s, transform .15s var(--spring); }
+.icon-btn:active { transform: scale(.88); }
+#modeBtn:active .i { transform: rotate(-40deg); }
+#modeBtn .i, #settingsBtn .i { transition: transform .35s var(--spring); }
+#settingsBtn:hover .i { transform: rotate(45deg); }
+
+/* список чатов */
+.chat-item { transition: background .15s, transform .15s var(--spring); }
+.chat-item:active { transform: scale(.98); }
+.chat-list.list-enter > .chat-item { animation: fade-up .3s var(--ease-out) both; }
+.chat-list.list-enter > .chat-item:nth-child(2) { animation-delay: .02s; }
+.chat-list.list-enter > .chat-item:nth-child(3) { animation-delay: .04s; }
+.chat-list.list-enter > .chat-item:nth-child(4) { animation-delay: .06s; }
+.chat-list.list-enter > .chat-item:nth-child(5) { animation-delay: .08s; }
+.chat-list.list-enter > .chat-item:nth-child(n+6) { animation-delay: .1s; }
+.unread-dot { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 4px transparent; transform: scale(1.15); } 0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); } }
+
+/* «печатает» с бегущими точками */
+.typing-dots { display: inline-flex; gap: 2px; margin-left: 3px; vertical-align: middle; }
+.typing-dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: dot-bounce 1.2s infinite ease-in-out; }
+.typing-dots i:nth-child(2) { animation-delay: .15s; }
+.typing-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes dot-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .45; } 30% { transform: translateY(-3px); opacity: 1; } }
+
+/* окна: пружинка */
+.modal { animation: rise .34s var(--spring); }
+@keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.97); } }
+@media (max-width: 720px) { .modal { animation: sheet .36s var(--spring); } }
+@keyframes sheet { from { transform: translateY(100%); } }
+.lightbox img { animation: zoom-in .3s var(--spring); }
+@keyframes zoom-in { from { transform: scale(.85); opacity: 0; } }
+
+/* телефон: чат въезжает справа, список — слева */
+@media (max-width: 720px) {
+  body.in-chat .chat { animation: slide-in .3s var(--ease-out); }
+  body:not(.in-chat) .sidebar { animation: slide-back .3s var(--ease-out); }
+}
+@keyframes slide-in { from { transform: translateX(28%); opacity: 0; } }
+@keyframes slide-back { from { transform: translateX(-12%); opacity: .4; } }
+
+/* поле ввода: мягкое свечение при фокусе */
+#text { transition: border-color .2s, box-shadow .2s, background .2s; }
+#text:focus { box-shadow: 0 0 0 4px var(--accent-soft); }
+
+/* значок партнёра переливается */
+.role.partner {
+  background: linear-gradient(110deg, #f5c542 0%, #e08a1e 40%, #ffe08a 50%, #e08a1e 60%, #f5c542 100%);
+  background-size: 250% 100%;
+  animation: shimmer 3.5s linear infinite;
+}
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+.role.mini { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; font-size: 12px; line-height: 1; border-radius: 999px; letter-spacing: 0; }
+[data-style="dot"] .role.mini { font-size: 12px; font-family: var(--font); letter-spacing: 0; border-radius: 999px; }
+
+/* аватарка в профиле слегка «дышит» при наведении */
+.profile-head .avatar { transition: transform .3s var(--spring); }
+.profile-head .avatar:hover { transform: scale(1.06) rotate(-3deg); }
+
+/* заметки и ошибки появляются плавно */
+.note:not(:empty) { animation: fade-up .25s var(--ease-out); }

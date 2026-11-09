@@ -2,6 +2,7 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js';
 import * as E2E from './crypto.js';
 import { createNet } from './net.js';
+import { qrSvg } from './qr.js';
 
 /* =====================================================================
    Утилиты
@@ -10,7 +11,28 @@ const $ = (id) => document.getElementById(id);
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const BUCKET = 'chat-images';
 const HUES = [230, 265, 300, 340, 15, 40, 150, 185];
-const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+/** Версия iOS: [15, 8] (null — не iPhone или не определили) */
+const iosVersion = (() => { const m = navigator.userAgent.match(/OS (\d+)_(\d+)/); return isIOS && m ? [+m[1], +m[2]] : null; })();
+const uuid = () => crypto.randomUUID ? crypto.randomUUID()
+  : ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, (c) => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
+
+/* Высота экрана. На iPhone клавиатура и панели Safari не уменьшают 100vh, из-за этого всё «едет».
+   Берём реальную видимую высоту и не даём Safari прокручивать страницу целиком. */
+(function fitViewport() {
+  const vv = window.visualViewport;
+  const fit = () => {
+    const m = $('messages');
+    const atBottom = m && m.scrollHeight - m.scrollTop - m.clientHeight < 120;   // клавиатура не должна прятать последние сообщения
+    if (atBottom) requestAnimationFrame(() => { m.scrollTop = m.scrollHeight; });
+    document.documentElement.style.setProperty('--app-h', Math.round(vv ? vv.height : window.innerHeight) + 'px');
+    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+  };
+  fit();
+  (vv || window).addEventListener('resize', fit);
+  if (vv) vv.addEventListener('scroll', fit);
+  window.addEventListener('orientationchange', () => setTimeout(fit, 350));
+})();
 
 /** Создать элемент: h('div', { class: 'x', text: '…', onclick }, ...дети) */
 function h(tag, attrs = {}, ...children) {
@@ -113,6 +135,7 @@ const state = {
   more: new Map(),          // id чата -> есть ли более ранние сообщения
   typing: { channel: null, until: 0, sentAt: 0, timer: null },
   perks: new Map(),         // id -> 'partner' | 'plus' (награды за узел-партнёр)
+  seen: new Map(),          // chatId -> Set: какие сообщения уже показаны (новые появляются с анимацией)
 };
 const keys = {
   priv: null,               // мой секретный ключ (неизвлекаемый)
@@ -154,7 +177,15 @@ function applyTheme() {
 }
 darkQuery.addEventListener('change', () => { if (prefs.mode === 'auto') applyTheme(); });
 applyTheme();
-$('modeBtn').onclick = () => { prefs.mode = resolvedMode() === 'dark' ? 'light' : 'dark'; savePrefs(); applyTheme(); };
+/** Плавная смена темы: цвета перетекают, а не прыгают */
+function smoothTheme(fn) {
+  const root = document.documentElement;
+  root.classList.add('theming');
+  fn();
+  clearTimeout(smoothTheme.t);
+  smoothTheme.t = setTimeout(() => root.classList.remove('theming'), 450);
+}
+$('modeBtn').onclick = () => smoothTheme(() => { prefs.mode = resolvedMode() === 'dark' ? 'light' : 'dark'; savePrefs(); applyTheme(); });
 
 /* =====================================================================
    Приложение (PWA)
@@ -205,11 +236,26 @@ function segmented(options, value, onpick) {
 /* =====================================================================
    Люди и аватары
    ===================================================================== */
+const PROFILE_COLUMNS = 'id, username, display_name, avatar_hue, role, frame';
 async function loadPeople(ids) {
   const missing = [...new Set(ids)].filter((id) => id && !state.people.has(id));
   if (!missing.length) return;
-  const { data } = await sb.from('profiles').select('id, username, display_name, avatar_hue, role, frame').in('id', missing);
+  const { data } = await sb.from('profiles').select(PROFILE_COLUMNS).in('id', missing);
   for (const p of data || []) state.people.set(p.id, p);
+}
+/** Освежить профили всех, кого знаем: имена, роли, рамки меняются без перезапуска. */
+async function refreshPeople() {
+  const ids = [...state.people.keys()];
+  let changed = false;
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data } = await sb.from('profiles').select(PROFILE_COLUMNS).in('id', ids.slice(i, i + 100));
+    for (const p of data || []) {
+      const old = state.people.get(p.id);
+      if (!old || ['username', 'display_name', 'avatar_hue', 'role', 'frame'].some((k) => old[k] !== p[k])) changed = true;
+      state.people.set(p.id, p);
+    }
+  }
+  return changed;
 }
 const nameOf = (id) => { const p = state.people.get(id); return p ? (p.display_name || p.username) : '…'; };
 const nickOf = (id) => '@' + (state.people.get(id)?.username || '');
@@ -225,11 +271,12 @@ const perkOf = (id) => state.perks.get(id) || null;
 const hasPlus = (id = state.me?.id) => !!perkOf(id);
 const PERK_LABEL = { partner: 'Партнёр', plus: 'Плюс' };
 const PERK_TITLE = { partner: 'Держит узел сети: хранит зашифрованные сообщения для всех', plus: 'Плюс в подарок от партнёра сети' };
-function roleBadge(id) {
+/** compact — в списке чатов и шапке: награда маленьким значком, чтобы имя не обрезалось */
+function roleBadge(id, compact = false) {
   const r = roleOf(id), k = perkOf(id);
   return [
     r ? h('span', { class: 'role ' + r, title: r === 'creator' ? 'Создатель мессенджера' : 'Тестер мессенджера', text: ROLE_LABEL[r] }) : null,
-    k ? h('span', { class: 'role ' + k, title: PERK_TITLE[k], text: PERK_LABEL[k] }) : null,
+    k ? h('span', { class: 'role ' + k + (compact ? ' mini' : ''), title: PERK_TITLE[k] + ` (${PERK_LABEL[k]})`, text: compact ? (k === 'partner' ? '★' : '+') : PERK_LABEL[k] }) : null,
   ];
 }
 /** Рамка видна, только пока у человека есть Плюс */
@@ -238,10 +285,11 @@ async function loadPerks() {
   const { data, error } = await sb.rpc('perks_list');
   if (error) return;                                        // база ещё без update-7
   const next = new Map((data || []).map((r) => [r.user_id, r.kind]));
-  const changed = next.size !== state.perks.size || [...next].some(([k, v]) => state.perks.get(k) !== v);
+  let changed = next.size !== state.perks.size || [...next].some(([k, v]) => state.perks.get(k) !== v);
   state.perks = next;
   const plus = hasPlus();
   if (plus !== prefs.plus) { prefs.plus = plus; savePrefs(); applyTheme(); }
+  if (await refreshPeople().catch(() => false)) changed = true;
   if (changed) { renderMe(); renderChats(); if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); } }
   $('fileInput').multiple = plus;
 }
@@ -253,7 +301,7 @@ const otherOf = (c) => (c.member_ids || []).find((id) => id !== state.me.id);
 const titleOf = (c) => (c.is_group ? c.title || 'Группа' : nameOf(otherOf(c)));
 const chatAvatar = (c, size) => (c.is_group ? avatar(c.title, hueOf(c.title), size, c.is_official ? 'verified' : 'users') : userAvatar(otherOf(c), size));
 function verifiedIcon() { const v = icon('verified'); v.setAttribute('class', 'i verified'); return v; }
-const chatBadge = (c) => (c.is_official ? verifiedIcon() : c.is_group ? null : roleBadge(otherOf(c)));
+const chatBadge = (c, compact = false) => (c.is_official ? verifiedIcon() : c.is_group ? null : roleBadge(otherOf(c), compact));
 /** Почему нельзя писать в чат (или null, если можно) */
 function writeBlock(c) {
   if (c.is_official && !isStaffMe()) return { text: 'Писать в официальный чат может только команда' };
@@ -516,7 +564,7 @@ async function checkSignature(m) {
 }
 
 /** Подготовить строку сообщения: шифр, хеш, подпись; содержимое — на узлы (если они есть) */
-async function sealMessage(chatId, payload, cid = crypto.randomUUID()) {
+async function sealMessage(chatId, payload, cid = uuid()) {
   const v = currentVersion(chatId);
   const { ct, iv } = await E2E.sealJson(chatKey(chatId, v), payload, aadMsg(chatId, state.me.id));
   const bytes = E2E.b64.dec(ct);
@@ -608,23 +656,28 @@ async function startApp(user) {
   await loadChatKeys();
   await loadBlocks();
   await loadPerks();
+  $('chatList').classList.add('list-enter');
   await loadChats();
+  setTimeout(() => $('chatList').classList.remove('list-enter'), 600);
   clearInterval(state.perksTimer);
-  state.perksTimer = setInterval(loadPerks, 5 * 60 * 1000);
+  state.perksTimer = setInterval(loadPerks, 2 * 60 * 1000);
   subscribe();
   shareAllChatKeys();
   if (prefs.notify && 'Notification' in window && Notification.permission === 'granted') setupPush(true).catch(() => {});
 
   const deep = location.hash.match(/c=([0-9a-f-]{36})/);
   if (deep) { window.history.replaceState(null, '', location.pathname); openChat(deep[1]); }
+  else handleProfileLink();
 }
+// Вернулись в приложение (телефон разблокировали) — освежаем значки и профили
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me) loadPerks(); });
 
 function stopApp() {
   state.me = null;
   state.activeId = null;
   state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
   state.showArchive = false;
-  clearInterval(state.perksTimer); state.perks.clear();
+  clearInterval(state.perksTimer); state.perks.clear(); state.seen.clear();
   setCompose(null);
   leaveTyping();
   for (const url of state.images.values()) URL.revokeObjectURL(url);
@@ -646,7 +699,7 @@ async function loadBlocks() {
 
 function renderMe() {
   const p = state.people.get(state.me.id);
-  $('meName').replaceChildren(nameLine(p.display_name || p.username, roleBadge(state.me.id)));
+  $('meName').replaceChildren(nameLine(p.display_name || p.username, roleBadge(state.me.id, true)));
   $('meNick').textContent = '@' + p.username;
   $('meAvatar').replaceChildren(userAvatar(state.me.id, 'sm'));
 }
@@ -721,7 +774,7 @@ function renderChats() {
       chatAvatar(c),
       h('span', { class: 'chat-item-body' },
         h('span', { class: 'chat-item-row' },
-          h('span', { class: 'chat-item-name' }, nameLine(titleOf(c), chatBadge(c))),
+          h('span', { class: 'chat-item-name' }, nameLine(titleOf(c), chatBadge(c, true))),
           h('span', { class: 'chat-item-time', text: c.last_sender ? shortTime(c.last_message_at) : '' })),
         h('span', { class: 'chat-item-row' },
           h('span', { class: 'chat-item-last', text: previewOf(c) }),
@@ -729,12 +782,12 @@ function renderChats() {
   }));
 }
 
-$('findForm').onsubmit = async (e) => {
-  e.preventDefault();
-  const q = $('findInput').value.trim().toLowerCase().replace(/^@/, '');
+/** Открыть личный чат по нику (из поиска или по ссылке «Поделиться ником») */
+async function openDirectByNick(raw) {
+  const q = String(raw || '').trim().toLowerCase().replace(/^@/, '');
   if (!q) return;
   if (q === state.people.get(state.me.id).username) return say('findMsg', 'Это же вы');
-  const { data, error } = await sb.from('profiles').select('id, username, display_name, avatar_hue, role').eq('username', q).maybeSingle();
+  const { data, error } = await sb.from('profiles').select(PROFILE_COLUMNS).eq('username', q).maybeSingle();
   if (error) return say('findMsg', humanError(error));
   if (!data) return say('findMsg', `Не нашли @${q} — проверьте ник`);
   state.people.set(data.id, data);
@@ -744,7 +797,45 @@ $('findForm').onsubmit = async (e) => {
   $('findInput').value = '';
   await loadChats();
   await openChat(chatId);
-};
+}
+$('findForm').onsubmit = (e) => { e.preventDefault(); openDirectByNick($('findInput').value); };
+
+/* ---------- Поделиться ником: QR, ссылка, AirDrop / Bluetooth через меню телефона ---------- */
+const profileLink = (nick) => location.origin + location.pathname.replace(/index\.html$/, '') + '#u=' + encodeURIComponent(nick);
+function openShareMe() {
+  const nick = state.people.get(state.me.id).username;
+  const url = profileLink(nick);
+  const msg = note();
+  const qr = h('div', { class: 'qr-card' });
+  qr.innerHTML = qrSvg(url, 220);                       // только цифры и наши теги — безопасно
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(url); say(msg, 'Ссылка скопирована', 'ok'); }
+    catch { linkBox.select(); say(msg, 'Выделил ссылку — скопируйте её'); }
+  };
+  const linkBox = h('input', { value: url, readOnly: true, onfocus: (e) => e.target.select() });
+  openModal({ title: 'Поделиться ником' },
+    h('div', { class: 'share-me' },
+      qr,
+      h('div', { class: 'profile-nick', text: '@' + nick }),
+      h('p', { class: 'muted', text: 'Покажите QR другу: пусть наведёт камеру телефона. Или отправьте ссылку — откроется чат с вами.' })),
+    linkBox,
+    navigator.share ? h('button', { class: 'btn btn-primary btn-block', onclick: async () => {
+      try { await navigator.share({ title: 'Мессенджер', text: `Пиши мне в Мессенджере: @${nick}`, url }); }
+      catch (e) { if (e.name !== 'AbortError') copy(); }
+    } }, icon('share'), 'Отправить: AirDrop, Bluetooth, мессенджеры') : null,
+    h('button', { class: 'btn btn-block', onclick: copy }, icon('copy'), 'Скопировать ссылку'),
+    msg);
+}
+$('shareBtn').onclick = () => openShareMe();
+
+/** Ссылка вида …/messenger/#u=nick — сразу открыть чат */
+async function handleProfileLink() {
+  const m = location.hash.match(/^#u=([^&]+)/);
+  if (!m || !state.me) return;
+  window.history.replaceState(null, '', location.pathname + location.search);
+  await openDirectByNick(decodeURIComponent(m[1]));
+}
+window.addEventListener('hashchange', handleProfileLink);
 
 /* =====================================================================
    Открытый чат
@@ -772,7 +863,8 @@ function renderHeader() {
   $('chatTitle').replaceChildren(nameLine(titleOf(c), chatBadge(c)));
   $('chatAvatar').replaceChildren(chatAvatar(c, 'sm'));
   if (Date.now() < state.typing.until) {
-    $('chatStatus').replaceChildren(h('span', { class: 'typing', text: c.is_group ? `${nameOf(state.typing.who)} печатает…` : 'печатает…' }));
+    $('chatStatus').replaceChildren(h('span', { class: 'typing' }, c.is_group ? `${nameOf(state.typing.who)} печатает` : 'печатает',
+      h('span', { class: 'typing-dots' }, h('i'), h('i'), h('i'))));
     return;
   }
   const n = (c.member_ids || []).length;
@@ -824,6 +916,7 @@ async function loadReads(chatId) {
 }
 
 async function openChat(id) {
+  state.seen.delete(id);                                  // при открытии — без анимации каждого пузыря
   if (!state.chats.has(id)) await loadChats();
   if (!state.chats.has(id)) return;
   if (state.activeId !== id) setCompose(null);
@@ -928,27 +1021,37 @@ function renderMessages({ keepScroll = false } = {}) {
     nodes.push(h('div', { class: 'empty-chat', text: c?.is_group ? 'Группа готова. Напишите первое сообщение.' : 'Здесь пока пусто. Скажите «привет».' }));
   }
 
+  const firstRender = !state.seen.has(state.activeId);
+  const seen = state.seen.get(state.activeId) || new Set();
+  state.seen.set(state.activeId, seen);
   let lastDay = '', prev = null;
   for (const m of list) {
+    const key = m.cid || m.id;
+    const fresh = !firstRender && !seen.has(key);
+    seen.add(key);
     const day = dayOf(m.created_at);
     if (day !== lastDay) { nodes.push(h('div', { class: 'day', text: day })); lastDay = day; prev = null; }
     const continued = prev && prev.sender_id === m.sender_id && ts(m.created_at) - ts(prev.created_at) < 5 * 60e3;
-    nodes.push(bubble(m, { showName: c?.is_group && m.sender_id !== state.me.id && !continued, continued }));
+    nodes.push(bubble(m, { showName: c?.is_group && m.sender_id !== state.me.id && !continued, continued, fresh }));
     prev = m;
   }
   const prevTop = box.scrollTop;
   box.replaceChildren(...nodes);
+  if (firstRender) {
+    box.classList.remove('chat-enter'); void box.offsetWidth; box.classList.add('chat-enter');
+    clearTimeout(box.enterT); box.enterT = setTimeout(() => box.classList.remove('chat-enter'), 450);
+  }
   resolveImages(box);
   box.scrollTop = keepScroll ? prevTop : box.scrollHeight;
 }
 
-function bubble(m, { showName, continued }) {
+function bubble(m, { showName, continued, fresh }) {
   const p = m.p;
   const mine = m.sender_id === state.me.id;
   if (!mine && state.blocked.has(m.sender_id)) {
     return h('div', { class: 'msg hidden-msg', dataset: { id: m.id } }, 'Сообщение от заблокированного пользователя');
   }
-  const classes = ['msg', mine && 'mine', p?.img && 'photo', (!p || p.bad || p.missing) && 'locked', continued && 'cont', m.sigOk === false && 'forged'];
+  const classes = ['msg', mine && 'mine', p?.img && 'photo', (!p || p.bad || p.missing) && 'locked', continued && 'cont', m.sigOk === false && 'forged', fresh && 'msg-in'];
   const el = h('div', { class: classes.filter(Boolean).join(' '), dataset: { id: m.id } });
   if (showName) {
     el.append(h('div', { class: 'msg-from', vars: { '--h': hueOfUser(m.sender_id) } }, nameLine(nameOf(m.sender_id), roleBadge(m.sender_id))));
@@ -1125,7 +1228,7 @@ function autosize() {
 textArea.addEventListener('input', () => { autosize(); if (textArea.value) sendTyping(); });
 $('composeCancel').onclick = () => setCompose(null);
 textArea.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && isDesktop()) { e.preventDefault(); $('composer').requestSubmit(); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && isDesktop()) { e.preventDefault(); const f = $('composer'); f.requestSubmit ? f.requestSubmit() : f.dispatchEvent(new Event('submit', { cancelable: true })); }
 });
 textArea.addEventListener('paste', (e) => {
   const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/'));
@@ -1168,7 +1271,7 @@ function replyRef() {
 
 async function editMessage(m, newText, retried = false) {
   const payload = { ...m.p, t: newText };
-  const row = await sealMessage(m.conversation_id, payload, m.cid || crypto.randomUUID());
+  const row = await sealMessage(m.conversation_id, payload, m.cid || uuid());
   delete row.cid;                                         // id сообщения при правке не меняется
   const oldKey = m.nodes?.length && m.ct_hash ? [m.nodes, `${m.conversation_id}/${m.ct_hash}`] : null;
   const { data, error } = await sb.from('messages').update(row).eq('id', m.id).select(MSG_COLUMNS).single();
@@ -1181,6 +1284,8 @@ async function editMessage(m, newText, retried = false) {
 }
 
 $('composer').onsubmit = async (e) => {
+  const sendBtn = $('composer').querySelector('.send');
+  if ($('text').value.trim()) { sendBtn.classList.remove('sent'); void sendBtn.offsetWidth; sendBtn.classList.add('sent'); }
   e.preventDefault();
   const content = textArea.value.trim();
   const chatId = state.activeId;
@@ -1238,7 +1343,7 @@ async function sendImage(file) {
     uploadedNodes = nodes;
     if (nodes.length) img.nodes = nodes;
     else {                                                // узлов нет — кладём в хранилище центра, как раньше
-      img.path = `${chatId}/${crypto.randomUUID()}.bin`;
+      img.path = `${chatId}/${uuid()}.bin`;
       const { error } = await sb.storage.from(BUCKET).upload(img.path, new Blob([bytes], { type: 'application/octet-stream' }),
         { contentType: 'application/octet-stream' });
       if (error) throw error;
@@ -1371,6 +1476,45 @@ function ding() {
       osc.stop(t + delay + 0.3);
     }
   } catch {}
+}
+
+/** Что показать в «Уведомлениях»: на iPhone объясняем, почему push может не работать. */
+function pushBlock(standalone, pushToggle, msg) {
+  const row = (title, sub, right) => h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('b', { text: title }), h('small', { text: sub })), right);
+  if (iosVersion && (iosVersion[0] < 16 || (iosVersion[0] === 16 && iosVersion[1] < 4))) {
+    return h('div', { class: 'push-help' },
+      h('b', { text: `На этом iPhone push невозможен (iOS ${iosVersion.join('.')})` }),
+      h('small', { text: 'Apple добавила уведомления для веб-приложений только в iOS 16.4. iPhone 7 и старше обновить до неё нельзя. Сообщения приходят, пока приложение открыто.' }));
+  }
+  if (isIOS && !standalone) {
+    return h('div', { class: 'push-help' },
+      h('b', { text: 'Чтобы получать уведомления на iPhone:' }),
+      h('ol', {},
+        h('li', { text: 'Откройте мессенджер именно в Safari (не в Telegram и не в Chrome).' }),
+        h('li', { text: 'Нажмите «Поделиться» (квадрат со стрелкой) → «На экран „Домой“».' }),
+        h('li', { text: 'Если есть переключатель «Открыть как веб-приложение» — включите его.' }),
+        h('li', { text: 'Запустите мессенджер с иконки на экране и включите уведомления здесь.' })));
+  }
+  const status = h('small', { class: 'push-status' });
+  (async () => {
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return status.textContent = 'Браузер не поддерживает push';
+      const reg = swReg || await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      status.textContent = sub && Notification.permission === 'granted' ? '✓ Подписка на этом устройстве активна' : 'На этом устройстве выключены';
+    } catch { status.textContent = ''; }
+  })();
+  const test = h('button', { class: 'btn', text: 'Проверить', onclick: async () => {
+    try {
+      if (Notification.permission !== 'granted') return say(msg, 'Сначала включите уведомления');
+      const reg = swReg || await navigator.serviceWorker.ready;
+      await reg.showNotification('Мессенджер', { body: 'Уведомления работают ✓', icon: 'icon-192.png', tag: 'test' });
+      say(msg, 'Отправил проверочное уведомление', 'ok');
+    } catch (e) { say(msg, 'Не получилось показать уведомление: ' + (e.message || e)); }
+  } });
+  return h('div', { style: { display: 'grid', gap: '8px' } },
+    row('Push-уведомления', 'Приходят, даже когда приложение закрыто', pushToggle),
+    h('div', { class: 'inline push-test' }, status, test));
 }
 
 async function setupPush(enable) {
@@ -1687,10 +1831,10 @@ function openSettings() {
     } })),
     perksSection(msg),
     section('Оформление',
-      segmented([['classic', 'Обычный'], ['dot', 'Dot']], prefs.style, (v) => { prefs.style = v; savePrefs(); applyTheme(); }),
+      segmented([['classic', 'Обычный'], ['dot', 'Dot']], prefs.style, (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })),
       segmented([['light', 'Светлая'], ['dark', 'Тёмная'], ['auto', 'Авто']], prefs.mode, (v) => { prefs.mode = v; savePrefs(); applyTheme(); })),
     section('Уведомления',
-      h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('b', { text: 'Push-уведомления' }), h('small', { text: 'Приходят, даже когда приложение закрыто' })), pushToggle),
+      pushBlock(standalone, pushToggle, msg),
       h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('b', { text: 'Звук' }), h('small', { text: 'Когда приложение открыто' })),
         toggle(prefs.sound, (e) => { prefs.sound = e.target.checked; savePrefs(); if (prefs.sound) ding(); }))),
     section('Приложение', appBlock),
@@ -1769,7 +1913,7 @@ function perksSection(msg) {
         onclick: () => { prefs.accent = null; savePrefs(); applyTheme(); drawAccents(); } }),
       ...[...HUES, 200, 120, 0].map((hh) => h('button', {
         class: 'swatch' + (hh === prefs.accent ? ' on' : ''), vars: { '--h': hh }, title: 'Акцент', type: 'button',
-        onclick: () => { prefs.accent = hh; savePrefs(); applyTheme(); drawAccents(); },
+        onclick: () => smoothTheme(() => { prefs.accent = hh; savePrefs(); applyTheme(); drawAccents(); }),
       })));
     drawAccents();
 
@@ -1778,7 +1922,7 @@ function perksSection(msg) {
       h('div', { class: 'row-text' }, h('b', { text: 'Цвет акцента' }), h('small', { text: 'Кнопки и ваши сообщения' })), accents,
       h('div', { class: 'row-text' }, h('b', { text: 'Темы' })),
       segmented([['classic', 'Обычная'], ['dot', 'Dot'], ['paper', 'Бумага'], ['neon', 'Неон']], prefs.style,
-        (v) => { prefs.style = v; savePrefs(); applyTheme(); }));
+        (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })));
   }
 
   if (kind === 'partner') body.append(giftsBlock(msg));
@@ -1823,7 +1967,6 @@ function topBlock() {
     const { data, error } = await sb.rpc('partner_top');
     if (error) return;
     if (!data?.length) return wrap.append(h('p', { class: 'muted', text: 'Пока никого. Станьте первым — место №1 свободно.' }));
-    data.forEach((r) => state.people.has(r.user_id) || state.people.set(r.user_id, { username: r.username, display_name: r.display_name }));
     await loadPeople(data.map((r) => r.user_id));
     wrap.append(...data.map((r, i) => h('div', { class: 'member top-row' + (r.user_id === state.me.id ? ' me' : '') },
       h('span', { class: 'top-place', text: String(i + 1) }),
