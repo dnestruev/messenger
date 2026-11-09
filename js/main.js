@@ -1,11 +1,11 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109200259';
-import * as CONFIG from '../config.js?v=20261109200259';
-import * as E2E from './crypto.js?v=20261109200259';
-import { createNet } from './net.js?v=20261109200259';
-import { qrSvg } from './qr.js?v=20261109200259';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109200259';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109200259';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109200911';
+import * as CONFIG from '../config.js?v=20261109200911';
+import * as E2E from './crypto.js?v=20261109200911';
+import { createNet } from './net.js?v=20261109200911';
+import { qrSvg } from './qr.js?v=20261109200911';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109200911';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109200911';
 
 /* =====================================================================
    Утилиты
@@ -339,7 +339,7 @@ async function loadPerks() {
   if (plus !== prefs.plus) { prefs.plus = plus; savePrefs(); applyTheme(); }
   if (await refreshPeople().catch(() => false)) changed = true;
   if (changed) { renderMe(); renderChats(); if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); } }
-  $('fileInput').multiple = plus;
+  $('fileInput').multiple = true;                       // файлов можно сколько угодно; фото альбомом — с Плюсом
 }
 /** Имя + значок роли (или галочка официального чата) с обрезкой длинного текста */
 const nameLine = (text, ...after) => h('span', { class: 'name-line' }, h('span', { class: 't', text }), ...after);
@@ -871,6 +871,7 @@ function previewText(p) {
   if (p.v) return '🎤 Голосовое ' + fmtDur(p.v.dur) + (p.v.gone ? ' (удалено)' : '');
   if (p.call) return callLabel(p.call, null);
   if (p.st) return '🙂 Стикер «' + stickerLabel(p.st) + '»';
+  if (p.file) return '📎 ' + p.file.name + (p.t ? ': ' + stripMarkdown(p.t) : '');
   if (p.img?.st) return '🙂 Стикер';
   return p.img ? 'Фото' + (t ? ': ' + t : '') : t;
 }
@@ -1069,6 +1070,11 @@ async function saveToFavorites(m) {
     if (!(await canSend(target))) return;
     const f = { s: m.sender_id, n: nameOf(m.sender_id) };
     if (m.p.st) { addMessage(await insertMessage(target, { st: m.p.st, f })); return toast('Сохранено в избранное'); }
+    if (m.p.file) {
+      const blob = await (await fetch(await fileBlobUrl(m))).blob();
+      await sendFile(new File([blob], m.p.file.name, { type: m.p.file.mime || 'application/octet-stream' }), target, { f, t: m.p.t || '' });
+      return toast('Сохранено в избранное');
+    }
     if (m.p.v) {
       const blob = await voiceBlob(m);
       await sendVoice(blob, m.p.v.dur, m.p.v.w, target, { f });
@@ -1391,7 +1397,7 @@ function bubble(m, { showName, continued, fresh }) {
   if (p?.f) el.append(h('div', { class: 'msg-fwd' }, icon('bookmark'), p.f.s === state.me.id ? 'Ваше сообщение' : 'От ' + (state.people.has(p.f.s) ? nameOf(p.f.s) : p.f.n || '…')));
   if (p?.r) {
     el.append(h('button', { class: 'msg-quote', type: 'button', onclick: () => jumpTo(p.r.id) },
-      h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : p.r.v ? '🎤 Голосовое' : p.r.st ? '🙂 Стикер' : 'Фото' })));
+      h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : p.r.v ? '🎤 Голосовое' : p.r.st ? '🙂 Стикер' : p.r.fn ? '📎 ' + p.r.fn : 'Фото' })));
   }
   if (p?.img?.gone) el.append(h('div', { class: 'media-gone' }, icon('attach'), p.img.st ? 'Стикер удалён через 30 дней' : 'Фото удалено через 30 дней, чтобы освободить место'));
   else if (p?.img) {
@@ -1410,6 +1416,8 @@ function bubble(m, { showName, continued, fresh }) {
   if (p?.v?.gone) el.append(h('div', { class: 'media-gone' }, icon('mic'), 'Голосовое ' + fmtDur(p.v.dur) + ' удалено через 30 дней'));
   else if (p?.v) { el.classList.add('voice'); el.append(voiceBubble(m)); }
   if (p?.call) { el.classList.add('call-msg'); el.append(callBubble(m)); }
+  if (p?.file?.gone) el.append(h('div', { class: 'media-gone' }, icon('file'), `«${p.file.name}» удалён через 30 дней`));
+  else if (p?.file) { el.classList.add('file-msg'); el.append(fileBubble(m)); }
   if (p?.st) {
     el.classList.add('sticker');
     const box = h('div', { class: 'sticker-art', title: stickerLabel(p.st), onclick: (e) => { e.stopPropagation(); box.classList.remove('boing'); void box.offsetWidth; box.classList.add('boing'); } });
@@ -1472,9 +1480,9 @@ function openMenu(m, x, y) {
   const items = [];
   if (c && !writeBlock(c)) items.push(['reply', 'Ответить', () => setCompose({ mode: 'reply', msg: m })]);
   if (m.p.t) items.push(['copy', 'Копировать', () => navigator.clipboard?.writeText(m.p.t)]);
-  if (state.savedId && m.conversation_id !== state.savedId && !m.p.img?.gone && !m.p.v?.gone) items.push(['bookmark', 'В избранное', () => saveToFavorites(m)]);
+  if (state.savedId && m.conversation_id !== state.savedId && !m.p.img?.gone && !m.p.v?.gone && !m.p.file?.gone) items.push(['bookmark', 'В избранное', () => saveToFavorites(m)]);
   if (m.p.img?.st && !m.p.img.gone) items.push(['smile', 'В мои стикеры', () => saveCustomSticker(m)]);
-  if (mine && !m.p.img && !m.p.v && !m.p.call && !m.p.st && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
+  if (mine && !m.p.img && !m.p.v && !m.p.call && !m.p.st && !m.p.file && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
   if (mine) items.push(['trash', 'Удалить у всех', () => deleteMessage(m), 'danger']);
   const canReact = !!c && /^\d+$/.test(String(m.id)) && !(!c.is_group && state.blocked.has(otherOf(c)));
   if (!items.length && !canReact) return;
@@ -1497,6 +1505,7 @@ async function deleteMessage(m) {
   if (m.nodes?.length && m.ct_hash) net.del(m.nodes, `${m.conversation_id}/${m.ct_hash}`);
   if (m.p?.img?.hash && m.p.img.nodes?.length) net.del(m.p.img.nodes, `${m.conversation_id}/${m.p.img.hash}`);
   if (m.p?.v?.hash && m.p.v.nodes?.length) net.del(m.p.v.nodes, `${m.conversation_id}/${m.p.v.hash}`);
+  if (m.p?.file?.hash && m.p.file.nodes?.length) net.del(m.p.file.nodes, `${m.conversation_id}/${m.p.file.hash}`);
   const { error } = await sb.from('messages').delete().eq('id', m.id);
   if (error) return inlineError('Не удалилось: ' + humanError(error));
   removeMessage(m.id);
@@ -1530,7 +1539,7 @@ function setCompose(next) {
   const p = next.msg.p;
   setIcon($('composeBar'), next.mode === 'edit' ? 'edit' : 'reply');
   $('composeTitle').textContent = next.mode === 'edit' ? 'Изменение' : 'Ответ ' + nameOf(next.msg.sender_id);
-  $('composeText').textContent = p.t ? stripMarkdown(p.t) : p.v ? '🎤 Голосовое' : p.st || p.img?.st ? '🙂 Стикер' : 'Фото';
+  $('composeText').textContent = p.t ? stripMarkdown(p.t) : p.v ? '🎤 Голосовое' : p.st || p.img?.st ? '🙂 Стикер' : p.file ? '📎 ' + p.file.name : 'Фото';
   $('composeBar').hidden = false;
   if (next.mode === 'edit') { textArea.value = p.t || ''; autosize(); }
   textArea.focus();
@@ -1627,8 +1636,10 @@ textArea.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && isDesktop()) { e.preventDefault(); const f = $('composer'); f.requestSubmit ? f.requestSubmit() : f.dispatchEvent(new Event('submit', { cancelable: true })); }
 });
 textArea.addEventListener('paste', (e) => {
-  const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith('image/'));
-  if (f) { e.preventDefault(); sendImage(f); }
+  const files = [...(e.clipboardData?.files || [])];
+  if (!files.length) return;
+  e.preventDefault();
+  for (const f of files) f.type.startsWith('image/') ? sendImage(f) : sendFile(f);
 });
 
 async function canSend(chatId) {
@@ -1662,7 +1673,7 @@ async function insertMessage(chatId, payload, retried = false) {
 function replyRef() {
   if (state.compose?.mode !== 'reply') return undefined;
   const m = state.compose.msg;
-  return { id: m.id, s: m.sender_id, t: (m.p.t || (m.p.st || m.p.img?.st ? '' : m.p.img ? 'Фото' : '')).slice(0, 120), v: m.p.v ? 1 : undefined, st: m.p.st || m.p.img?.st ? 1 : undefined };
+  return { id: m.id, s: m.sender_id, t: (m.p.t || (m.p.st || m.p.img?.st ? '' : m.p.img ? 'Фото' : '')).slice(0, 120), v: m.p.v ? 1 : undefined, st: m.p.st || m.p.img?.st ? 1 : undefined, fn: m.p.file ? m.p.file.name.slice(0, 80) : undefined };
 }
 
 async function editMessage(m, newText) { return updatePayload(m, { ...m.p, t: newText }); }
@@ -1710,8 +1721,12 @@ function sendError(err) {
 
 const ALBUM_MAX = 10;
 $('fileInput').onchange = async () => {
-  const files = [...$('fileInput').files];
+  const all = [...$('fileInput').files];
   $('fileInput').value = '';
+  if (!all.length) return;
+  const isPhoto = (f) => /^image\/(jpeg|png|webp|gif|heic|heif|avif)$/.test(f.type);
+  for (const f of all.filter((f) => !isPhoto(f))) await sendFile(f);
+  const files = all.filter(isPhoto);
   if (!files.length) return;
   if (!hasPlus() && files.length > 1) inlineError('Альбомы до 10 фото — с Плюсом. Отправляю первое фото.');
   const list = hasPlus() ? files.slice(0, ALBUM_MAX) : files.slice(0, 1);
@@ -1774,6 +1789,112 @@ async function shrinkImage(file) {
 
 
 /* =====================================================================
+   Файлы: любые до 5 МБ, шифруются и хранятся у партнёров, как фото
+   ===================================================================== */
+const FILE_MAX = 5 * 1024 * 1024;
+const fmtSize = (n) => (n < 1024 ? n + ' Б' : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0).replace('.', ',') + ' КБ' : (n / 1048576).toFixed(1).replace('.', ',') + ' МБ');
+function fileKind(name, mime) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (ext === 'pdf') return ['PDF', 0];
+  if (['doc', 'docx', 'odt', 'rtf', 'txt', 'md'].includes(ext)) return ['DOC', 220];
+  if (['xls', 'xlsx', 'ods', 'csv'].includes(ext)) return ['XLS', 140];
+  if (['ppt', 'pptx', 'odp', 'key'].includes(ext)) return ['PPT', 25];
+  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return ['ZIP', 45];
+  if (/^audio\//.test(mime) || ['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(ext)) return ['♪', 280];
+  if (/^video\//.test(mime) || ['mp4', 'mov', 'webm', 'mkv'].includes(ext)) return ['▶', 320];
+  if (['apk', 'exe', 'msi', 'dmg'].includes(ext)) return ['APP', 0];
+  return [(ext || 'FILE').slice(0, 4).toUpperCase(), 230];
+}
+async function sendFile(file, target = null, extra = null) {
+  const chatId = target || state.activeId;
+  if (!chatId) return;
+  if (file.size > FILE_MAX) return inlineError(`«${file.name}» больше 5 МБ — так много места у партнёров нет`);
+  if (!file.size) return inlineError(`«${file.name}» пустой`);
+  if (!(await canSend(chatId))) return;
+  $('uploading').hidden = false;
+  let uploadedNodes = [], key = null;
+  try {
+    const kv = currentVersion(chatId);
+    const sealed = await E2E.sealBytes(chatKey(chatId, kv), await file.arrayBuffer(), 'file|' + chatId);
+    const bytes = new Uint8Array(sealed.data);
+    const hash = await E2E.sha256hex(bytes);
+    key = `${chatId}/${hash}`;
+    const meta = { name: String(file.name || 'файл').slice(0, 120), size: file.size, mime: file.type || 'application/octet-stream', iv: sealed.iv, hash, kv };
+    const nodes = await net.put(key, bytes).catch(() => []);
+    uploadedNodes = nodes;
+    if (nodes.length) meta.nodes = nodes;
+    else {
+      meta.path = `${chatId}/${uuid()}.bin`;
+      const { error } = await sb.storage.from(BUCKET).upload(meta.path, new Blob([bytes], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream' });
+      if (error) throw error;
+    }
+    state.images.set('f:' + (meta.path || hash), URL.createObjectURL(file));
+    const caption = extra ? extra.t || '' : '';
+    const msg = await insertMessage(chatId, extra ? { file: meta, t: caption, f: extra.f } : { file: meta, r: replyRef() });
+    if (!extra) setCompose(null);
+    addMessage(msg);
+  } catch (err) {
+    if (uploadedNodes.length && key) net.del(uploadedNodes, key);
+    inlineError(sendError(err).replace('Не отправилось', `«${file.name}» не отправился`));
+  } finally {
+    $('uploading').hidden = true;
+  }
+}
+async function fileBlobUrl(m) {
+  const fl = m.p.file, ref = 'f:' + (fl.path || fl.hash);
+  if (state.images.has(ref)) return state.images.get(ref);
+  const key = chatKey(m.conversation_id, fl.kv || m.key_version || 1);
+  if (!key) throw new Error('нет ключа');
+  let cipher;
+  if (fl.path) {
+    const { data, error } = await sb.storage.from(BUCKET).download(fl.path);
+    if (error) throw error;
+    cipher = await data.arrayBuffer();
+  } else {
+    cipher = await net.get(fl.nodes || [], `${m.conversation_id}/${fl.hash}`, fl.hash);
+    if (!cipher) throw new Error('missing');
+  }
+  const plain = await E2E.openBytes(key, cipher, fl.iv, 'file|' + m.conversation_id);
+  const url = URL.createObjectURL(new Blob([plain], { type: fl.mime || 'application/octet-stream' }));
+  state.images.set(ref, url);
+  return url;
+}
+function fileBubble(m) {
+  const fl = m.p.file;
+  const [label, hue] = fileKind(fl.name, fl.mime);
+  const status = h('small', { text: fmtSize(fl.size) });
+  const open = async (e) => {
+    e.stopPropagation();
+    status.textContent = 'Расшифровываю…';
+    try {
+      const url = await fileBlobUrl(m);
+      const a = h('a', { href: url, download: fl.name });
+      document.body.append(a); a.click(); a.remove();
+      status.textContent = fmtSize(fl.size) + ' · скачано';
+    } catch (err) {
+      status.textContent = /missing/.test(err?.message) ? 'Сейчас недоступен: узлы сети не отвечают' : 'Не получилось скачать';
+    }
+  };
+  return h('button', { type: 'button', class: 'file-box', title: 'Скачать ' + fl.name, onclick: open },
+    h('span', { class: 'file-ic', vars: { '--h': hue } }, h('b', { text: label })),
+    h('span', { class: 'row-text' }, h('b', { class: 'file-name', text: fl.name }), status),
+    h('span', { class: 'file-dl' }, icon('download')));
+}
+// перетащить файлы в чат (на компьютере)
+(() => {
+  const zone = $('messages').parentElement;
+  let depth = 0;
+  zone.addEventListener('dragenter', (e) => { if (!state.activeId || !e.dataTransfer?.types?.includes('Files')) return; e.preventDefault(); depth++; zone.classList.add('dropping'); });
+  zone.addEventListener('dragover', (e) => { if (state.activeId && e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
+  zone.addEventListener('dragleave', () => { if (--depth <= 0) { depth = 0; zone.classList.remove('dropping'); } });
+  zone.addEventListener('drop', async (e) => {
+    if (!state.activeId) return;
+    e.preventDefault(); depth = 0; zone.classList.remove('dropping');
+    for (const f of [...(e.dataTransfer?.files || [])]) await (/^image\/(jpeg|png|webp|gif)$/.test(f.type) ? sendImage(f) : sendFile(f));
+  });
+})();
+
+/* =====================================================================
    Поиск. Идёт прямо на устройстве: сервер не видит текст, искать там нечего.
    ===================================================================== */
 const normSearch = (t) => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
@@ -1782,7 +1903,7 @@ const search = { hits: [], i: -1, q: '' };
 function msgSearchText(m) {
   const p = m.p;
   if (!p || p.bad || p.missing) return '';
-  return normSearch([p.t ? stripMarkdown(p.t) : '', p.st ? stickerLabel(p.st) : ''].join(' '));
+  return normSearch([p.t ? stripMarkdown(p.t) : '', p.st ? stickerLabel(p.st) : '', p.file?.name || ''].join(' '));
 }
 function openSearch() {
   $('searchBar').hidden = false;
@@ -2006,11 +2127,11 @@ async function cleanupOldMedia() {
         await decryptMessage(m).catch(() => {});
         const p = m.p;
         if (!p || p.bad || p.missing) continue;
-        const media = p.img && !p.img.gone ? ['img', p.img] : p.v && !p.v.gone ? ['v', p.v] : null;
+        const media = p.img && !p.img.gone ? ['img', p.img] : p.v && !p.v.gone ? ['v', p.v] : p.file && !p.file.gone ? ['file', p.file] : null;
         if (!media || !media[1].nodes?.length || !media[1].hash) continue;   // старые фото в центре удалить нельзя — не трогаем
         const [kind, obj] = media;
         await net.del(obj.nodes, `${m.conversation_id}/${obj.hash}`).catch(() => {});
-        const gone = { gone: 1, w: obj.w, h: obj.h, dur: obj.dur, st: obj.st };
+        const gone = { gone: 1, w: obj.w, h: obj.h, dur: obj.dur, st: obj.st, name: obj.name, size: obj.size };
         await updatePayload(m, { ...p, [kind]: gone }).catch(() => {});
         cleaned++;
       }

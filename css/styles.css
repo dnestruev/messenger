@@ -1075,3 +1075,17 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 ::highlight(search) { background: #ffd84d; color: #111; }
 .msg.search-cur { box-shadow: 0 0 0 2.5px #ffc83d; }
 .msg.search-hit:not(.search-cur) { box-shadow: 0 0 0 1px rgba(255, 200, 61, .6); }
+
+/* ---------- Файлы ---------- */
+.file-box { display: flex; align-items: center; gap: 10px; min-width: min(240px, 66vw); max-width: 300px; padding: 2px 0; text-align: left; color: inherit; }
+.file-ic { width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0; display: grid; place-items: center; background: hsl(var(--h) 70% 52%); color: #fff; font-size: 11px; letter-spacing: .02em; }
+.msg.mine .file-ic { background: rgba(255, 255, 255, .25); }
+.file-box .row-text { flex: 1; min-width: 0; }
+.file-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.file-box small { opacity: .75; }
+.msg.mine .file-box small { color: inherit; }
+.file-dl { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; background: rgba(127, 127, 127, .16); transition: transform .15s var(--spring); }
+.file-box:active .file-dl { transform: scale(.88) translateY(2px); }
+.file-dl .i { width: 18px; height: 18px; }
+.dropping { position: relative; }
+.dropping::after { content: "Отпустите, чтобы отправить"; position: absolute; inset: 8px; z-index: 5; display: grid; place-items: center; border: 2.5px dashed var(--accent); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--surface) 85%, transparent); color: var(--accent); font-weight: 600; pointer-events: none; }
