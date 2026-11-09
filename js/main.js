@@ -855,9 +855,11 @@ async function loadChats() {
     c.keyWarn = previous.get(c.id)?.keyWarn;
     const prevLast = previous.get(c.id);
     // если последнее сообщение не изменилось — не скачиваем его с узлов заново
-    c.last_p = prevLast && prevLast.last_cid === c.last_cid && prevLast.last_hash === c.last_hash && prevLast.last_p && !prevLast.last_p.missing
-      ? prevLast.last_p
-      : c.last_sender ? (await decryptMessage(lastMessageOf(c))).p : null;
+    try {
+      c.last_p = prevLast && prevLast.last_cid === c.last_cid && prevLast.last_hash === c.last_hash && prevLast.last_p && !prevLast.last_p.missing
+        ? prevLast.last_p
+        : c.last_sender ? (await decryptMessage(lastMessageOf(c))).p : null;
+    } catch (err) { console.warn('Chat preview failed', c.id, err); c.last_p = { missing: true }; }
   }));
   for (const c of data) state.chats.set(c.id, c);
   await loadPeople(data.flatMap((c) => c.member_ids || []));
@@ -2489,6 +2491,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   cur.unfit?.();
   stopTone();
   navigator.vibrate?.(0);
+  cur.screenTrack?.stop();
   cur.local?.getTracks().forEach((t) => t.stop());
   try { cur.pc.close(); } catch {}
   if (!remote && !cur.answered && cur.dir === 'out' && status === 'missed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'timeout' }).catch(() => {});
@@ -2562,13 +2565,69 @@ function updateCallUi() {
   } else {
     if (mic) btns.push(callButton(mic.enabled ? '' : 'off', 'mic', mic.enabled ? 'Микрофон' : 'Без звука', () => { mic.enabled = !mic.enabled; updateCallUi(); }));
     if (cam) {
-      btns.push(callButton(cam.enabled ? '' : 'off', 'video', cam.enabled ? 'Камера' : 'Камера выкл.', () => { cam.enabled = !cam.enabled; updateCallUi(); }));
-      btns.push(callButton('', 'flip', 'Сменить', () => flipCamera()));
+      if (!cur.screenTrack) {
+        btns.push(callButton(cam.enabled ? '' : 'off', 'video', cam.enabled ? 'Камера' : 'Камера выкл.', () => { cam.enabled = !cam.enabled; updateCallUi(); }));
+        btns.push(callButton('', 'flip', 'Сменить', () => flipCamera()));
+      }
+      btns.push(callButton(cur.screenTrack ? 'off' : '', 'monitor', cur.screenTrack ? 'Стоп экран' : 'Показать экран', () => toggleScreenShare()));
     }
     btns.push(callButton('decline', 'phone', 'Завершить', () => hangUp()));
   }
   ui.controls.replaceChildren(...btns);
 }
+/** Screen sharing replaces the existing camera track without SDP renegotiation.
+ * Available during video calls in browsers supporting getDisplayMedia. */
+async function toggleScreenShare() {
+  const cur = call;
+  if (!cur?.local) return;
+  const sender = cur.pc.getSenders().find((s) => s.track?.kind === 'video');
+  if (!sender) return toast('Начните видеозвонок для демонстрации экрана');
+  if (cur.screenTrack) {
+    const track = cur.screenTrack;
+    cur.screenTrack = null;
+    track.onended = null;
+    try { await sender.replaceTrack(cur.cameraTrack); }
+    catch { toast('Не удалось вернуть камеру'); }
+    track.stop();
+    cur.local.removeTrack(track);
+    if (cur.cameraTrack && cur.cameraTrack.readyState === 'live') cur.local.addTrack(cur.cameraTrack);
+    cur.ui.local.srcObject = null;
+    updateCallUi();
+    return;
+  }
+  if (!navigator.mediaDevices?.getDisplayMedia) return toast('Браузер не поддерживает демонстрацию экрана');
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 30, max: 60 } },
+      audio: false
+    });
+    const track = stream.getVideoTracks()[0];
+    if (call !== cur || !track) { stream.getTracks().forEach((t) => t.stop()); return; }
+    const camera = cur.local.getVideoTracks()[0];
+    track.contentHint = 'detail';
+    await sender.replaceTrack(track);
+    cur.cameraTrack = camera;
+    cur.screenTrack = track;
+    if (camera) cur.local.removeTrack(camera);
+    cur.local.addTrack(track);
+    track.onended = () => { if (call === cur && cur.screenTrack === track) toggleScreenShare(); };
+    try {
+      const params = sender.getParameters();
+      if (params.encodings?.length) {
+        params.encodings[0].maxBitrate = 8_000_000;
+        params.encodings[0].maxFramerate = 60;
+        await sender.setParameters(params);
+      }
+    } catch (err) { console.warn('Screen quality parameters unavailable', err); }
+    cur.ui.local.srcObject = null;
+    updateCallUi();
+  } catch (err) {
+    stream?.getTracks().forEach((t) => t.stop());
+    if (err?.name !== 'NotAllowedError') toast('Не удалось начать демонстрацию экрана');
+  }
+}
+
 async function flipCamera() {
   const cur = call;
   const old = cur?.local?.getVideoTracks()[0];
@@ -2863,6 +2922,7 @@ $('recSend').onclick = () => stopVoice(true);
    ===================================================================== */
 function subscribe() {
   if (state.channel) sb.removeChannel(state.channel);
+  let subscribedOnce = false;
   const me = state.me.id;
   state.channel = sb.channel('inbox-' + me)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (p) => addMessage(p.new, true))
@@ -2888,7 +2948,11 @@ function subscribe() {
       await loadPubKeys([uid], true);
       for (const c of state.chats.values()) if ((c.member_ids || []).includes(uid)) shareChatKey(c.id).catch(() => {});
     })
-    .subscribe();
+    .subscribe((status) => {
+      if (status !== 'SUBSCRIBED' || !state.me || state.me.id !== me) return;
+      if (subscribedOnce) loadChats().catch((err) => console.warn('Realtime resync failed', err));
+      subscribedOnce = true;
+    });
 }
 
 async function onChatKeysArrived() {
