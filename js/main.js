@@ -1,11 +1,11 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109194609';
-import * as CONFIG from '../config.js?v=20261109194609';
-import * as E2E from './crypto.js?v=20261109194609';
-import { createNet } from './net.js?v=20261109194609';
-import { qrSvg } from './qr.js?v=20261109194609';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109194609';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109194609';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109195453';
+import * as CONFIG from '../config.js?v=20261109195453';
+import * as E2E from './crypto.js?v=20261109195453';
+import { createNet } from './net.js?v=20261109195453';
+import { qrSvg } from './qr.js?v=20261109195453';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109195453';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109195453';
 
 /* =====================================================================
    Утилиты
@@ -1778,6 +1778,21 @@ async function decodeReaction(r) {
   const v = await E2E.openJson(chatKey(r.conversation_id, r.kv), r.ct, r.iv, reactAad(r.message_id, r.user_id));
   return v && !v.bad && typeof v.e === 'string' && v.e.length <= 16 ? v.e : null;
 }
+/** Обновить реакции только у одного сообщения, не трогая ленту (иначе прыгает прокрутка) */
+function patchReactions(msgId) {
+  const box = $('messages');
+  const el = box.querySelector(`.msg[data-id="${CSS.escape(String(msgId))}"]`);
+  if (!el) return;
+  const m = (state.history.get(state.activeId) || []).find((x) => x.id === msgId);
+  if (!m) return;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const next = reactionChips(m);
+  const cur = el.querySelector(':scope > .reactions');
+  if (cur && next) cur.replaceWith(next);
+  else if (cur) cur.remove();
+  else if (next) el.insertBefore(next, el.querySelector(':scope > .msg-meta'));
+  if (atBottom) box.scrollTop = box.scrollHeight;          // внизу ленты — остаёмся внизу
+}
 function setReaction(msgId, uid, emoji) {
   let mp = state.reactions.get(msgId);
   if (!mp) state.reactions.set(msgId, (mp = new Map()));
@@ -1789,24 +1804,22 @@ async function loadReactions(chatId, ids) {
     const { data, error } = await sb.from('reactions').select('message_id, conversation_id, user_id, ct, iv, kv')
       .eq('conversation_id', chatId).in('message_id', ids.slice(i, i + 150));
     if (error) return;                                     // база ещё без update-10
-    for (const r of data || []) setReaction(r.message_id, r.user_id, await decodeReaction(r));
+    for (const r of data || []) { setReaction(r.message_id, r.user_id, await decodeReaction(r)); if (state.activeId === chatId) patchReactions(r.message_id); }
   }
-  if (state.activeId === chatId) renderMessages({ keepScroll: true });
 }
 async function onReactionChange(p) {
   const r = p.eventType === 'DELETE' ? p.old : p.new;
   if (!r?.message_id) return;
   if (p.eventType === 'DELETE') setReaction(r.message_id, r.user_id, null);
   else setReaction(r.message_id, r.user_id, await decodeReaction(r));
-  const inOpen = (state.history.get(state.activeId) || []).some((m) => m.id === r.message_id);
-  if (inOpen) renderMessages({ keepScroll: true });
+  patchReactions(r.message_id);
 }
 async function react(m, emoji) {
   const me = state.me.id, chatId = m.conversation_id;
   const prev = state.reactions.get(m.id)?.get(me) || null;
   const next = prev === emoji ? null : emoji;
   setReaction(m.id, me, next);                             // сразу показываем, не дожидаясь сервера
-  if (state.activeId === chatId) renderMessages({ keepScroll: true });
+  patchReactions(m.id);
   if (next) navigator.vibrate?.(10);
   try {
     if (!next) {
@@ -1820,7 +1833,7 @@ async function react(m, emoji) {
     }
   } catch (err) {
     setReaction(m.id, me, prev);
-    if (state.activeId === chatId) renderMessages({ keepScroll: true });
+    patchReactions(m.id);
     toast(/reactions|relation|does not exist/i.test(err.message || '') ? 'Реакции заработают после обновления базы' : humanError(err));
   }
 }
