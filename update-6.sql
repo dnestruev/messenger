@@ -1,7 +1,7 @@
 -- Обновление 6: укрепление по замечаниям советника безопасности Supabase.
 --   * служебные функции нельзя вызвать через API; остальные — только после входа
 --   * зафиксирован search_path у триггерных функций
---   * расширение pg_net перенесено из схемы public в extensions
+--   (перенос pg_net в схему extensions убран: на нём держатся push и проверка узлов)
 -- Запускать ОДИН раз в Supabase (центр), после update-5.sql.
 
 begin;
@@ -40,6 +40,3 @@ alter function public.stamp_wrapped_by() set search_path = '';
 
 commit;
 
--- pg_net: из public в extensions (функции net.* остаются на месте)
-drop extension if exists pg_net;
-create extension if not exists pg_net with schema extensions;

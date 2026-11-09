@@ -1,10 +1,11 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109191401';
-import * as CONFIG from '../config.js?v=20261109191401';
-import * as E2E from './crypto.js?v=20261109191401';
-import { createNet } from './net.js?v=20261109191401';
-import { qrSvg } from './qr.js?v=20261109191401';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109191401';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109192617';
+import * as CONFIG from '../config.js?v=20261109192617';
+import * as E2E from './crypto.js?v=20261109192617';
+import { createNet } from './net.js?v=20261109192617';
+import { qrSvg } from './qr.js?v=20261109192617';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109192617';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109192617';
 
 /* =====================================================================
    Утилиты
@@ -867,6 +868,8 @@ function previewText(p) {
   const t = p.t ? stripMarkdown(p.t) : p.t;
   if (p.v) return '🎤 Голосовое ' + fmtDur(p.v.dur);
   if (p.call) return callLabel(p.call, null);
+  if (p.st) return '🙂 Стикер «' + stickerLabel(p.st) + '»';
+  if (p.img?.st) return '🙂 Стикер';
   return p.img ? 'Фото' + (t ? ': ' + t : '') : t;
 }
 function previewOf(c) {
@@ -1061,6 +1064,7 @@ async function saveToFavorites(m) {
   try {
     if (!(await canSend(target))) return;
     const f = { s: m.sender_id, n: nameOf(m.sender_id) };
+    if (m.p.st) { addMessage(await insertMessage(target, { st: m.p.st, f })); return toast('Сохранено в избранное'); }
     if (m.p.v) {
       const blob = await voiceBlob(m);
       await sendVoice(blob, m.p.v.dur, m.p.v.w, target, { f });
@@ -1070,7 +1074,7 @@ async function saveToFavorites(m) {
       const src = state.images.get(m.p.img.path || m.p.img.hash);
       if (!src) return inlineError('Фото ещё не загрузилось — подождите секунду');
       const blob = await (await fetch(src)).blob();
-      await sendImage(new File([blob], 'photo.jpg', { type: blob.type || 'image/jpeg' }), target, { t: m.p.t || '', f });
+      await sendImage(new File([blob], 'photo.jpg', { type: blob.type || 'image/jpeg' }), target, { t: m.p.t || '', f }, { sticker: !!m.p.img.st });
     } else {
       addMessage(await insertMessage(target, { t: m.p.t, f }));
     }
@@ -1230,6 +1234,7 @@ async function loadReads(chatId) {
 async function openChat(id) {
   state.seen.delete(id);                                  // при открытии — без анимации каждого пузыря
   if (rec && rec.chat !== id) stopVoice(false);
+  closeStickers();
   if (!state.chats.has(id)) await loadChats();
   if (!state.chats.has(id)) return;
   if (state.activeId !== id) setCompose(null);
@@ -1377,7 +1382,7 @@ function bubble(m, { showName, continued, fresh }) {
   if (p?.f) el.append(h('div', { class: 'msg-fwd' }, icon('bookmark'), p.f.s === state.me.id ? 'Ваше сообщение' : 'От ' + (state.people.has(p.f.s) ? nameOf(p.f.s) : p.f.n || '…')));
   if (p?.r) {
     el.append(h('button', { class: 'msg-quote', type: 'button', onclick: () => jumpTo(p.r.id) },
-      h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : p.r.v ? '🎤 Голосовое' : 'Фото' })));
+      h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : p.r.v ? '🎤 Голосовое' : p.r.st ? '🙂 Стикер' : 'Фото' })));
   }
   if (p?.img) {
     // уже показанное фото переносим в новый пузырь как есть — чтобы оно не мигало при перерисовке
@@ -1394,6 +1399,13 @@ function bubble(m, { showName, continued, fresh }) {
   }
   if (p?.v) { el.classList.add('voice'); el.append(voiceBubble(m)); }
   if (p?.call) { el.classList.add('call-msg'); el.append(callBubble(m)); }
+  if (p?.st) {
+    el.classList.add('sticker');
+    const box = h('div', { class: 'sticker-art', title: stickerLabel(p.st), onclick: (e) => { e.stopPropagation(); box.classList.remove('boing'); void box.offsetWidth; box.classList.add('boing'); } });
+    box.innerHTML = stickerSvg(p.st, 150);                // только наши нарисованные части
+    el.append(box);
+  }
+  if (p?.img?.st) el.classList.add('sticker', 'sticker-img');
   const text = !p ? 'Сообщение ещё не расшифровано'
     : p.missing ? 'Сообщение сейчас недоступно: узлы сети не отвечают'
     : p.bad ? 'Не удалось расшифровать' : p.t;
@@ -1448,7 +1460,8 @@ function openMenu(m, x, y) {
   if (c && !writeBlock(c)) items.push(['reply', 'Ответить', () => setCompose({ mode: 'reply', msg: m })]);
   if (m.p.t) items.push(['copy', 'Копировать', () => navigator.clipboard?.writeText(m.p.t)]);
   if (state.savedId && m.conversation_id !== state.savedId) items.push(['bookmark', 'В избранное', () => saveToFavorites(m)]);
-  if (mine && !m.p.img && !m.p.v && !m.p.call && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
+  if (m.p.img?.st) items.push(['smile', 'В мои стикеры', () => saveCustomSticker(m)]);
+  if (mine && !m.p.img && !m.p.v && !m.p.call && !m.p.st && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
   if (mine) items.push(['trash', 'Удалить у всех', () => deleteMessage(m), 'danger']);
   if (!items.length) return;
   const menu = h('div', { class: 'menu', role: 'menu' }, ...items.map(([ic, label, fn, cls]) =>
@@ -1499,7 +1512,7 @@ function setCompose(next) {
   const p = next.msg.p;
   setIcon($('composeBar'), next.mode === 'edit' ? 'edit' : 'reply');
   $('composeTitle').textContent = next.mode === 'edit' ? 'Изменение' : 'Ответ ' + nameOf(next.msg.sender_id);
-  $('composeText').textContent = p.t ? stripMarkdown(p.t) : p.v ? '🎤 Голосовое' : 'Фото';
+  $('composeText').textContent = p.t ? stripMarkdown(p.t) : p.v ? '🎤 Голосовое' : p.st || p.img?.st ? '🙂 Стикер' : 'Фото';
   $('composeBar').hidden = false;
   if (next.mode === 'edit') { textArea.value = p.t || ''; autosize(); }
   textArea.focus();
@@ -1631,7 +1644,7 @@ async function insertMessage(chatId, payload, retried = false) {
 function replyRef() {
   if (state.compose?.mode !== 'reply') return undefined;
   const m = state.compose.msg;
-  return { id: m.id, s: m.sender_id, t: (m.p.t || (m.p.img ? 'Фото' : '')).slice(0, 120), v: m.p.v ? 1 : undefined };
+  return { id: m.id, s: m.sender_id, t: (m.p.t || (m.p.st || m.p.img?.st ? '' : m.p.img ? 'Фото' : '')).slice(0, 120), v: m.p.v ? 1 : undefined, st: m.p.st || m.p.img?.st ? 1 : undefined };
 }
 
 async function editMessage(m, newText) { return updatePayload(m, { ...m.p, t: newText }); }
@@ -1687,7 +1700,7 @@ $('fileInput').onchange = async () => {
   for (const f of list) await sendImage(f);
 };
 
-async function sendImage(file, target = null, extra = null) {
+async function sendImage(file, target = null, extra = null, opts = {}) {
   const chatId = target || state.activeId;
   if (!chatId) return;
   if (!file.type.startsWith('image/')) return inlineError('Можно отправлять только картинки');
@@ -1696,7 +1709,7 @@ async function sendImage(file, target = null, extra = null) {
   $('uploading').hidden = false;
   let uploadedNodes = [], uploadedKey = null;
   try {
-    const { blob, type, w, h: height } = await shrinkImage(file);
+    const { blob, type, w, h: height } = opts.sticker ? await stickerImage(file) : await shrinkImage(file);
     if (blob.size > 6 * 1024 * 1024) throw new Error('Картинка слишком большая');
     const kv = currentVersion(chatId);
     const sealed = await E2E.sealBytes(chatKey(chatId, kv), await blob.arrayBuffer(), 'img|' + chatId);
@@ -1704,6 +1717,7 @@ async function sendImage(file, target = null, extra = null) {
     const hash = await E2E.sha256hex(bytes);
     uploadedKey = `${chatId}/${hash}`;
     const img = { iv: sealed.iv, mime: type, w, h: height, a: 2, hash, kv };
+    if (opts.sticker) img.st = 1;
     const nodes = await net.put(`${chatId}/${hash}`, bytes).catch(() => []);
     uploadedNodes = nodes;
     if (nodes.length) img.nodes = nodes;
@@ -1714,8 +1728,8 @@ async function sendImage(file, target = null, extra = null) {
       if (error) throw error;
     }
     state.images.set(img.path || hash, URL.createObjectURL(blob));
-    const msg = await insertMessage(chatId, extra ? { t: caption, img, f: extra.f } : { t: caption, img, r: replyRef() });
-    if (!extra) {
+    const msg = await insertMessage(chatId, extra ? { t: caption, img, f: extra.f } : { t: opts.sticker ? '' : caption, img, r: replyRef() });
+    if (!extra && !opts.sticker) {
       if (caption) { textArea.value = ''; autosize(); }
       setCompose(null);
     }
@@ -1740,6 +1754,92 @@ async function shrinkImage(file) {
   return { blob, type: 'image/jpeg', w: canvas.width, h: canvas.height };
 }
 
+
+/* =====================================================================
+   Стикеры: свой набор «Точка» + стикеры из своих картинок
+   ===================================================================== */
+const MY_STICKERS = 'my-stickers';
+let stickerTab = 'dot';
+/** Картинка → стикер: до 512 px, прозрачность сохраняется (WebP, а где не умеют — PNG) */
+async function stickerImage(file) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
+  const canvas = h('canvas', { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
+  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  let blob = await new Promise((r) => canvas.toBlob(r, 'image/webp', 0.9));
+  if (!blob || blob.type !== 'image/webp') blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+  return { blob, type: blob.type, w: canvas.width, h: canvas.height };
+}
+async function myStickers() { try { return (await E2E.store.get(MY_STICKERS)) || []; } catch { return []; } }
+async function addMySticker(blob) {
+  const list = await myStickers();
+  list.unshift({ id: uuid(), blob, at: Date.now() });
+  await E2E.store.set(MY_STICKERS, list.slice(0, 60));
+}
+async function saveCustomSticker(m) {
+  const src = state.images.get(m.p.img.path || m.p.img.hash);
+  if (!src) return toast('Стикер ещё не загрузился');
+  await addMySticker(await (await fetch(src)).blob());
+  toast('Добавлено в «Мои стикеры»');
+}
+const recentStickers = () => { try { return JSON.parse(localStorage.getItem('recent-stickers') || '[]'); } catch { return []; } };
+function pushRecent(id) {
+  try { localStorage.setItem('recent-stickers', JSON.stringify([id, ...recentStickers().filter((x) => x !== id)].slice(0, 8))); } catch {}
+}
+async function sendSticker(id) {
+  const chatId = state.activeId;
+  if (!chatId || !(await canSend(chatId))) return;
+  closeStickers();
+  pushRecent(id);
+  try { addMessage(await insertMessage(chatId, { st: id, r: replyRef() })); setCompose(null); }
+  catch (err) { inlineError(sendError(err)); }
+}
+async function renderStickers() {
+  const panel = $('stickerPanel');
+  const tabs = h('div', { class: 'sticker-tabs' },
+    h('button', { type: 'button', class: stickerTab === 'dot' ? 'on' : '', text: 'Точка', onclick: () => { stickerTab = 'dot'; renderStickers(); } }),
+    h('button', { type: 'button', class: stickerTab === 'mine' ? 'on' : '', text: 'Мои', onclick: () => { stickerTab = 'mine'; renderStickers(); } }),
+    h('button', { type: 'button', class: 'icon-btn sticker-close', title: 'Закрыть', onclick: closeStickers }, icon('close')));
+  const grid = h('div', { class: 'sticker-grid' });
+  if (stickerTab === 'dot') {
+    const recent = recentStickers().filter((id) => STICKERS.some((s) => s[0] === id));
+    const tile = (id, label) => {
+      const b = h('button', { type: 'button', class: 'sticker-tile', title: label, onclick: () => sendSticker(id) });
+      b.innerHTML = stickerSvg(id, 72);
+      return b;
+    };
+    if (recent.length) grid.append(h('div', { class: 'sticker-sub', text: 'Недавние' }), ...recent.map((id) => tile(id, stickerLabel(id))), h('div', { class: 'sticker-sub', text: 'Все' }));
+    grid.append(...STICKERS.map(([id, label]) => tile(id, label)));
+  } else {
+    const input = h('input', { type: 'file', accept: 'image/*', hidden: true });
+    input.onchange = async () => {
+      const f = input.files[0]; input.value = '';
+      if (!f) return;
+      try {
+        const { blob } = await stickerImage(f);
+        await addMySticker(blob);
+        renderStickers();
+      } catch { toast('Не получилось сделать стикер из этой картинки'); }
+    };
+    grid.append(input, h('button', { type: 'button', class: 'sticker-tile sticker-add', title: 'Сделать стикер из картинки', onclick: () => input.click() }, icon('plus'), h('small', { text: 'Свой' })));
+    for (const st of await myStickers()) {
+      const url = URL.createObjectURL(st.blob);
+      grid.append(h('button', { type: 'button', class: 'sticker-tile', title: 'Отправить (долгое нажатие — удалить)',
+        onclick: async () => { closeStickers(); await sendImage(new File([st.blob], 'sticker', { type: st.blob.type }), null, null, { sticker: true }); },
+        oncontextmenu: async (e) => {
+          e.preventDefault();
+          if (!confirm('Убрать стикер из «Моих»?')) return;
+          await E2E.store.set(MY_STICKERS, (await myStickers()).filter((x) => x.id !== st.id));
+          renderStickers();
+        } }, h('img', { src: url, alt: '', draggable: false })));
+    }
+    grid.append(h('p', { class: 'muted sticker-hint', text: 'Совет: картинка с прозрачным фоном (PNG) выглядит как настоящий стикер. Чужой стикер можно сохранить: долгое нажатие на него → «В мои стикеры».' }));
+  }
+  panel.replaceChildren(tabs, grid);
+}
+function openStickers() { $('stickerPanel').hidden = false; $('stickerBtn').classList.add('on'); renderStickers(); }
+function closeStickers() { $('stickerPanel').hidden = true; $('stickerBtn').classList.remove('on'); }
+$('stickerBtn').onclick = () => ($('stickerPanel').hidden ? openStickers() : closeStickers());
 
 /* =====================================================================
    Звонки 1 на 1 (WebRTC). Звук и видео идут напрямую между устройствами,

@@ -1003,3 +1003,39 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .msg.mine .call-box-ic { background: rgba(255, 255, 255, .2); }
 .call-screen.fit-contain .call-remote { object-fit: contain; }
 .call-remote { cursor: zoom-in; }
+
+/* ---------- Стикеры ---------- */
+.msg.sticker { background: none !important; background-image: none !important; box-shadow: none !important; padding: 0 !important; border: 0 !important; }
+.msg.sticker .msg-meta { justify-content: flex-end; }
+.msg.sticker .msg-meta > * { }
+.msg.sticker .msg-meta { width: max-content; margin-left: auto; padding: 1px 7px; border-radius: 999px; background: rgba(0, 0, 0, .35); color: #fff; opacity: 1; }
+.msg.sticker .msg-from, .msg.sticker .msg-fwd, .msg.sticker .msg-quote { padding: 2px 8px; border-radius: 10px; background: var(--surface); width: max-content; max-width: 100%; }
+.sticker-art { line-height: 0; cursor: pointer; filter: drop-shadow(0 4px 10px rgba(0, 0, 0, .12)); }
+.sticker-art svg { width: 150px; height: 150px; }
+.msg.msg-in .sticker-art, .sticker-art.boing { animation: boing .6s var(--spring); }
+@keyframes boing { 0% { transform: scale(.4) rotate(-12deg); } 60% { transform: scale(1.12) rotate(4deg); } 100% { transform: scale(1); } }
+.msg.sticker-img .msg-img { max-width: 160px; max-height: 160px; width: auto; height: auto; aspect-ratio: auto !important; border-radius: 0; background: none; object-fit: contain; }
+.msg.sticker-img { max-width: 170px !important; }
+
+.sticker-panel {
+  flex-shrink: 0; max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain;
+  border-top: 1px solid var(--line); background: var(--surface);
+  animation: fade-up .22s var(--ease-out);
+}
+.sticker-panel[hidden] { display: none; }
+.sticker-tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: 6px; align-items: center; padding: 8px 10px; background: var(--surface); }
+.sticker-tabs button:not(.icon-btn) { padding: 6px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.sticker-tabs button.on { background: var(--surface-2); color: var(--text); }
+.sticker-close { margin-left: auto; }
+.sticker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 4px; padding: 0 10px 12px; }
+.sticker-sub { grid-column: 1 / -1; font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 2px 0; }
+.sticker-tile { aspect-ratio: 1; display: grid; place-items: center; border-radius: 14px; transition: background .15s, transform .15s var(--spring); }
+.sticker-tile:hover { background: var(--surface-2); }
+.sticker-tile:active { transform: scale(.88); }
+.sticker-tile svg { width: 72px; height: 72px; }
+.sticker-tile img { max-width: 72px; max-height: 72px; object-fit: contain; }
+.sticker-add { border: 2px dashed var(--line); color: var(--muted); gap: 0; align-content: center; }
+.sticker-add small { font-size: 12px; }
+.sticker-hint { grid-column: 1 / -1; margin: 6px 2px 0; font-size: 12.5px; }
+#stickerBtn.on { color: var(--accent); }
+.toast { max-width: calc(100vw - 32px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
