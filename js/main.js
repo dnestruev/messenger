@@ -302,7 +302,7 @@ const avatarUrl = (path) => (path ? `${SUPABASE_URL}/storage/v1/object/public/${
 const photoOf = (id) => avatarUrl(state.people.get(id)?.avatar_path);
 function avatar(label, hue, size = '', badge = null, extra = '', photo = null) {
   return h('span', { class: ['avatar', size, extra, photo && 'has-photo'].filter(Boolean).join(' '), vars: { '--h': hue } }, (label || '?')[0].toUpperCase(),
-    photo ? h('img', { class: 'avatar-img', src: photo, alt: '', loading: 'lazy', decoding: 'async', draggable: false,
+    photo ? h('img', { class: 'avatar-img', src: photo, alt: '', decoding: 'sync', draggable: false,
       onerror: (e) => { e.target.parentNode?.classList.remove('has-photo'); e.target.remove(); } }) : null,
     badge ? h('span', { class: 'badge' }, icon(badge)) : null);
 }
