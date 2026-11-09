@@ -242,7 +242,12 @@ function segmented(options, value, onpick) {
    ===================================================================== */
 let PROFILE_COLUMNS = 'id, username, display_name, avatar_hue, role, frame, avatar_path';
 /** Запрос профилей; если база ещё без аватарок (update-8) — повторяем без этой колонки */
+const FULL_PROFILE_COLUMNS = PROFILE_COLUMNS;
 async function selectProfiles(build) {
+  if (PROFILE_COLUMNS !== FULL_PROFILE_COLUMNS) {          // база могла обновиться, пока приложение открыто
+    const full = await build(sb.from('profiles').select(FULL_PROFILE_COLUMNS));
+    if (!full.error) { PROFILE_COLUMNS = FULL_PROFILE_COLUMNS; return full; }
+  }
   let r = await build(sb.from('profiles').select(PROFILE_COLUMNS));
   if (r.error && /avatar_path/.test(r.error.message || '')) {
     PROFILE_COLUMNS = PROFILE_COLUMNS.replace(', avatar_path', '');
@@ -710,7 +715,25 @@ async function startApp(user) {
   else handleProfileLink();
 }
 // Вернулись в приложение (телефон разблокировали) — освежаем значки и профили
-document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me) loadPerks(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me) loadPerks(); if (!document.hidden) checkUpdate(); });
+
+/* ---------- Новая версия сайта: предлагаем обновиться ---------- */
+let loadedVersion = null;
+async function siteVersion() {
+  try { const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' }); return r.ok ? (await r.json()).v : null; }
+  catch { return null; }
+}
+async function checkUpdate() {
+  const v = await siteVersion();
+  if (!v) return;
+  if (!loadedVersion) { loadedVersion = v; return; }
+  if (v === loadedVersion || document.querySelector('.update-bar')) return;
+  document.body.append(h('div', { class: 'update-bar', role: 'status' },
+    h('span', { text: 'Вышло обновление мессенджера' }),
+    h('button', { class: 'btn btn-primary', text: 'Обновить', onclick: () => location.reload() })));
+}
+checkUpdate();
+setInterval(checkUpdate, 3 * 60 * 1000);
 
 function stopApp() {
   state.me = null;
@@ -902,9 +925,19 @@ async function setAvatarPhoto(file) {
   const { error } = await sb.from('profiles').update({ avatar_path: path }).eq('id', me);
   if (error) { if (path) sb.storage.from(AVATAR_BUCKET).remove([path]); throw error; }
   p.avatar_path = path;
-  if (old) sb.storage.from(AVATAR_BUCKET).remove([old]).catch?.(() => {});
+  cleanAvatarFolder(path, old);
   renderMe(); renderChats();
   if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); }
+}
+/** Удалить из своей папки все старые аватарки, кроме текущей */
+async function cleanAvatarFolder(keep, old) {
+  const me = state.me.id;
+  try {
+    const { data } = await sb.storage.from(AVATAR_BUCKET).list(me, { limit: 100 });
+    const extra = (data || []).map((f) => `${me}/${f.name}`).filter((n) => n !== keep);
+    if (old && old !== keep && !extra.includes(old)) extra.push(old);
+    if (extra.length) await sb.storage.from(AVATAR_BUCKET).remove(extra);
+  } catch {}
 }
 function photoControls(msg, redraw) {
   if (!PROFILE_COLUMNS.includes('avatar_path')) return null;   // база ещё без update-8
