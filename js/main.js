@@ -1,12 +1,12 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109201711';
-import * as CONFIG from '../config.js?v=20261109201711';
-import * as E2E from './crypto.js?v=20261109201711';
-import { createNet } from './net.js?v=20261109201711';
-import { qrSvg } from './qr.js?v=20261109201711';
-import { findEmbed } from './embeds.js?v=20261109201711';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109201711';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109201711';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109202453';
+import * as CONFIG from '../config.js?v=20261109202453';
+import * as E2E from './crypto.js?v=20261109202453';
+import { createNet } from './net.js?v=20261109202453';
+import { qrSvg } from './qr.js?v=20261109202453';
+import { findEmbed } from './embeds.js?v=20261109202453';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109202453';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109202453';
 
 /* =====================================================================
    Утилиты

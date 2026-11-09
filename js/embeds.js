@@ -20,8 +20,14 @@ const RULES = [
     make: (m) => ({ service: 'YouTube', kind: 'видео', src: `https://www.youtube-nocookie.com/embed/${m[1]}?autoplay=1`, ratio: '16 / 9', color: '#ff0033' }),
   },
   {
-    re: /https?:\/\/(?:www\.|m\.)?soundcloud\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+/,
-    make: (m) => ({ service: 'SoundCloud', kind: 'трек', src: `https://w.soundcloud.com/player/?url=${encodeURIComponent(m[0])}&auto_play=true&visual=false`, height: 166, color: '#ff5500' }),
+    // трек, плейлист (/sets/…), а также короткие ссылки из приложения (on.soundcloud.com/…)
+    re: /https?:\/\/(?:(?:www\.|m\.)?soundcloud\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_\/-]+|on\.soundcloud\.com\/[A-Za-z0-9]+)/,
+    make: (m) => {
+      const url = m[0].replace(/\/+$/, '').replace('//m.soundcloud.com', '//soundcloud.com');
+      const set = /\/sets\//.test(url);
+      return { service: 'SoundCloud', kind: set ? 'плейлист' : 'трек', src: `https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&auto_play=true&visual=false&show_comments=false`,
+        height: set ? 380 : 166, color: '#ff5500' };
+    },
   },
 ];
 
