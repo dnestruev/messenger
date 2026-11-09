@@ -887,3 +887,6 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .crop-hint { margin: 0; text-align: center; font-size: 13px; }
 .avatar.zoomable { cursor: zoom-in; }
 .lightbox img.round { border-radius: 50%; max-width: min(90vw, 640px); max-height: min(80vh, 640px); }
+.member.clickable { cursor: pointer; border-radius: var(--radius); transition: background .15s; }
+.member.clickable:hover { background: var(--surface-2); }
+.msg-from { cursor: pointer; }

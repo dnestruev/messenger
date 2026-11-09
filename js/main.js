@@ -256,6 +256,24 @@ async function loadPeople(ids) {
   const { data } = await selectProfiles((q) => q.in('id', missing));
   for (const p of data || []) state.people.set(p.id, p);
 }
+/** Свежий профиль одного человека (перед показом его профиля) */
+async function refreshPerson(id) {
+  const { data } = await selectProfiles((q) => q.eq('id', id).maybeSingle());
+  if (data) state.people.set(id, data);
+}
+/** Профиль любого человека: фото крупно, ник, «Написать» */
+async function openUserProfile(uid, backTo = null) {
+  if (uid === state.me.id) return openSettings();
+  await refreshPerson(uid);
+  const msg = note();
+  openModal({ title: 'Профиль' },
+    h('div', { class: 'profile-head' }, zoomAvatar(userAvatar(uid, 'lg'), uid),
+      h('div', { class: 'profile-name' }, nameLine(nameOf(uid), roleBadge(uid))), h('div', { class: 'profile-nick', text: nickOf(uid) })),
+    msg,
+    h('button', { class: 'btn btn-primary btn-block', onclick: async () => { closeModal(); await openDirectByNick(state.people.get(uid)?.username); } }, icon('chat'), 'Написать'),
+    backTo ? h('button', { class: 'btn btn-block', text: 'Назад к группе', onclick: () => openChatInfo(backTo) }) : null);
+}
+
 /** Освежить профили всех, кого знаем: имена, роли, рамки меняются без перезапуска. */
 async function refreshPeople() {
   const ids = [...state.people.keys()];
@@ -1209,7 +1227,8 @@ function bubble(m, { showName, continued, fresh }) {
   const classes = ['msg', mine && 'mine', p?.img && 'photo', (!p || p.bad || p.missing) && 'locked', continued && 'cont', m.sigOk === false && 'forged', fresh && 'msg-in'];
   const el = h('div', { class: classes.filter(Boolean).join(' '), dataset: { id: m.id } });
   if (showName) {
-    el.append(h('div', { class: 'msg-from', vars: { '--h': hueOfUser(m.sender_id) } }, nameLine(nameOf(m.sender_id), roleBadge(m.sender_id))));
+    el.append(h('div', { class: 'msg-from', vars: { '--h': hueOfUser(m.sender_id) }, title: 'Открыть профиль',
+      onclick: (e) => { e.stopPropagation(); openUserProfile(m.sender_id); } }, nameLine(nameOf(m.sender_id), roleBadge(m.sender_id))));
   }
   if (p?.f) el.append(h('div', { class: 'msg-fwd' }, icon('bookmark'), p.f.s === state.me.id ? 'Ваше сообщение' : 'От ' + (state.people.has(p.f.s) ? nameOf(p.f.s) : p.f.n || '…')));
   if (p?.r) {
@@ -1826,7 +1845,7 @@ async function openChatInfo(id) {
   }
   if (!c.is_group) {
     const other = otherOf(c);
-    await loadPubKeys([other], true);
+    await Promise.all([loadPubKeys([other], true), refreshPerson(other)]);
     const theirs = keys.pub.get(other);
     const codeBox = theirs?.fp
       ? h('div', { class: 'safety' }, ...(await E2E.safetyCode(keys.fp, theirs.fp)).map((g) => h('span', { text: g })))
@@ -1857,7 +1876,7 @@ async function openChatInfo(id) {
   const title = h('input', { value: c.title || '', maxLength: 60 });
   const add = h('input', { placeholder: 'Ник', autocapitalize: 'off', spellcheck: 'false' });
   const msg = note();
-  const members = (c.member_ids || []).map((uid) => h('div', { class: 'member' }, userAvatar(uid, 'xs'),
+  const members = (c.member_ids || []).map((uid) => h('div', { class: 'member clickable', title: 'Открыть профиль', onclick: () => openUserProfile(uid, id) }, userAvatar(uid, 'xs'),
     h('div', { class: 'row-text' },
       h('b', {}, nameLine(nameOf(uid) + (uid === state.me.id ? ' (вы)' : ''), roleBadge(uid))),
       h('small', { text: nickOf(uid) + (keys.pub.get(uid)?.fp ? '' : ' · ещё не включил шифрование') }))));
