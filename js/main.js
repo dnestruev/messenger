@@ -1738,7 +1738,8 @@ async function shrinkImage(file) {
 const VOICE_MAX = 300;          // 5 минут
 const WAVE_BARS = 40;
 let rec = null;
-const pickVoiceMime = () => ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
+// WebM/Opus надёжнее там, где есть (Chrome, Android, Firefox); Safari умеет только MP4 — он и выберется
+const pickVoiceMime = () => ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4']
   .find((t) => window.MediaRecorder?.isTypeSupported?.(t)) || '';
 
 async function startVoice() {
@@ -1759,9 +1760,11 @@ async function startVoice() {
   const an = ctx.createAnalyser(); an.fftSize = 512;
   ctx.createMediaStreamSource(stream).connect(an);
   const buf = new Uint8Array(an.fftSize);
-  rec = { mr, stream, ctx, an, chunks: [], levels: [], start: Date.now(), chat: chatId };
-  mr.ondataavailable = (e) => { if (e.data && e.data.size) rec?.chunks.push(e.data); };
-  mr.start(250);
+  const chunks = [];
+  rec = { mr, stream, ctx, an, chunks, levels: [], start: Date.now(), chat: chatId };
+  mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  // Без нарезки на кусочки: Safari при записи кусочками повторяет и перекрывает фрагменты звука
+  mr.start();
   $('composer').classList.add('recording');
   $('recBar').hidden = false;
   $('recWave').replaceChildren();
@@ -1789,7 +1792,8 @@ async function stopVoice(send) {
   clearInterval(r.timer);
   const stopped = new Promise((res) => { r.mr.onstop = res; });
   try { if (r.mr.state !== 'inactive') r.mr.stop(); else r.mr.onstop(); } catch {}
-  await Promise.race([stopped, new Promise((res) => setTimeout(res, 1500))]);
+  await Promise.race([stopped, new Promise((res) => setTimeout(res, 4000))]);
+  await new Promise((res) => setTimeout(res, 0));          // последний кусок приходит прямо перед stop
   r.stream.getTracks().forEach((t) => t.stop());
   r.ctx.close().catch(() => {});
   $('composer').classList.remove('recording');
