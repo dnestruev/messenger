@@ -1,11 +1,11 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109194252';
-import * as CONFIG from '../config.js?v=20261109194252';
-import * as E2E from './crypto.js?v=20261109194252';
-import { createNet } from './net.js?v=20261109194252';
-import { qrSvg } from './qr.js?v=20261109194252';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109194252';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109194252';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109194609';
+import * as CONFIG from '../config.js?v=20261109194609';
+import * as E2E from './crypto.js?v=20261109194609';
+import { createNet } from './net.js?v=20261109194609';
+import { qrSvg } from './qr.js?v=20261109194609';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109194609';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109194609';
 
 /* =====================================================================
    Утилиты
@@ -143,6 +143,7 @@ const state = {
   online: new Set(),        // кто сейчас в сети (Realtime Presence)
   lastSeen: new Map(),      // id -> { at: Date|null, recently }
   hideSeen: false,
+  reactions: new Map(),     // id сообщения -> Map(id человека -> эмодзи)
 };
 const keys = {
   priv: null,               // мой секретный ключ (неизвлекаемый)
@@ -811,7 +812,7 @@ function stopApp() {
   state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
   state.showArchive = false;
   clearInterval(state.perksTimer); state.perks.clear(); state.seen.clear(); state.savedId = null;
-  stopPresence(); state.lastSeen.clear();
+  stopPresence(); state.lastSeen.clear(); state.reactions.clear();
   stopCalls();
   setCompose(null);
   leaveTyping();
@@ -1264,6 +1265,7 @@ async function openChat(id) {
   await Promise.all((state.history.get(id) || []).map(decryptMessage));
   if (state.activeId !== id) return;
   renderMessages();
+  loadReactions(id, (state.history.get(id) || []).map((m) => m.id));
   if (isDesktop()) $('text').focus();
   shareChatKey(id).catch(() => {});
 }
@@ -1297,6 +1299,7 @@ async function loadOlder(chatId, button) {
   if (error) { button.disabled = false; button.textContent = 'Не получилось — ещё раз'; return; }
   await loadPeople(data.map((m) => m.sender_id));
   await Promise.all(data.map(decryptMessage));
+  loadReactions(chatId, data.map((m) => m.id));
   const merged = new Map([...data, ...list].map((m) => [m.id, m]));
   state.history.set(chatId, [...merged.values()].sort(byTime));
   state.more.set(chatId, data.length === PAGE);
@@ -1415,6 +1418,8 @@ function bubble(m, { showName, continued, fresh }) {
   if (text) el.append(p?.t && text === p.t ? h('div', { class: 'msg-text md' }, renderMarkdown(text)) : h('div', { class: 'msg-text', text }));
   if (m.sigOk === false) el.append(h('div', { class: 'msg-forged' }, icon('warn'), 'Подпись не совпадает — возможна подделка'));
 
+  const rx = reactionChips(m);
+  if (rx) el.append(rx);
   const meta = h('span', { class: 'msg-meta' });
   if (m.edited_at && !p?.call && !p?.img?.gone && !p?.v?.gone) meta.append(h('span', { text: 'изменено' }));
   meta.append(h('span', { class: 'time', text: timeOf(m.created_at) }));
@@ -1466,8 +1471,12 @@ function openMenu(m, x, y) {
   if (m.p.img?.st && !m.p.img.gone) items.push(['smile', 'В мои стикеры', () => saveCustomSticker(m)]);
   if (mine && !m.p.img && !m.p.v && !m.p.call && !m.p.st && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
   if (mine) items.push(['trash', 'Удалить у всех', () => deleteMessage(m), 'danger']);
-  if (!items.length) return;
-  const menu = h('div', { class: 'menu', role: 'menu' }, ...items.map(([ic, label, fn, cls]) =>
+  const canReact = !!c && /^\d+$/.test(String(m.id)) && !(!c.is_group && state.blocked.has(otherOf(c)));
+  if (!items.length && !canReact) return;
+  const mineNow = state.reactions.get(m.id)?.get(state.me.id);
+  const bar = canReact ? h('div', { class: 'menu-react' }, ...QUICK_REACTIONS.map((e) => h('button', {
+    type: 'button', class: e === mineNow ? 'on' : '', text: e, title: e, onclick: () => { closeMenu(); react(m, e); } }))) : null;
+  const menu = h('div', { class: 'menu', role: 'menu' }, bar, ...items.map(([ic, label, fn, cls]) =>
     h('button', { class: cls || '', role: 'menuitem', onclick: () => { closeMenu(); fn(); } }, icon(ic), label)));
   document.body.append(menu);
   const r = menu.getBoundingClientRect();
@@ -1489,6 +1498,7 @@ async function deleteMessage(m) {
 }
 
 function removeMessage(id) {
+  state.reactions.delete(id);
   for (const [chatId, list] of state.history) {
     const i = list.findIndex((x) => x.id === id);
     if (i === -1) continue;
@@ -1757,6 +1767,91 @@ async function shrinkImage(file) {
   return { blob, type: 'image/jpeg', w: canvas.width, h: canvas.height };
 }
 
+
+/* =====================================================================
+   Реакции. Эмодзи шифруется ключом чата — сервер не знает, чем отреагировали.
+   ===================================================================== */
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+const reactAad = (msgId, uid) => `react|${msgId}|${uid}`;
+async function decodeReaction(r) {
+  if (!chatKey(r.conversation_id, r.kv)) await loadChatKeys();
+  const v = await E2E.openJson(chatKey(r.conversation_id, r.kv), r.ct, r.iv, reactAad(r.message_id, r.user_id));
+  return v && !v.bad && typeof v.e === 'string' && v.e.length <= 16 ? v.e : null;
+}
+function setReaction(msgId, uid, emoji) {
+  let mp = state.reactions.get(msgId);
+  if (!mp) state.reactions.set(msgId, (mp = new Map()));
+  if (emoji) mp.set(uid, emoji); else mp.delete(uid);
+}
+async function loadReactions(chatId, ids) {
+  ids = ids.filter((x) => /^\d+$/.test(String(x)));
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data, error } = await sb.from('reactions').select('message_id, conversation_id, user_id, ct, iv, kv')
+      .eq('conversation_id', chatId).in('message_id', ids.slice(i, i + 150));
+    if (error) return;                                     // база ещё без update-10
+    for (const r of data || []) setReaction(r.message_id, r.user_id, await decodeReaction(r));
+  }
+  if (state.activeId === chatId) renderMessages({ keepScroll: true });
+}
+async function onReactionChange(p) {
+  const r = p.eventType === 'DELETE' ? p.old : p.new;
+  if (!r?.message_id) return;
+  if (p.eventType === 'DELETE') setReaction(r.message_id, r.user_id, null);
+  else setReaction(r.message_id, r.user_id, await decodeReaction(r));
+  const inOpen = (state.history.get(state.activeId) || []).some((m) => m.id === r.message_id);
+  if (inOpen) renderMessages({ keepScroll: true });
+}
+async function react(m, emoji) {
+  const me = state.me.id, chatId = m.conversation_id;
+  const prev = state.reactions.get(m.id)?.get(me) || null;
+  const next = prev === emoji ? null : emoji;
+  setReaction(m.id, me, next);                             // сразу показываем, не дожидаясь сервера
+  if (state.activeId === chatId) renderMessages({ keepScroll: true });
+  if (next) navigator.vibrate?.(10);
+  try {
+    if (!next) {
+      const { error } = await sb.from('reactions').delete().eq('message_id', m.id).eq('user_id', me);
+      if (error) throw error;
+    } else {
+      const kv = currentVersion(chatId);
+      const { ct, iv } = await E2E.sealJson(chatKey(chatId, kv), { e: next }, reactAad(m.id, me));
+      const { error } = await sb.from('reactions').upsert({ message_id: m.id, conversation_id: chatId, user_id: me, ct, iv, kv }, { onConflict: 'message_id,user_id' });
+      if (error) throw error;
+    }
+  } catch (err) {
+    setReaction(m.id, me, prev);
+    if (state.activeId === chatId) renderMessages({ keepScroll: true });
+    toast(/reactions|relation|does not exist/i.test(err.message || '') ? 'Реакции заработают после обновления базы' : humanError(err));
+  }
+}
+function reactionChips(m) {
+  const mp = state.reactions.get(m.id);
+  if (!mp || !mp.size) return null;
+  const counts = new Map();
+  for (const [uid, e] of mp) { if (!counts.has(e)) counts.set(e, []); counts.get(e).push(uid); }
+  const mine = mp.get(state.me.id);
+  return h('div', { class: 'reactions' }, ...[...counts].sort((a, b) => b[1].length - a[1].length).map(([e, who]) =>
+    h('button', { type: 'button', class: 'rx' + (e === mine ? ' mine' : ''), title: who.map(nameOf).join(', '),
+      onclick: (ev) => { ev.stopPropagation(); react(m, e); } }, h('span', { class: 'rx-e', text: e }), who.length > 1 ? h('span', { class: 'rx-n', text: String(who.length) }) : null)));
+}
+// двойной клик / двойное касание по сообщению — ❤️
+let lastTap = { id: null, t: 0 };
+$('messages').addEventListener('dblclick', (e) => {
+  const el = e.target.closest('.msg[data-id]');
+  if (!el || e.target.closest('button, a, img, .voice-box, .sticker-art')) return;
+  const m = (state.history.get(state.activeId) || []).find((x) => String(x.id) === el.dataset.id);
+  if (m?.p && !m.p.bad) { window.getSelection?.()?.removeAllRanges(); react(m, '❤️'); }
+});
+$('messages').addEventListener('touchend', (e) => {
+  const el = e.target.closest('.msg[data-id]');
+  if (!el || e.target.closest('button, a, img, .voice-box, .sticker-art')) return;
+  const now = Date.now();
+  if (lastTap.id === el.dataset.id && now - lastTap.t < 320) {
+    const m = (state.history.get(state.activeId) || []).find((x) => String(x.id) === el.dataset.id);
+    if (m?.p && !m.p.bad) { e.preventDefault(); react(m, '❤️'); }
+    lastTap = { id: null, t: 0 };
+  } else lastTap = { id: el.dataset.id, t: now };
+}, { passive: false });
 
 /* =====================================================================
    Автоочистка: свои фото и голосовые старше 30 дней убираем с узлов партнёров
@@ -2471,6 +2566,7 @@ function subscribe() {
   const me = state.me.id;
   state.channel = sb.channel('inbox-' + me)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (p) => addMessage(p.new, true))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (p) => onReactionChange(p))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, async (p) => {
       if (p.new?.id) upsertMessage(await decryptMessage({ ...p.new, p: null }));
     })
