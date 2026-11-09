@@ -1194,8 +1194,11 @@ async function loadOlder(chatId, button) {
   box.scrollTop = box.scrollHeight - fromBottom;          // остаёмся на том же месте
 }
 
+const imgPool = new Map();   // ref -> уже загруженный <img> из прошлой отрисовки
 function renderMessages({ keepScroll = false } = {}) {
   const box = $('messages');
+  imgPool.clear();
+  for (const im of box.querySelectorAll('img.msg-img[data-ref]')) if (im.src) imgPool.set(im.dataset.ref, im);
   const c = state.chats.get(state.activeId);
   const list = state.history.get(state.activeId) || [];
   const nodes = [];
@@ -1242,6 +1245,7 @@ function renderMessages({ keepScroll = false } = {}) {
     prev = m;
   }
   const prevTop = box.scrollTop;
+  imgPool.clear();
   box.replaceChildren(...nodes);
   if (firstRender) {
     box.classList.remove('chat-enter'); void box.offsetWidth; box.classList.add('chat-enter');
@@ -1269,7 +1273,10 @@ function bubble(m, { showName, continued, fresh }) {
       h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : 'Фото' })));
   }
   if (p?.img) {
-    const img = h('img', { class: 'msg-img', alt: 'Фото', dataset: {
+    // уже показанное фото переносим в новый пузырь как есть — чтобы оно не мигало при перерисовке
+    const reused = imgPool.get(p.img.path || p.img.hash);
+    if (reused) imgPool.delete(p.img.path || p.img.hash);
+    const img = reused || h('img', { class: 'msg-img', alt: 'Фото', dataset: {
       ref: p.img.path || p.img.hash, path: p.img.path || '', hash: p.img.hash || '', nodes: (p.img.nodes || []).join(','),
       aad: p.img.a === 2 ? 'img|' + m.conversation_id : p.img.path, iv: p.img.iv, mime: p.img.mime || 'image/jpeg', chat: m.conversation_id,
       kv: p.img.kv || m.key_version || 1,
