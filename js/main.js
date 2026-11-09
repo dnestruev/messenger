@@ -237,11 +237,20 @@ function segmented(options, value, onpick) {
 /* =====================================================================
    Люди и аватары
    ===================================================================== */
-const PROFILE_COLUMNS = 'id, username, display_name, avatar_hue, role, frame';
+let PROFILE_COLUMNS = 'id, username, display_name, avatar_hue, role, frame, avatar_path';
+/** Запрос профилей; если база ещё без аватарок (update-8) — повторяем без этой колонки */
+async function selectProfiles(build) {
+  let r = await build(sb.from('profiles').select(PROFILE_COLUMNS));
+  if (r.error && /avatar_path/.test(r.error.message || '')) {
+    PROFILE_COLUMNS = PROFILE_COLUMNS.replace(', avatar_path', '');
+    r = await build(sb.from('profiles').select(PROFILE_COLUMNS));
+  }
+  return r;
+}
 async function loadPeople(ids) {
   const missing = [...new Set(ids)].filter((id) => id && !state.people.has(id));
   if (!missing.length) return;
-  const { data } = await sb.from('profiles').select(PROFILE_COLUMNS).in('id', missing);
+  const { data } = await selectProfiles((q) => q.in('id', missing));
   for (const p of data || []) state.people.set(p.id, p);
 }
 /** Освежить профили всех, кого знаем: имена, роли, рамки меняются без перезапуска. */
@@ -249,10 +258,10 @@ async function refreshPeople() {
   const ids = [...state.people.keys()];
   let changed = false;
   for (let i = 0; i < ids.length; i += 100) {
-    const { data } = await sb.from('profiles').select(PROFILE_COLUMNS).in('id', ids.slice(i, i + 100));
+    const { data } = await selectProfiles((q) => q.in('id', ids.slice(i, i + 100)));
     for (const p of data || []) {
       const old = state.people.get(p.id);
-      if (!old || ['username', 'display_name', 'avatar_hue', 'role', 'frame'].some((k) => old[k] !== p[k])) changed = true;
+      if (!old || ['username', 'display_name', 'avatar_hue', 'role', 'frame', 'avatar_path'].some((k) => old[k] !== p[k])) changed = true;
       state.people.set(p.id, p);
     }
   }
@@ -262,8 +271,13 @@ const nameOf = (id) => { const p = state.people.get(id); return p ? (p.display_n
 const nickOf = (id) => '@' + (state.people.get(id)?.username || '');
 const hueOfUser = (id) => { const p = state.people.get(id) || {}; return p.avatar_hue ?? hueOf(p.username); };
 
-function avatar(label, hue, size = '', badge = null, extra = '') {
-  return h('span', { class: ['avatar', size, extra].filter(Boolean).join(' '), vars: { '--h': hue } }, (label || '?')[0].toUpperCase(),
+const AVATAR_BUCKET = 'avatars';
+const avatarUrl = (path) => (path ? `${SUPABASE_URL}/storage/v1/object/public/${AVATAR_BUCKET}/${path}` : null);
+const photoOf = (id) => avatarUrl(state.people.get(id)?.avatar_path);
+function avatar(label, hue, size = '', badge = null, extra = '', photo = null) {
+  return h('span', { class: ['avatar', size, extra, photo && 'has-photo'].filter(Boolean).join(' '), vars: { '--h': hue } }, (label || '?')[0].toUpperCase(),
+    photo ? h('img', { class: 'avatar-img', src: photo, alt: '', loading: 'lazy', decoding: 'async', draggable: false,
+      onerror: (e) => { e.target.parentNode?.classList.remove('has-photo'); e.target.remove(); } }) : null,
     badge ? h('span', { class: 'badge' }, icon(badge)) : null);
 }
 const roleOf = (id) => state.people.get(id)?.role || null;
@@ -296,13 +310,16 @@ async function loadPerks() {
 }
 /** Имя + значок роли (или галочка официального чата) с обрезкой длинного текста */
 const nameLine = (text, ...after) => h('span', { class: 'name-line' }, h('span', { class: 't', text }), ...after);
-const userAvatar = (id, size) => avatar(nameOf(id), hueOfUser(id), size, null, [roleOf(id), frameOf(id) && 'frame frame-' + frameOf(id)].filter(Boolean).join(' '));
+const userAvatar = (id, size) => avatar(nameOf(id), hueOfUser(id), size, null, [roleOf(id), frameOf(id) && 'frame frame-' + frameOf(id)].filter(Boolean).join(' '), photoOf(id));
 const isStaffMe = () => !!roleOf(state.me.id);
+const isSaved = (c) => !!c && c.id === state.savedId;
 const otherOf = (c) => (c.member_ids || []).find((id) => id !== state.me.id);
-const titleOf = (c) => (c.is_group ? c.title || 'Группа' : nameOf(otherOf(c)));
-const chatAvatar = (c, size) => (c.is_group ? avatar(c.title, hueOf(c.title), size, c.is_official ? 'verified' : 'users') : userAvatar(otherOf(c), size));
+const titleOf = (c) => (isSaved(c) ? 'Избранное' : c.is_group ? c.title || 'Группа' : nameOf(otherOf(c)));
+const savedAvatar = (size) => h('span', { class: ['avatar', 'saved-avatar', size].filter(Boolean).join(' ') }, icon('bookmark'));
+const chatAvatar = (c, size) => (isSaved(c) ? savedAvatar(size)
+  : c.is_group ? avatar(c.title, hueOf(c.title), size, c.is_official ? 'verified' : 'users') : userAvatar(otherOf(c), size));
 function verifiedIcon() { const v = icon('verified'); v.setAttribute('class', 'i verified'); return v; }
-const chatBadge = (c, compact = false) => (c.is_official ? verifiedIcon() : c.is_group ? null : roleBadge(otherOf(c), compact));
+const chatBadge = (c, compact = false) => (c.is_official ? verifiedIcon() : c.is_group || isSaved(c) ? null : roleBadge(otherOf(c), compact));
 /** Почему нельзя писать в чат (или null, если можно) */
 function writeBlock(c) {
   if (c.is_official && !isStaffMe()) return { text: 'Писать в официальный чат может только команда' };
@@ -659,6 +676,7 @@ async function startApp(user) {
   await loadPerks();
   $('chatList').classList.add('list-enter');
   await loadChats();
+  await ensureSaved();
   setTimeout(() => $('chatList').classList.remove('list-enter'), 600);
   clearInterval(state.perksTimer);
   state.perksTimer = setInterval(loadPerks, 2 * 60 * 1000);
@@ -678,7 +696,7 @@ function stopApp() {
   state.activeId = null;
   state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
   state.showArchive = false;
-  clearInterval(state.perksTimer); state.perks.clear(); state.seen.clear();
+  clearInterval(state.perksTimer); state.perks.clear(); state.seen.clear(); state.savedId = null;
   setCompose(null);
   leaveTyping();
   for (const url of state.images.values()) URL.revokeObjectURL(url);
@@ -744,7 +762,7 @@ function previewOf(c) {
 
 function renderChats() {
   const all = [...state.chats.values()].sort((a, b) =>
-    (b.is_official - a.is_official) || ts(b.last_message_at) - ts(a.last_message_at));
+    (b.is_official - a.is_official) || (isSaved(b) - isSaved(a)) || ts(b.last_message_at) - ts(a.last_message_at));
   const archived = all.filter((c) => c.archived);
   if (state.showArchive && !archived.length) state.showArchive = false;
   const items = all.filter((c) => !!c.archived === state.showArchive);
@@ -784,12 +802,84 @@ function renderChats() {
   }));
 }
 
+/* ---------- Аватарка-фото ---------- */
+async function squarePhoto(file, size = 320) {
+  const bmp = await createImageBitmap(file);
+  const side = Math.min(bmp.width, bmp.height);
+  const canvas = h('canvas', { width: size, height: size });
+  canvas.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, size, size);
+  return new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
+}
+async function setAvatarPhoto(file) {
+  const me = state.me.id, p = state.people.get(me);
+  const old = p.avatar_path;
+  let path = null;
+  if (file) {
+    if (!file.type.startsWith('image/')) throw new Error('Нужна картинка');
+    const blob = await squarePhoto(file);
+    path = `${me}/${[...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('')}.jpg`;
+    const { error } = await sb.storage.from(AVATAR_BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: false, cacheControl: '31536000' });
+    if (error) throw error;
+  }
+  const { error } = await sb.from('profiles').update({ avatar_path: path }).eq('id', me);
+  if (error) { if (path) sb.storage.from(AVATAR_BUCKET).remove([path]); throw error; }
+  p.avatar_path = path;
+  if (old) sb.storage.from(AVATAR_BUCKET).remove([old]).catch?.(() => {});
+  renderMe(); renderChats();
+  if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); }
+}
+function photoControls(msg, redraw) {
+  if (!PROFILE_COLUMNS.includes('avatar_path')) return null;   // база ещё без update-8
+  const input = h('input', { type: 'file', accept: 'image/*', hidden: true });
+  const wrap = h('div', { class: 'inline photo-controls' });
+  const draw = () => wrap.replaceChildren(input,
+    h('button', { class: 'btn', type: 'button', onclick: () => input.click() }, icon('camera'), photoOf(state.me.id) ? 'Сменить фото' : 'Поставить фото'),
+    photoOf(state.me.id) ? h('button', { class: 'btn', type: 'button', text: 'Убрать', onclick: async () => {
+      try { await setAvatarPhoto(null); redraw(); draw(); say(msg, 'Фото убрано', 'ok'); } catch (e) { say(msg, humanError(e)); }
+    } }) : null);
+  input.onchange = async () => {
+    const f = input.files[0]; input.value = '';
+    if (!f) return;
+    say(msg, 'Загружаю фото…', 'ok');
+    try { await setAvatarPhoto(f); redraw(); draw(); say(msg, 'Фото поставлено', 'ok'); } catch (e) { say(msg, humanError(e)); }
+  };
+  draw();
+  return wrap;
+}
+
+/** Сохранить сообщение в «Избранное»: копия зашифрована ключом избранного */
+async function saveToFavorites(m) {
+  const target = state.savedId;
+  if (!target) return;
+  try {
+    if (!(await canSend(target))) return;
+    const f = { s: m.sender_id, n: nameOf(m.sender_id) };
+    if (m.p.img) {
+      const src = state.images.get(m.p.img.path || m.p.img.hash);
+      if (!src) return inlineError('Фото ещё не загрузилось — подождите секунду');
+      const blob = await (await fetch(src)).blob();
+      await sendImage(new File([blob], 'photo.jpg', { type: blob.type || 'image/jpeg' }), target, { t: m.p.t || '', f });
+    } else {
+      addMessage(await insertMessage(target, { t: m.p.t, f }));
+    }
+    toast('Сохранено в избранное');
+  } catch (err) { inlineError(sendError(err)); }
+}
+
+/** «Избранное» — чат с самим собой. Создаётся один раз. */
+async function ensureSaved() {
+  const { data, error } = await sb.rpc('get_or_create_saved');
+  if (error || !data) return;                             // база ещё без update-8
+  state.savedId = data;
+  if (!state.chats.has(data)) await loadChats(); else renderChats();
+}
+
 /** Открыть личный чат по нику (из поиска или по ссылке «Поделиться ником») */
 async function openDirectByNick(raw) {
   const q = String(raw || '').trim().toLowerCase().replace(/^@/, '');
   if (!q) return;
   if (q === state.people.get(state.me.id).username) return say('findMsg', 'Это же вы');
-  const { data, error } = await sb.from('profiles').select(PROFILE_COLUMNS).eq('username', q).maybeSingle();
+  const { data, error } = await selectProfiles((x) => x.eq('username', q).maybeSingle());
   if (error) return say('findMsg', humanError(error));
   if (!data) return say('findMsg', `Не нашли @${q} — проверьте ник`);
   state.people.set(data.id, data);
@@ -872,7 +962,7 @@ function renderHeader() {
   const n = (c.member_ids || []).length;
   const members = `${n} ${plural(n, 'участник', 'участника', 'участников')}`;
   $('chatStatus').replaceChildren(icon('lock'),
-    c.is_group ? (c.is_official ? 'Официальный чат · ' + members : members) : nickOf(otherOf(c)));
+    isSaved(c) ? 'Только для вас: заметки и сохранённое' : c.is_group ? (c.is_official ? 'Официальный чат · ' + members : members) : nickOf(otherOf(c)));
 }
 
 function renderComposer() {
@@ -1058,6 +1148,7 @@ function bubble(m, { showName, continued, fresh }) {
   if (showName) {
     el.append(h('div', { class: 'msg-from', vars: { '--h': hueOfUser(m.sender_id) } }, nameLine(nameOf(m.sender_id), roleBadge(m.sender_id))));
   }
+  if (p?.f) el.append(h('div', { class: 'msg-fwd' }, icon('bookmark'), p.f.s === state.me.id ? 'Ваше сообщение' : 'От ' + (state.people.has(p.f.s) ? nameOf(p.f.s) : p.f.n || '…')));
   if (p?.r) {
     el.append(h('button', { class: 'msg-quote', type: 'button', onclick: () => jumpTo(p.r.id) },
       h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : 'Фото' })));
@@ -1125,6 +1216,7 @@ function openMenu(m, x, y) {
   const items = [];
   if (c && !writeBlock(c)) items.push(['reply', 'Ответить', () => setCompose({ mode: 'reply', msg: m })]);
   if (m.p.t) items.push(['copy', 'Копировать', () => navigator.clipboard?.writeText(m.p.t)]);
+  if (state.savedId && m.conversation_id !== state.savedId) items.push(['bookmark', 'В избранное', () => saveToFavorites(m)]);
   if (mine && !m.p.img && c && !writeBlock(c)) items.push(['edit', 'Изменить', () => setCompose({ mode: 'edit', msg: m })]);
   if (mine) items.push(['trash', 'Удалить у всех', () => deleteMessage(m), 'danger']);
   if (!items.length) return;
@@ -1213,6 +1305,14 @@ function openLightbox(src) {
   document.body.append(lb);
 }
 
+/** Короткое всплывающее сообщение внизу экрана */
+function toast(text) {
+  document.querySelector('.toast')?.remove();
+  const t = h('div', { class: 'toast', role: 'status', text });
+  document.body.append(t);
+  setTimeout(() => t.classList.add('out'), 1800);
+  setTimeout(() => t.remove(), 2200);
+}
 function inlineError(text) {
   const box = $('messages');
   box.append(h('div', { class: 'inline-err', text }));
@@ -1339,12 +1439,12 @@ $('fileInput').onchange = async () => {
   for (const f of list) await sendImage(f);
 };
 
-async function sendImage(file) {
-  const chatId = state.activeId;
+async function sendImage(file, target = null, extra = null) {
+  const chatId = target || state.activeId;
   if (!chatId) return;
   if (!file.type.startsWith('image/')) return inlineError('Можно отправлять только картинки');
   if (!(await canSend(chatId))) return;
-  const caption = textArea.value.trim();
+  const caption = extra ? (extra.t || '') : textArea.value.trim();
   $('uploading').hidden = false;
   let uploadedNodes = [], uploadedKey = null;
   try {
@@ -1366,9 +1466,11 @@ async function sendImage(file) {
       if (error) throw error;
     }
     state.images.set(img.path || hash, URL.createObjectURL(blob));
-    const msg = await insertMessage(chatId, { t: caption, img, r: replyRef() });
-    if (caption) { textArea.value = ''; autosize(); }
-    setCompose(null);
+    const msg = await insertMessage(chatId, extra ? { t: caption, img, f: extra.f } : { t: caption, img, r: replyRef() });
+    if (!extra) {
+      if (caption) { textArea.value = ''; autosize(); }
+      setCompose(null);
+    }
     addMessage(msg);
   } catch (err) {
     if (uploadedNodes.length && uploadedKey) net.del(uploadedNodes, uploadedKey);   // не оставляем фото без сообщения
@@ -1644,6 +1746,12 @@ const actionBtn = (label, ic, msg, fn, cls = '') => h('button', { class: 'btn bt
 async function openChatInfo(id) {
   const c = state.chats.get(id);
   if (!c) return;
+  if (isSaved(c)) {
+    openModal({ title: 'Избранное' },
+      h('div', { class: 'profile-head' }, savedAvatar('lg')),
+      h('p', { text: 'Чат только для вас: заметки, ссылки, фото. Сохранить сюда чужое сообщение — долгое нажатие на него → «В избранное». Всё зашифровано, как и остальные чаты.' }));
+    return;
+  }
   if (!c.is_group) {
     const other = otherOf(c);
     await loadPubKeys([other], true);
@@ -1738,7 +1846,7 @@ function openSettings() {
   // Профиль
   const avatarSlot = h('span');
   const name = h('input', { value: p.display_name || '', maxLength: 40, placeholder: 'Имя, которое видят друзья' });
-  const drawAvatar = () => avatarSlot.replaceChildren(avatar(name.value.trim() || p.username, hue, 'lg', null, frameOf(state.me.id) ? 'frame frame-' + frameOf(state.me.id) : ''));
+  const drawAvatar = () => avatarSlot.replaceChildren(avatar(name.value.trim() || p.username, hue, 'lg', null, frameOf(state.me.id) ? 'frame frame-' + frameOf(state.me.id) : '', photoOf(state.me.id)));
   const swatches = h('div', { class: 'swatches' });
   const drawSwatches = () => swatches.replaceChildren(...HUES.map((hh) => h('button', {
     class: 'swatch' + (hh === hue ? ' on' : ''), vars: { '--h': hh }, title: 'Цвет',
@@ -1837,7 +1945,7 @@ function openSettings() {
 
   openModal({ title: 'Настройки' },
     h('div', { class: 'profile-head' }, avatarSlot, h('div', { class: 'name-line' }, roleBadge(state.me.id)), h('div', { class: 'profile-nick', text: '@' + p.username })),
-    section('Профиль', name, swatches, h('button', { class: 'btn btn-primary btn-block', text: 'Сохранить', onclick: async () => {
+    section('Профиль', name, swatches, photoControls(msg, drawAvatar), h('button', { class: 'btn btn-primary btn-block', text: 'Сохранить', onclick: async () => {
       const display_name = name.value.trim() || null;
       const { error } = await sb.from('profiles').update({ display_name, avatar_hue: hue }).eq('id', state.me.id);
       if (error) return say(msg, humanError(error));
