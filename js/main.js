@@ -203,7 +203,10 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installProm
    Окна
    ===================================================================== */
 let modalLocked = false;
-function openModal({ title, locked = false }, ...body) {
+let modalOnClose = null;
+function openModal({ title, locked = false, onClose = null }, ...body) {
+  const prev = modalOnClose; modalOnClose = null; prev?.();
+  modalOnClose = onClose;
   modalLocked = locked;
   const head = h('div', { class: 'modal-head' }, h('h3', { text: title }),
     locked ? null : h('button', { class: 'icon-btn', title: 'Закрыть', onclick: closeModal }, icon('close')));
@@ -212,7 +215,7 @@ function openModal({ title, locked = false }, ...body) {
   $('modalRoot').replaceChildren(overlay);
   return overlay;
 }
-function closeModal() { modalLocked = false; $('modalRoot').replaceChildren(); }
+function closeModal() { modalLocked = false; $('modalRoot').replaceChildren(); const f = modalOnClose; modalOnClose = null; f?.(); }
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   document.querySelector('.lightbox')?.remove();
@@ -803,12 +806,68 @@ function renderChats() {
 }
 
 /* ---------- Аватарка-фото ---------- */
-async function squarePhoto(file, size = 320) {
-  const bmp = await createImageBitmap(file);
-  const side = Math.min(bmp.width, bmp.height);
-  const canvas = h('canvas', { width: size, height: size });
-  canvas.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, size, size);
-  return new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
+const AVATAR_SIZE = 640;
+/** Окно обрезки: двигать пальцем/мышью, приближать щипком, колесом или ползунком. Возвращает JPEG или null. */
+function cropDialog(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = h('img', { class: 'crop-img', alt: '', draggable: false });
+    const view = h('div', { class: 'crop-view' }, img, h('div', { class: 'crop-mask' }));
+    const zoom = h('input', { type: 'range', min: 1, max: 4, step: 0.01, value: 1, class: 'crop-zoom', 'aria-label': 'Приблизить' });
+    let V = 0, W = 0, H = 0, base = 1, s = 1, x = 0, y = 0, done = false;
+    const clamp = () => { x = Math.min(0, Math.max(V - W * s, x)); y = Math.min(0, Math.max(V - H * s, y)); };
+    const draw = () => { clamp(); img.style.transform = `translate(${x}px, ${y}px) scale(${s})`; };
+    const setScale = (next, cx = V / 2, cy = V / 2) => {
+      next = Math.min(base * 4, Math.max(base, next));
+      x = cx - ((cx - x) * next) / s; y = cy - ((cy - y) * next) / s; s = next;
+      zoom.value = String(s / base); draw();
+    };
+    img.onload = () => {
+      V = view.clientWidth; W = img.naturalWidth; H = img.naturalHeight;
+      base = s = V / Math.min(W, H);
+      x = (V - W * s) / 2; y = (V - H * s) / 2;
+      img.style.width = W + 'px'; img.style.height = H + 'px';
+      draw();
+    };
+    img.onerror = () => { finish(null); toast('Не получилось открыть картинку'); };
+    zoom.oninput = () => setScale(base * +zoom.value);
+    view.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const r = view.getBoundingClientRect();
+      setScale(s * (e.deltaY < 0 ? 1.08 : 1 / 1.08), e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+    const pts = new Map();
+    let last = null;
+    view.addEventListener('pointerdown', (e) => { view.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); last = null; });
+    view.addEventListener('pointermove', (e) => {
+      if (!pts.has(e.pointerId)) return;
+      const prev = pts.get(e.pointerId);
+      pts.set(e.pointerId, [e.clientX, e.clientY]);
+      if (pts.size === 1) { x += e.clientX - prev[0]; y += e.clientY - prev[1]; draw(); return; }
+      const [a, b] = [...pts.values()];
+      const dist = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const r = view.getBoundingClientRect();
+      if (last) setScale(s * (dist / last), (a[0] + b[0]) / 2 - r.left, (a[1] + b[1]) / 2 - r.top);
+      last = dist;
+    });
+    const up = (e) => { pts.delete(e.pointerId); last = null; };
+    view.addEventListener('pointerup', up);
+    view.addEventListener('pointercancel', up);
+
+    const finish = (blob) => { if (done) return; done = true; URL.revokeObjectURL(url); modalOnClose = null; closeModal(); resolve(blob); };
+    const ok = h('button', { class: 'btn btn-primary btn-block', text: 'Готово', onclick: () => {
+      const c = h('canvas', { width: AVATAR_SIZE, height: AVATAR_SIZE });
+      const side = V / s;
+      c.getContext('2d').drawImage(img, -x / s, -y / s, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
+      c.toBlob((b) => finish(b), 'image/jpeg', 0.85);
+    } });
+    openModal({ title: 'Обрезать фото', onClose: () => finish(null) },
+      view,
+      h('div', { class: 'crop-row' }, h('span', { class: 'muted', text: '−' }), zoom, h('span', { class: 'muted', text: '+' })),
+      h('p', { class: 'muted crop-hint', text: 'Двигайте фото пальцем, приближайте щипком или ползунком' }),
+      ok);
+    img.src = url;
+  });
 }
 async function setAvatarPhoto(file) {
   const me = state.me.id, p = state.people.get(me);
@@ -816,7 +875,8 @@ async function setAvatarPhoto(file) {
   let path = null;
   if (file) {
     if (!file.type.startsWith('image/')) throw new Error('Нужна картинка');
-    const blob = await squarePhoto(file);
+    const blob = await cropDialog(file);
+    if (!blob) return false;                              // передумали
     path = `${me}/${[...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('')}.jpg`;
     const { error } = await sb.storage.from(AVATAR_BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: false, cacheControl: '31536000' });
     if (error) throw error;
@@ -840,8 +900,11 @@ function photoControls(msg, redraw) {
   input.onchange = async () => {
     const f = input.files[0]; input.value = '';
     if (!f) return;
-    say(msg, 'Загружаю фото…', 'ok');
-    try { await setAvatarPhoto(f); redraw(); draw(); say(msg, 'Фото поставлено', 'ok'); } catch (e) { say(msg, humanError(e)); }
+    try {
+      const changed = await setAvatarPhoto(f);            // окно обрезки заменяет настройки — потом открываем их снова
+      openSettings();
+      if (changed !== false) toast('Фото поставлено');
+    } catch (e) { openSettings(); toast(humanError(e)); }
   };
   draw();
   return wrap;
@@ -1300,9 +1363,18 @@ function resolveImages(root) {
   }
 }
 
-function openLightbox(src) {
-  const lb = h('div', { class: 'lightbox', onclick: () => lb.remove() }, h('img', { src, alt: '' }));
+function openLightbox(src, round = false) {
+  const lb = h('div', { class: 'lightbox', onclick: () => lb.remove() }, h('img', { src, alt: '', class: round ? 'round' : '' }));
   document.body.append(lb);
+}
+/** Большая аватарка: нажать — посмотреть фото целиком */
+function zoomAvatar(el, id) {
+  const src = photoOf(id);
+  if (!src) return el;
+  el.classList.add('zoomable');
+  el.title = 'Посмотреть фото';
+  el.addEventListener('click', (e) => { e.stopPropagation(); openLightbox(src, true); });
+  return el;
 }
 
 /** Короткое всплывающее сообщение внизу экрана */
@@ -1762,7 +1834,7 @@ async function openChatInfo(id) {
     const msg = note();
     const blocked = state.blocked.has(other);
     openModal({ title: 'Профиль' },
-      h('div', { class: 'profile-head' }, userAvatar(other, 'lg'),
+      h('div', { class: 'profile-head' }, zoomAvatar(userAvatar(other, 'lg'), other),
         h('div', { class: 'profile-name' }, nameLine(nameOf(other), roleBadge(other))), h('div', { class: 'profile-nick', text: nickOf(other) })),
       section('Код безопасности', codeBox,
         h('p', { text: 'Сравните с кодом на телефоне друга — при встрече или по звонку. Совпадает — значит, переписку никто не подменяет.' })),
@@ -1846,7 +1918,7 @@ function openSettings() {
   // Профиль
   const avatarSlot = h('span');
   const name = h('input', { value: p.display_name || '', maxLength: 40, placeholder: 'Имя, которое видят друзья' });
-  const drawAvatar = () => avatarSlot.replaceChildren(avatar(name.value.trim() || p.username, hue, 'lg', null, frameOf(state.me.id) ? 'frame frame-' + frameOf(state.me.id) : '', photoOf(state.me.id)));
+  const drawAvatar = () => avatarSlot.replaceChildren(zoomAvatar(avatar(name.value.trim() || p.username, hue, 'lg', null, frameOf(state.me.id) ? 'frame frame-' + frameOf(state.me.id) : '', photoOf(state.me.id)), state.me.id));
   const swatches = h('div', { class: 'swatches' });
   const drawSwatches = () => swatches.replaceChildren(...HUES.map((hh) => h('button', {
     class: 'swatch' + (hh === hue ? ' on' : ''), vars: { '--h': hh }, title: 'Цвет',

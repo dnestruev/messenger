@@ -872,3 +872,18 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 }
 .toast.out { opacity: 0; transform: translate(-50%, 8px); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 14px) scale(.9); } }
+
+/* ---------- Обрезка аватарки ---------- */
+.crop-view {
+  position: relative; width: min(300px, 100%); aspect-ratio: 1; margin: 0 auto;
+  overflow: hidden; border-radius: var(--radius); background: #000;
+  touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none;
+}
+.crop-view:active { cursor: grabbing; }
+.crop-img { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; pointer-events: none; }
+.crop-mask { position: absolute; inset: 0; pointer-events: none; border-radius: 50%; box-shadow: 0 0 0 999px rgba(0, 0, 0, .55); outline: 2px solid rgba(255, 255, 255, .85); outline-offset: -2px; }
+.crop-row { display: flex; align-items: center; gap: 10px; }
+.crop-zoom { flex: 1; accent-color: var(--accent); }
+.crop-hint { margin: 0; text-align: center; font-size: 13px; }
+.avatar.zoomable { cursor: zoom-in; }
+.lightbox img.round { border-radius: 50%; max-width: min(90vw, 640px); max-height: min(80vh, 640px); }
