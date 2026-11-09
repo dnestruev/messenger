@@ -1853,6 +1853,7 @@ function openSettings() {
     onclick: () => { hue = hh; drawSwatches(); drawAvatar(); },
   })));
   name.oninput = drawAvatar;
+  state.redrawProfileAvatar = drawAvatar;
   drawAvatar(); drawSwatches();
 
   // Приложение
@@ -2030,10 +2031,11 @@ function perksSection(msg) {
         const { error } = await sb.from('profiles').update({ frame: f }).eq('id', me);
         if (error) return say(msg, humanError(error));
         state.people.get(me).frame = f;
-        drawFrames(); renderMe(); renderChats();
+        drawFrames(); renderMe(); renderChats(); state.redrawProfileAvatar?.();
+        if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); }
         say(msg, f ? 'Рамка «' + label + '» включена' : 'Рамка убрана', 'ok');
       },
-    }, avatar(nameOf(me), hueOfUser(me), 'xs', null, f ? 'frame frame-' + f : ''), h('small', { text: label }))));
+    }, avatar(nameOf(me), hueOfUser(me), 'xs', null, f ? 'frame frame-' + f : '', photoOf(me)), h('small', { text: label }))));
     drawFrames();
 
     // Акцент
