@@ -943,3 +943,61 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .voice-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; opacity: .8; }
 .voice-time { font-variant-numeric: tabular-nums; }
 .voice-speed { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: rgba(127, 127, 127, .2); }
+
+/* =====================================================================
+   Звонки
+   ===================================================================== */
+.chat-top .call-btn { flex-shrink: 0; }
+.chat-top .call-btn[hidden] { display: none; }
+.avatar.xl { --size: 112px; }
+.call-screen {
+  position: fixed; top: 0; left: 0; right: 0; height: 100%; height: var(--app-h, 100%); z-index: 50;
+  display: grid; grid-template-rows: 1fr auto; place-items: center;
+  padding: max(24px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
+  background: radial-gradient(120% 80% at 50% 20%, hsl(230 40% 22%), #07070c 70%);
+  color: #fff; overflow: hidden;
+  animation: call-in .35s var(--ease-out);
+}
+@keyframes call-in { from { opacity: 0; transform: scale(1.04); } }
+.call-screen.ending { animation: call-out .8s ease forwards; }
+@keyframes call-out { 60% { opacity: 1; } to { opacity: 0; } }
+.call-remote { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .4s; background: #000; }
+.call-screen.remote-video .call-remote { opacity: 1; }
+.call-peer { position: relative; display: grid; justify-items: center; gap: 12px; text-align: center; transition: opacity .3s; }
+.call-screen.remote-video .call-peer { align-self: start; justify-self: start; grid-auto-flow: column; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; border-radius: 999px; background: rgba(0, 0, 0, .35); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.call-screen.remote-video .call-peer .avatar { --size: 36px; }
+.call-screen:not(.remote-video) .call-peer .avatar { animation: call-pulse 2s ease-in-out infinite; }
+@keyframes call-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, .25); } 50% { box-shadow: 0 0 0 18px rgba(255, 255, 255, 0); } }
+.call-name { font-size: 24px; font-weight: 600; }
+.call-screen.remote-video .call-name { font-size: 15px; }
+.call-status { color: rgba(255, 255, 255, .75); font-size: 15px; font-variant-numeric: tabular-nums; }
+.call-screen.remote-video .call-status { font-size: 13px; }
+.call-local {
+  position: absolute; right: 14px; top: max(14px, env(safe-area-inset-top)); width: 28vw; max-width: 160px; aspect-ratio: 3 / 4;
+  object-fit: cover; border-radius: 14px; background: #111; transform: scaleX(-1); display: none;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .5);
+}
+.call-screen.local-video .call-local { display: block; }
+.call-controls { position: relative; display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; }
+.call-ctl { display: grid; justify-items: center; gap: 6px; color: #fff; }
+.call-ctl small { font-size: 12px; opacity: .85; }
+.call-ctl-ic { width: 62px; height: 62px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .16); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); transition: transform .15s var(--spring), background .2s; }
+.call-ctl:active .call-ctl-ic { transform: scale(.9); }
+.call-ctl .i { width: 26px; height: 26px; }
+.call-ctl.off .call-ctl-ic { background: #fff; color: #111; }
+.call-ctl.decline .call-ctl-ic { background: #e5484d; }
+.call-ctl.decline .i { transform: rotate(135deg); }
+.call-ctl.accept .call-ctl-ic { background: #30a46c; animation: accept-bounce 1.4s ease-in-out infinite; }
+@keyframes accept-bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+
+/* запись о звонке в чате */
+.call-box { display: flex; align-items: center; gap: 10px; min-width: 200px; }
+.call-box-ic { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: rgba(127, 127, 127, .18); flex-shrink: 0; }
+.call-box.bad .call-box-ic { color: var(--danger); }
+.msg.mine .call-box.bad .call-box-ic { color: inherit; }
+.call-box .row-text { flex: 1; min-width: 0; }
+.call-box .row-text small { opacity: .75; }
+.call-again { min-height: 34px; width: 38px; padding: 0; display: grid; place-items: center; border-radius: 50%; }
+.msg.mine .call-again { background: rgba(255, 255, 255, .2); color: inherit; }
+.msg.mine .call-box .row-text small { color: inherit; opacity: .8; }
+.msg.mine .call-box-ic { background: rgba(255, 255, 255, .2); }
