@@ -1,12 +1,12 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109202453';
-import * as CONFIG from '../config.js?v=20261109202453';
-import * as E2E from './crypto.js?v=20261109202453';
-import { createNet } from './net.js?v=20261109202453';
-import { qrSvg } from './qr.js?v=20261109202453';
-import { findEmbed } from './embeds.js?v=20261109202453';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109202453';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109202453';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109205600';
+import * as CONFIG from '../config.js?v=20261109205600';
+import * as E2E from './crypto.js?v=20261109205600';
+import { createNet } from './net.js?v=20261109205600';
+import { qrSvg } from './qr.js?v=20261109205600';
+import { findEmbed } from './embeds.js?v=20261109205600';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109205600';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109205600';
 
 /* =====================================================================
    Утилиты
@@ -1174,6 +1174,10 @@ function showPlaceholder() {
   $('chatTitle').textContent = '';
   $('chatStatus').replaceChildren();
   $('chatAvatar').replaceChildren();
+  for (const b of ['searchBtn', 'callAudioBtn', 'callVideoBtn']) $(b).hidden = true;
+  closeSearch(); closeStickers();
+  if (rec) stopVoice(false);
+  $('jumpDown')?.classList.remove('show');
 }
 
 function renderHeader() {
@@ -1323,7 +1327,7 @@ async function loadOlder(chatId, button) {
 
 const imgPool = new Map();   // ref -> уже загруженный <img> из прошлой отрисовки
 const embedPool = new Map(); // id сообщения -> уже открытый плеер (не перезагружаем при перерисовке)
-function renderMessages({ keepScroll = false } = {}) {
+function renderMessages({ keepScroll = false, toBottom = false } = {}) {
   const box = $('messages');
   imgPool.clear();
   embedPool.clear();
@@ -1375,6 +1379,7 @@ function renderMessages({ keepScroll = false } = {}) {
     prev = m;
   }
   const prevTop = box.scrollTop;
+  const wasNearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 150;
   imgPool.clear();
   box.replaceChildren(...nodes);
   if (!$('searchBar').hidden && search.hits.length) requestAnimationFrame(() => { clearSearchMarks(); showHitQuiet(); });
@@ -1383,7 +1388,11 @@ function renderMessages({ keepScroll = false } = {}) {
     clearTimeout(box.enterT); box.enterT = setTimeout(() => box.classList.remove('chat-enter'), 450);
   }
   resolveImages(box);
-  box.scrollTop = keepScroll ? prevTop : box.scrollHeight;
+  // Вниз — только при открытии чата, своём новом сообщении или если и так были внизу.
+  // Иначе (читают, правят, пришла реакция, итог звонка) лента остаётся на месте.
+  const stick = firstRender || toBottom || (!keepScroll && wasNearBottom);
+  box.scrollTop = stick ? box.scrollHeight : prevTop;
+  updateJumpDown();
 }
 
 function bubble(m, { showName, continued, fresh }) {
@@ -1457,6 +1466,17 @@ function isReadByOthers(m) {
   return false;
 }
 
+/** Кнопка «вниз», когда пролистал вверх */
+function updateJumpDown() {
+  const box = $('messages');
+  let btn = $('jumpDown');
+  if (!btn) {
+    btn = h('button', { type: 'button', id: 'jumpDown', class: 'jump-down', title: 'Вниз', onclick: () => box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' }) }, icon('back'));
+    box.parentElement.append(btn);
+    box.addEventListener('scroll', updateJumpDown, { passive: true });
+  }
+  btn.classList.toggle('show', !box.hidden && box.scrollHeight - box.scrollTop - box.clientHeight > 400);
+}
 function jumpTo(id) {
   const el = $('messages').querySelector(`[data-id="${id}"]`);
   if (!el) return;
@@ -2466,6 +2486,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   if (!cur) return;
   call = null;
   clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer);
+  cur.unfit?.();
   stopTone();
   navigator.vibrate?.(0);
   cur.local?.getTracks().forEach((t) => t.stop());
@@ -2516,6 +2537,7 @@ function showCallUi() {
   remote.addEventListener('resize', fit);
   remote.addEventListener('loadedmetadata', fit);
   addEventListener('resize', fit);
+  cur.unfit = () => removeEventListener('resize', fit);
   remote.addEventListener('dblclick', () => { root.dataset.fill = '1'; root.classList.toggle('fit-contain'); });
   cur.ui = { root, remote, local, status, controls };
   document.body.append(root);
@@ -2913,7 +2935,7 @@ async function addMessage(m, fromServer = false) {
 
   const visible = c.id === state.activeId && !document.hidden;
   if (c.id === state.activeId) {
-    if (hist) renderMessages();
+    if (hist) renderMessages({ toBottom: isNew && m.sender_id === state.me.id });
     if (m.sender_id !== state.me.id) markRead(c.id);
   }
   if (fromServer && isNew && m.sender_id !== state.me.id && !visible && prefs.sound && !state.blocked.has(m.sender_id)) ding();

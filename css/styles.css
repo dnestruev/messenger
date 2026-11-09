@@ -1103,3 +1103,13 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .embed-open { margin-top: 6px; width: min(360px, 74vw); border-radius: 12px; overflow: hidden; background: #000; animation: fade-up .25s var(--ease-out); }
 .embed-open iframe { display: block; width: 100%; border: 0; }
 .msg:has(.embed-open) { max-width: min(380px, 86%); }
+.jump-down {
+  position: absolute; right: 16px; bottom: 84px; z-index: 4; width: 42px; height: 42px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--surface); color: var(--text);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .18), 0 0 0 1px var(--line);
+  opacity: 0; transform: translateY(10px) scale(.9); pointer-events: none; transition: opacity .2s, transform .2s var(--spring);
+}
+.jump-down.show { opacity: 1; transform: none; pointer-events: auto; }
+.jump-down .i { transform: rotate(-90deg); }
+.chat { position: relative; }
+.chat:has(.sticker-panel:not([hidden])) .jump-down, .chat:has(.composer.recording) .jump-down { display: none; }
