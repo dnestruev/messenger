@@ -86,7 +86,10 @@ export async function sealBackup(privateJwk, code) {
 
 /** Бросает ошибку, если код неверный. */
 export async function openBackup(backup, code) {
-  const key = await keyFromCode(code, b64.dec(backup.salt), backup.iter);
+  if (!backup || backup.v !== 1 || !Number.isSafeInteger(backup.iter) || backup.iter < 100000 || backup.iter > 2000000) throw new Error('Invalid backup parameters');
+  const salt = b64.dec(backup.salt), iv = b64.dec(backup.iv), ct = b64.dec(backup.ct);
+  if (salt.length !== 16 || iv.length !== 12 || ct.length < 16 || ct.length > 65536) throw new Error('Invalid backup data');
+  const key = await keyFromCode(code, salt, backup.iter);
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64.dec(backup.iv) }, key, b64.dec(backup.ct));
   return JSON.parse(td.decode(pt));
 }
