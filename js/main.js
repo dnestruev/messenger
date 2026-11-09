@@ -3,6 +3,7 @@ import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js';
 import * as E2E from './crypto.js';
 import { createNet } from './net.js';
 import { qrSvg } from './qr.js';
+import { renderMarkdown, stripMarkdown } from './md.js';
 
 /* =====================================================================
    Утилиты
@@ -731,7 +732,8 @@ function previewText(p) {
   if (!p) return 'Зашифровано';
   if (p.missing) return 'Сообщение недоступно';
   if (p.bad) return 'Не удалось расшифровать';
-  return p.img ? 'Фото' + (p.t ? ': ' + p.t : '') : p.t;
+  const t = p.t ? stripMarkdown(p.t) : p.t;
+  return p.img ? 'Фото' + (t ? ': ' + t : '') : t;
 }
 function previewOf(c) {
   if (!c.last_sender) return c.is_group ? (c.is_official ? 'Официальный чат' : 'Группа создана') : 'Новый чат';
@@ -1058,7 +1060,7 @@ function bubble(m, { showName, continued, fresh }) {
   }
   if (p?.r) {
     el.append(h('button', { class: 'msg-quote', type: 'button', onclick: () => jumpTo(p.r.id) },
-      h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t || 'Фото' })));
+      h('b', { text: nameOf(p.r.s) }), h('span', { text: p.r.t ? stripMarkdown(p.r.t) : 'Фото' })));
   }
   if (p?.img) {
     const img = h('img', { class: 'msg-img', alt: 'Фото', dataset: {
@@ -1073,7 +1075,7 @@ function bubble(m, { showName, continued, fresh }) {
   const text = !p ? 'Сообщение ещё не расшифровано'
     : p.missing ? 'Сообщение сейчас недоступно: узлы сети не отвечают'
     : p.bad ? 'Не удалось расшифровать' : p.t;
-  if (text) el.append(h('div', { class: 'msg-text', text }));
+  if (text) el.append(p?.t && text === p.t ? h('div', { class: 'msg-text md' }, renderMarkdown(text)) : h('div', { class: 'msg-text', text }));
   if (m.sigOk === false) el.append(h('div', { class: 'msg-forged' }, icon('warn'), 'Подпись не совпадает — возможна подделка'));
 
   const meta = h('span', { class: 'msg-meta' });
@@ -1172,7 +1174,7 @@ function setCompose(next) {
   const p = next.msg.p;
   setIcon($('composeBar'), next.mode === 'edit' ? 'edit' : 'reply');
   $('composeTitle').textContent = next.mode === 'edit' ? 'Изменение' : 'Ответ ' + nameOf(next.msg.sender_id);
-  $('composeText').textContent = p.t || 'Фото';
+  $('composeText').textContent = p.t ? stripMarkdown(p.t) : 'Фото';
   $('composeBar').hidden = false;
   if (next.mode === 'edit') { textArea.value = p.t || ''; autosize(); }
   textArea.focus();
@@ -1227,7 +1229,22 @@ function autosize() {
 }
 textArea.addEventListener('input', () => { autosize(); if (textArea.value) sendTyping(); });
 $('composeCancel').onclick = () => setCompose(null);
+/** Ctrl/⌘ + B, I, U, E, Shift+X, Shift+P — обернуть выделенный текст разметкой */
+const MD_KEYS = { b: '**', i: '*', u: '__', e: '`', X: '~~', P: '||' };
+function wrapSelection(mark) {
+  const { selectionStart: a, selectionEnd: b, value } = textArea;
+  const sel = value.slice(a, b);
+  textArea.setRangeText(mark + sel + mark, a, b, 'end');
+  if (!sel) textArea.setSelectionRange(a + mark.length, a + mark.length);
+  else textArea.setSelectionRange(a + mark.length, b + mark.length);
+  textArea.dispatchEvent(new Event('input'));
+}
 textArea.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    const k = e.shiftKey ? e.key.toUpperCase() : e.key.toLowerCase();
+    const mark = (e.shiftKey ? { X: MD_KEYS.X, P: MD_KEYS.P } : { b: MD_KEYS.b, i: MD_KEYS.i, u: MD_KEYS.u, e: MD_KEYS.e })[k];
+    if (mark) { e.preventDefault(); wrapSelection(mark); return; }
+  }
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && isDesktop()) { e.preventDefault(); const f = $('composer'); f.requestSubmit ? f.requestSubmit() : f.dispatchEvent(new Event('submit', { cancelable: true })); }
 });
 textArea.addEventListener('paste', (e) => {
@@ -1837,6 +1854,11 @@ function openSettings() {
       pushBlock(standalone, pushToggle, msg),
       h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('b', { text: 'Звук' }), h('small', { text: 'Когда приложение открыто' })),
         toggle(prefs.sound, (e) => { prefs.sound = e.target.checked; savePrefs(); if (prefs.sound) ding(); }))),
+    section('Как оформлять текст', h('div', { class: 'md-help' }, ...[
+      ['**жирный**'], ['*курсив*'], ['__подчёркнутый__'], ['~~зачёркнутый~~'], ['||спойлер||'], ['`код`'],
+      ['> цитата'], ['- список'], ['[ссылка](https://example.com)'],
+    ].map(([src]) => h('div', { class: 'md-help-row' }, h('code', { text: src }), h('div', { class: 'md' }, renderMarkdown(src))))),
+      isDesktop() ? h('p', { class: 'muted', text: 'Горячие клавиши: Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+E (код), Ctrl+Shift+X (зачеркнуть), Ctrl+Shift+P (спойлер).' }) : null),
     section('Приложение', appBlock),
     teamSection,
     section('Шифрование',
