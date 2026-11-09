@@ -1,11 +1,11 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109195453';
-import * as CONFIG from '../config.js?v=20261109195453';
-import * as E2E from './crypto.js?v=20261109195453';
-import { createNet } from './net.js?v=20261109195453';
-import { qrSvg } from './qr.js?v=20261109195453';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109195453';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261109195453';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109200259';
+import * as CONFIG from '../config.js?v=20261109200259';
+import * as E2E from './crypto.js?v=20261109200259';
+import { createNet } from './net.js?v=20261109200259';
+import { qrSvg } from './qr.js?v=20261109200259';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261109200259';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109200259';
 
 /* =====================================================================
    Утилиты
@@ -886,7 +886,9 @@ function renderChats() {
     (b.is_official - a.is_official) || (isSaved(b) - isSaved(a)) || ts(b.last_message_at) - ts(a.last_message_at));
   const archived = all.filter((c) => c.archived);
   if (state.showArchive && !archived.length) state.showArchive = false;
-  const items = all.filter((c) => !!c.archived === state.showArchive);
+  const q = normSearch($('findInput').value.replace(/^@/, ''));
+  const items = all.filter((c) => (q ? true : !!c.archived === state.showArchive)
+    && (!q || normSearch(titleOf(c)).includes(q) || (!c.is_group && !isSaved(c) && normSearch(state.people.get(otherOf(c))?.username || '').includes(q))));
   const unread = all.filter((c) => !c.archived && isUnread(c)).length;
   $('listLabel').textContent = state.showArchive ? 'Архив' : 'Чаты';
   document.title = unread ? `(${unread}) Мессенджер` : 'Мессенджер';
@@ -1172,6 +1174,7 @@ function renderHeader() {
   if (!c) return;
   const canCall = !c.is_group && !isSaved(c) && !writeBlock(c) && !!window.RTCPeerConnection;
   $('callAudioBtn').hidden = !canCall;
+  $('searchBtn').hidden = false;
   $('callVideoBtn').hidden = !canCall;
   $('chatTitle').replaceChildren(nameLine(titleOf(c), chatBadge(c)));
   $('chatAvatar').replaceChildren(chatAvatar(c, 'sm'));
@@ -1237,6 +1240,7 @@ async function openChat(id) {
   state.seen.delete(id);                                  // при открытии — без анимации каждого пузыря
   if (rec && rec.chat !== id) stopVoice(false);
   closeStickers();
+  closeSearch();
   if (!state.chats.has(id)) await loadChats();
   if (!state.chats.has(id)) return;
   if (state.activeId !== id) setCompose(null);
@@ -1363,6 +1367,7 @@ function renderMessages({ keepScroll = false } = {}) {
   const prevTop = box.scrollTop;
   imgPool.clear();
   box.replaceChildren(...nodes);
+  if (!$('searchBar').hidden && search.hits.length) requestAnimationFrame(() => { clearSearchMarks(); showHitQuiet(); });
   if (firstRender) {
     box.classList.remove('chat-enter'); void box.offsetWidth; box.classList.add('chat-enter');
     clearTimeout(box.enterT); box.enterT = setTimeout(() => box.classList.remove('chat-enter'), 450);
@@ -1767,6 +1772,115 @@ async function shrinkImage(file) {
   return { blob, type: 'image/jpeg', w: canvas.width, h: canvas.height };
 }
 
+
+/* =====================================================================
+   Поиск. Идёт прямо на устройстве: сервер не видит текст, искать там нечего.
+   ===================================================================== */
+const normSearch = (t) => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+$('findInput').addEventListener('input', () => renderChats());
+const search = { hits: [], i: -1, q: '' };
+function msgSearchText(m) {
+  const p = m.p;
+  if (!p || p.bad || p.missing) return '';
+  return normSearch([p.t ? stripMarkdown(p.t) : '', p.st ? stickerLabel(p.st) : ''].join(' '));
+}
+function openSearch() {
+  $('searchBar').hidden = false;
+  $('searchInput').value = search.q || '';
+  $('searchInput').focus();
+  runSearch();
+}
+function closeSearch() {
+  $('searchBar').hidden = true;
+  search.hits = []; search.i = -1;
+  clearSearchMarks();
+  $('searchCount').textContent = '';
+}
+function clearSearchMarks() {
+  try { CSS.highlights?.delete('search'); } catch {}
+  for (const el of $('messages').querySelectorAll('.msg.search-hit')) el.classList.remove('search-hit', 'search-cur');
+}
+function runSearch(keepIndex = false) {
+  const q = normSearch($('searchInput').value);
+  search.q = $('searchInput').value;
+  clearSearchMarks();
+  if (q.length < 2) { search.hits = []; search.i = -1; $('searchCount').textContent = q ? 'от 2 букв' : ''; return; }
+  const list = state.history.get(state.activeId) || [];
+  const prevId = search.hits[search.i];
+  search.hits = list.filter((m) => msgSearchText(m).includes(q)).map((m) => m.id);
+  if (!search.hits.length) {
+    search.i = -1;
+    $('searchCount').replaceChildren(state.more.get(state.activeId)
+      ? h('button', { type: 'button', class: 'link-btn', text: 'Не найдено · искать в старых', onclick: searchDeeper })
+      : 'Не найдено');
+    return;
+  }
+  search.i = keepIndex && search.hits.includes(prevId) ? search.hits.indexOf(prevId) : search.hits.length - 1;   // начинаем с самого нового
+  showHit();
+}
+function showHit() {
+  const n = search.hits.length;
+  $('searchCount').replaceChildren(`${search.i + 1} из ${n}`,
+    state.more.get(state.activeId) ? h('button', { type: 'button', class: 'link-btn', text: ' · ещё', title: 'Искать в старых сообщениях', onclick: searchDeeper }) : '');
+  const box = $('messages');
+  const q = normSearch($('searchInput').value);
+  const ranges = [];
+  for (const id of search.hits) {
+    const el = box.querySelector(`.msg[data-id="${CSS.escape(String(id))}"]`);
+    if (!el) continue;
+    el.classList.add('search-hit');
+    // подсветка самих слов (где браузер умеет CSS Highlight)
+    if (window.Highlight && CSS.highlights) {
+      const walker = document.createTreeWalker(el.querySelector('.msg-text') || el, NodeFilter.SHOW_TEXT);
+      for (let node; (node = walker.nextNode());) {
+        const text = node.data.toLowerCase().replace(/ё/g, 'е');
+        for (let at = text.indexOf(q); at !== -1; at = text.indexOf(q, at + q.length)) {
+          const r = new Range(); r.setStart(node, at); r.setEnd(node, at + q.length); ranges.push(r);
+        }
+      }
+    }
+  }
+  try { if (ranges.length) CSS.highlights.set('search', new Highlight(...ranges)); } catch {}
+  const cur = box.querySelector(`.msg[data-id="${CSS.escape(String(search.hits[search.i]))}"]`);
+  if (cur) { cur.classList.add('search-cur'); cur.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+}
+/** После перерисовки ленты вернуть подсветку, не прокручивая */
+function showHitQuiet() {
+  const box = $('messages');
+  for (const id of search.hits) box.querySelector(`.msg[data-id="${CSS.escape(String(id))}"]`)?.classList.add('search-hit');
+  box.querySelector(`.msg[data-id="${CSS.escape(String(search.hits[search.i]))}"]`)?.classList.add('search-cur');
+}
+function stepSearch(dir) {
+  if (!search.hits.length) return;
+  search.i = (search.i + dir + search.hits.length) % search.hits.length;
+  for (const el of $('messages').querySelectorAll('.msg.search-cur')) el.classList.remove('search-cur');
+  showHit();
+}
+/** Догрузить старые сообщения (до 10 страниц) и искать снова */
+async function searchDeeper() {
+  const chatId = state.activeId;
+  $('searchCount').textContent = 'Ищу в старых…';
+  for (let k = 0; k < 10 && state.more.get(chatId) && state.activeId === chatId; k++) {
+    const btn = h('button');
+    await loadOlder(chatId, btn);
+    const q = normSearch($('searchInput').value);
+    if ((state.history.get(chatId) || []).some((m) => msgSearchText(m).includes(q))) break;
+  }
+  if (state.activeId === chatId) runSearch(true);
+}
+let searchTimer = null;
+$('searchInput').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(), 150); });
+$('searchInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); stepSearch(e.shiftKey ? 1 : -1); }
+  if (e.key === 'Escape') { e.stopPropagation(); closeSearch(); }
+});
+$('searchUp').onclick = () => stepSearch(-1);
+$('searchDown').onclick = () => stepSearch(1);
+$('searchClose').onclick = closeSearch;
+$('searchBtn').onclick = () => ($('searchBar').hidden ? openSearch() : closeSearch());
+addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && state.activeId && !$('modalRoot').children.length) { e.preventDefault(); openSearch(); }
+});
 
 /* =====================================================================
    Реакции. Эмодзи шифруется ключом чата — сервер не знает, чем отреагировали.

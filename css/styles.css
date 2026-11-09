@@ -1061,3 +1061,17 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .menu-react button { width: 38px; height: 38px; display: grid; place-items: center; font-size: 22px; border-radius: 10px; transition: transform .15s var(--spring), background .15s; }
 .menu-react button:hover { background: var(--surface-2); transform: scale(1.18); }
 .menu-react button.on { background: var(--accent-soft); }
+
+/* ---------- Поиск ---------- */
+.search-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--surface); animation: fade-up .2s var(--ease-out); }
+.search-bar[hidden] { display: none; }
+.search-bar > .i { color: var(--muted); flex-shrink: 0; margin-left: 4px; }
+.search-bar input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 8px 4px; }
+.search-bar input:focus { background: transparent; box-shadow: none; }
+.search-count { font-size: 13px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.search-up { transform: rotate(90deg); }
+.search-down { transform: rotate(-90deg); }
+.link-btn { color: var(--accent); font-size: 13px; font-weight: 500; }
+::highlight(search) { background: #ffd84d; color: #111; }
+.msg.search-cur { box-shadow: 0 0 0 2.5px #ffc83d; }
+.msg.search-hit:not(.search-cur) { box-shadow: 0 0 0 1px rgba(255, 200, 61, .6); }

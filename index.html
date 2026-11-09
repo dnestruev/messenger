@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Doto:wght@600;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/styles.css?v=20261109195453">
+<link rel="stylesheet" href="css/styles.css?v=20261109200259">
 <script>
   // Тема применяется до отрисовки, чтобы не было «вспышки»
   try {
@@ -131,9 +131,18 @@
           <span class="chat-sub" id="chatStatus"></span>
         </span>
       </button>
+      <button class="icon-btn" id="searchBtn" title="Поиск в чате" hidden><svg class="i"><use href="#i-search"/></svg></button>
       <button class="icon-btn call-btn" id="callAudioBtn" title="Позвонить" hidden><svg class="i"><use href="#i-phone"/></svg></button>
       <button class="icon-btn call-btn" id="callVideoBtn" title="Видеозвонок" hidden><svg class="i"><use href="#i-video"/></svg></button>
     </header>
+    <div class="search-bar" id="searchBar" hidden>
+      <svg class="i"><use href="#i-search"/></svg>
+      <input id="searchInput" placeholder="Поиск в чате" autocomplete="off" enterkeyhint="search">
+      <span class="search-count" id="searchCount"></span>
+      <button type="button" class="icon-btn" id="searchUp" title="Раньше (Enter)"><svg class="i search-up"><use href="#i-back"/></svg></button>
+      <button type="button" class="icon-btn" id="searchDown" title="Позже (Shift+Enter)"><svg class="i search-down"><use href="#i-back"/></svg></button>
+      <button type="button" class="icon-btn" id="searchClose" title="Закрыть"><svg class="i"><use href="#i-close"/></svg></button>
+    </div>
     <div class="placeholder" id="placeholder">
       <div class="placeholder-mark"><svg class="i"><use href="#i-chat"/></svg></div>
       <h2>Выберите чат</h2>
@@ -171,6 +180,6 @@
   <p>Откройте файл <b>config.js</b> и вставьте туда адрес проекта и ключ из Supabase. Подробно — в README.md.</p>
 </div>
 
-<script type="module" src="js/main.js?v=20261109195453"></script>
+<script type="module" src="js/main.js?v=20261109200259"></script>
 </body>
 </html>
