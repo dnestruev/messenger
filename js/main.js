@@ -1,10 +1,10 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js';
-import * as CONFIG from '../config.js';
-import * as E2E from './crypto.js';
-import { createNet } from './net.js';
-import { qrSvg } from './qr.js';
-import { renderMarkdown, stripMarkdown } from './md.js';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261109190528';
+import * as CONFIG from '../config.js?v=20261109190528';
+import * as E2E from './crypto.js?v=20261109190528';
+import { createNet } from './net.js?v=20261109190528';
+import { qrSvg } from './qr.js?v=20261109190528';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261109190528';
 
 /* =====================================================================
    Утилиты
@@ -1888,7 +1888,8 @@ async function incomingOffer(conv, from, msg) {
   setCallStatus(msg.video ? 'Входящий видеозвонок' : 'Входящий звонок');
   startTone('in');
   navigator.vibrate?.([400, 300, 400, 300, 400]);
-  if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+  flashTitle(msg.video ? '📹 Входящий видеозвонок' : '📞 Входящий звонок');
+  if ((document.hidden || !document.hasFocus()) && 'Notification' in window && Notification.permission === 'granted') {
     try { (swReg || await navigator.serviceWorker.ready).showNotification(nameOf(from), { body: msg.video ? 'Входящий видеозвонок' : 'Входящий звонок', tag: 'call', renotify: true, requireInteraction: true, data: { conv } }); } catch {}
   }
   call.giveUp = setTimeout(() => { if (call?.id === msg.id && !call.answered) finishCall('missed'); }, RING_TIMEOUT);
@@ -2007,6 +2008,17 @@ async function flipCamera() {
     cur.ui.local.srcObject = null; updateCallUi();
   } catch { cur.facing = cur.facing === 'environment' ? 'user' : 'environment'; toast('Другой камеры нет'); }
 }
+
+/** Мигающий заголовок вкладки, пока звонят (если окно на компьютере свёрнуто или за другими окнами) */
+let titleTimer = null;
+function flashTitle(text) {
+  stopTitle();
+  const orig = document.title;
+  let on = false;
+  titleTimer = setInterval(() => { document.title = (on = !on) ? text : orig; if (!call || call.answered) stopTitle(orig); }, 900);
+  flashTitle.orig = orig;
+}
+function stopTitle(orig = flashTitle.orig) { clearInterval(titleTimer); titleTimer = null; if (orig) document.title = orig; }
 
 /* ---------- Гудки ---------- */
 let tone = null;
