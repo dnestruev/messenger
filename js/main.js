@@ -1,14 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110104057';
-import * as CONFIG from '../config.js?v=20261110104057';
-import * as E2E from './crypto.js?v=20261110104057';
-import { createNet } from './net.js?v=20261110104057';
-import { qrSvg } from './qr.js?v=20261110104057';
-import { findEmbed } from './embeds.js?v=20261110104057';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110104057';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110104057';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110104057';
-import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110104057';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110114809';
+import * as CONFIG from '../config.js?v=20261110114809';
+import * as E2E from './crypto.js?v=20261110114809';
+import { createNet } from './net.js?v=20261110114809';
+import { qrSvg } from './qr.js?v=20261110114809';
+import { findEmbed } from './embeds.js?v=20261110114809';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110114809';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110114809';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110114809';
 
 /* =====================================================================
    Утилиты
@@ -2697,32 +2696,18 @@ function closeStickers() { $('stickerPanel').hidden = true; $('stickerBtn').clas
 $('stickerBtn').onclick = () => ($('stickerPanel').hidden ? openStickers() : closeStickers());
 
 /* =====================================================================
-   Звонки 1 на 1 (WebRTC). Звук и видео идут напрямую между устройствами,
-   шифруются самим WebRTC (DTLS-SRTP). Сигналы для соединения шифруются
-   ключом личного чата — подделать звонок или подсмотреть их посторонний не может.
+   Звонки 1 на 1 (WebRTC) — переписано с нуля на основе первой стабильной версии.
+   Звук и видео идут напрямую между устройствами (или через TURN, если напрямую нельзя),
+   шифруются самим WebRTC (DTLS-SRTP). Сигналы шифруются ключом личного чата.
+   Порядок: offer (с адресами внутри, повтор каждые 3 с) → ring → answer (повтор на каждый offer)
+   → поздние адреса пачками {t:'ice'} → соединение. Соединение создаётся в момент ответа,
+   чтобы взять самые свежие адреса TURN (никакого setConfiguration посреди звонка).
    ===================================================================== */
 const ICE_SERVERS = CONFIG.ICE_SERVERS || DEFAULT_ICE_SERVERS;
-
-/** Настраиваем TURN перед SDP. Данные обычно уже лежат в кеше (берём при входе), ждём не дольше 1,5 с.
-    Без TURN остаётся STUN. setConfiguration — только iceServers: копия getConfiguration() с certificates
-    в Safari бросает ошибку. */
-async function configureCallIce(cur) {
-  try {
-    const config = await Promise.race([loadIceConfiguration(sb, ICE_SERVERS, state.me.id), new Promise((r) => setTimeout(r, 1500, null))]);
-    if (!config || call !== cur || cur.pc.signalingState === 'closed') return;
-    cur.turnAvailable = config.turnConfigured;
-    cur.turnError = config.turnError;
-    if (config.turnConfigured) cur.pc.setConfiguration({ iceServers: config.iceServers });
-  } catch (e) {
-    if (call === cur) {
-      cur.turnAvailable = hasTurn(ICE_SERVERS);
-      cur.turnError = String(e?.message || e);
-      console.warn('Настройка TURN недоступна, пробуем STUN', e);
-    }
-  }
-}
+const CLIENT_V = new URL(import.meta.url).searchParams.get('v') || '';
 const RING_TIMEOUT = 45000;
-const ICE_WAIT = 1500;        // сколько ждём сбор адресов перед отправкой приглашения/ответа
+const CONNECT_TIMEOUT = 30000;  // после ответа: не соединились за 30 с — «не удалось»
+const ICE_WAIT = 2000;          // ждём сбор адресов, чтобы они попали прямо в offer/answer
 /** Камера в HD: при слабом интернете браузер сам снизит качество, не обрывая звонок */
 const camConstraints = (facing = 'user') => ({ facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } });
 const VIDEO_BITRATE = 2_500_000;
@@ -2735,15 +2720,16 @@ async function tuneSenders(pc) {
       if (!prm.encodings || !prm.encodings.length) prm.encodings = [{}];
       prm.encodings[0].maxBitrate = VIDEO_BITRATE;
       prm.encodings[0].maxFramerate = 30;
-      prm.degradationPreference = 'maintain-resolution';   // лучше меньше кадров, чем мыло
+      prm.degradationPreference = 'maintain-resolution';
       await sender.setParameters(prm);
     } catch {}
   }
 }
-/* Каналы Realtime. supabase-js возвращает УЖЕ существующий канал с тем же именем, пока старый не разобран
-   (removeChannel асинхронный), а повторный subscribe() у него ничего не делает и колбэк не вызывает.
-   Поэтому «убрать и сразу создать заново» давало мёртвый канал: звонки и «печатает» переставали доходить. */
-const removingChannels = new Map();   // имя -> обещание разбора
+
+/* ---------- Каналы Realtime ----------
+   supabase-js возвращает УЖЕ существующий канал с тем же именем, пока старый не разобран
+   (removeChannel асинхронный), а повторный subscribe() ничего не делает. Поэтому только так: */
+const removingChannels = new Map();
 const fullTopic = (c) => String(c.topic || '').replace(/^realtime:/, '');
 function dropChannel(ch) {
   if (!ch) return Promise.resolve();
@@ -2760,84 +2746,99 @@ async function freshChannel(topic, opts) {
 
 let call = null;
 let callInbox = null;
-const callOut = new Map();
+const callOut = new Map();      // uid -> Promise<канал>
 const seenSignals = new Set();
+const DEVICE = uuid();          // эта вкладка: чтобы отличать свои другие устройства
+const endedCalls = new Set();   // завершённые звонки: их запоздавшие повторы offer не должны звонить снова
 
-/** Входящие звонки. Канал следим: если сервер его закрыл (сеть, сон телефона) — подключаемся заново,
-    иначе звонки молча перестают приходить. */
+/* ---------- Адреса STUN/TURN: берём заранее и держим свежими ---------- */
+let iceServers = ICE_SERVERS, iceTimer = null, iceInfo = 'STUN';
+function distinctUrls(list) {                             // одинаковые адреса с разными логинами браузер может склеить
+  const seen = new Set();
+  return list.map((s) => {
+    const urls = (Array.isArray(s.urls) ? s.urls : [s.urls]).map((u) => {
+      let v = u;
+      for (let i = 0; seen.has(v); i++) v = u + (u.includes('?') ? '&' : '?') + 'n=' + i;
+      seen.add(v);
+      return v;
+    });
+    return { ...s, urls };
+  });
+}
+async function refreshIce() {
+  try {
+    const c = await loadIceConfiguration(sb, ICE_SERVERS, state.me?.id || '');
+    if (c?.iceServers?.length) { iceServers = distinctUrls(c.iceServers); iceInfo = c.turnConfigured ? 'TURN' : 'STUN' + (c.turnError ? ' (' + c.turnError + ')' : ''); }
+  } catch {}
+}
+const iceSoon = (ms = 2000) => Promise.race([refreshIce(), new Promise((r) => setTimeout(r, ms))]);
+
+/** Входящие звонки. Если сервер закрыл канал (сеть, сон телефона) — подключаемся заново. */
 let inboxRetry = null;
 async function startCallInbox() {
   const me = state.me?.id;
   if (!me) return;
-  clearTimeout(inboxRetry);
   const old = callInbox; callInbox = null;
   if (old) dropChannel(old);
   const ch = await freshChannel('call-' + me);
   if (state.me?.id !== me || callInbox) { dropChannel(ch); return; }
   callInbox = ch;
-  ch.on('broadcast', { event: 'sig' }, ({ payload }) => onSignal(payload).catch((e) => console.warn('Ошибка обработки сигнала звонка', e)))
+  ch.on('broadcast', { event: 'sig' }, ({ payload }) => onSignal(payload).catch((e) => console.warn('Сигнал звонка', e)))
     .subscribe((st) => {
       if (callInbox !== ch) return;
-      if (st === 'SUBSCRIBED') { ch.ready = true; clearTimeout(inboxRetry); return; }   // переподключился сам — хорошо
+      if (st === 'SUBSCRIBED') { clearTimeout(inboxRetry); return; }
       if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') {
-        ch.ready = false;
         clearTimeout(inboxRetry);
         inboxRetry = setTimeout(() => { if (callInbox === ch && state.me?.id === me) startCallInbox(); }, 3000);
       }
     });
-  // TURN-данные берём заранее: в момент звонка ждать их уже не придётся
-  loadIceConfiguration(sb, ICE_SERVERS, me).catch(() => {});
+  refreshIce();
+  clearInterval(iceTimer);
+  iceTimer = setInterval(refreshIce, 4 * 60 * 1000);
 }
 function stopCalls() {
   if (call) finishCall('cancel', { silent: true });
-  clearTimeout(inboxRetry);
+  clearTimeout(inboxRetry); clearInterval(iceTimer);
   if (callInbox) { dropChannel(callInbox); callInbox = null; }
-  for (const ch of callOut.values()) if (ch.real) dropChannel(ch.real);
+  for (const p of callOut.values()) p.then(dropChannel, () => {});
   callOut.clear();
+  iceServers = ICE_SERVERS;
 }
-async function outChannel(uid) {
-  let ch = callOut.get(uid);
-  if (!ch) {
-    const made = freshChannel('call-' + uid);
-    ch = { callReady: made.then((real) => { ch.real = real; return realReady(real); }) };
-    callOut.set(uid, ch); // параллельные сигналы ждут одну и ту же подписку
+function outChannel(uid) {
+  let p = callOut.get(uid);
+  if (!p) {
+    p = freshChannel('call-' + uid).then((ch) => new Promise((res, rej) => {
+      const t = setTimeout(() => rej(new Error('Нет связи с сервером звонков')), 6000);
+      ch.subscribe((st) => {
+        if (st === 'SUBSCRIBED') { clearTimeout(t); res(ch); }
+        if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') {
+          clearTimeout(t); if (callOut.get(uid) === p) callOut.delete(uid); rej(new Error('Нет связи с сервером звонков'));
+        }
+      });
+    }));
+    callOut.set(uid, p);
+    p.catch(() => { if (callOut.get(uid) === p) callOut.delete(uid); });
   }
-  try { await ch.callReady; return ch.real; }
-  catch (e) {
-    if (callOut.get(uid) === ch) { callOut.delete(uid); if (ch.real) dropChannel(ch.real); }
-    throw e;
-  }
+  return p;
 }
-function realReady(ch) {
-  return new Promise((res, rej) => {
-    const timer = setTimeout(() => rej(new Error('Нет связи с сервером звонков')), 6000);
-    ch.subscribe((st) => {
-      if (st === 'SUBSCRIBED') { clearTimeout(timer); res(); }
-      if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') {
-        clearTimeout(timer); rej(new Error('Нет связи с сервером звонков'));
-        for (const [uid, x] of callOut) if (x.real === ch) callOut.delete(uid);   // следующий сигнал откроет канал заново
-      }
-    });
-  });
-}
-async function sendSignal(conv, to, msg) {
-  const kv = currentVersion(conv);
-  const key = chatKey(conv, kv);
+async function seal(conv, msg) {
+  const kv = currentVersion(conv), key = chatKey(conv, kv);
   if (!key) throw new Error('нет ключа');
   const sealed = await E2E.sealJson(key, { ...msg, dev: DEVICE, sid: uuid(), ts: Date.now() }, `call|${conv}|${state.me.id}`);
-  const ch = await outChannel(to);
-  const result = await ch.send({ type: 'broadcast', event: 'sig', payload: { from: state.me.id, conv, kv, ...sealed } });
-  if (result !== 'ok') throw new Error('Не удалось отправить сигнал звонка: ' + String(result));
+  return { from: state.me.id, conv, kv, ...sealed };
 }
-const DEVICE = uuid();                 // эта вкладка: чтобы отличать свои другие устройства
-const endedCalls = new Set();          // завершённые звонки: их запоздавшие повторы offer не должны звонить снова
+async function sendSignal(conv, to, msg) {
+  const payload = await seal(conv, msg);
+  const ch = await outChannel(to);
+  const r = await ch.send({ type: 'broadcast', event: 'sig', payload });
+  if (r !== 'ok') throw new Error('сигнал не ушёл: ' + r);
+}
 /** Сказать своим другим устройствам: этот входящий звонок уже обработан здесь */
 async function tellMyDevices(conv, id) {
-  const kv = currentVersion(conv), key = chatKey(conv, kv);
-  if (!key || !callInbox) return;
-  const sealed = await E2E.sealJson(key, { t: 'taken', id, dev: DEVICE, ts: Date.now() }, `call|${conv}|${state.me.id}`);
-  await callInbox.send({ type: 'broadcast', event: 'sig', payload: { from: state.me.id, conv, kv, ...sealed } });
+  if (!callInbox) return;
+  await callInbox.send({ type: 'broadcast', event: 'sig', payload: await seal(conv, { t: 'taken', id }) });
 }
+
 async function onSignal(env) {
   if (!env || !state.me) return;
   const self = env.from === state.me.id;
@@ -2847,348 +2848,129 @@ async function onSignal(env) {
   const msg = await E2E.openJson(chatKey(env.conv, env.kv), env.ct, env.iv, `call|${env.conv}|${env.from}`);
   if (!msg || msg.bad || Math.abs(Date.now() - msg.ts) > 90000) return;
   if (self) {
-    // на другом моём устройстве ответили или отклонили — здесь перестаём звонить
-    if (msg.t === 'taken' && msg.dev !== DEVICE) {
+    if (msg.t === 'taken' && msg.dev !== DEVICE) {         // ответили/отклонили на другом моём устройстве
       endedCalls.add(msg.id);
       if (call?.id === msg.id && call.dir === 'in' && !call.answered) finishCall('cancel', { remote: true, silent: true });
     }
     return;
   }
-  const tag = msg.sid || JSON.stringify([msg.t, msg.id, msg.ts, msg.dev, msg.candidate]);
+  const tag = msg.sid || msg.t + ':' + msg.id + ':' + msg.ts;
   if (seenSignals.has(tag)) return;
   seenSignals.add(tag);
-  if (seenSignals.size > 500) seenSignals.clear();
-  if (msg.t === 'offer') return endedCalls.has(msg.id) ? undefined : incomingOffer(env.conv, env.from, msg);
-  if (!call || call.id !== msg.id || call.conv !== env.conv || call.peer !== env.from) return;
-  if (msg.t === 'media') {
-    if (msg.dev !== call.remoteDev || (call.remoteMediaTs || 0) > msg.ts) return;
-    call.remoteMediaTs = msg.ts;
-    call.remoteMedia = { screen: msg.screen === true, video: msg.video === true };
-    updateCallUi();
-    return;
-  }
-  if (msg.t === 'ice') {
-    const cur = call;
-    const list = Array.isArray(msg.cands) ? msg.cands : msg.candidate ? [msg.candidate] : [];   // пачка или старый формат
-    if (list.length && (!cur.remoteDev || cur.remoteDev === msg.dev)) {
-      for (const candidate of list.slice(0, 50)) {
-        if (!candidate || typeof candidate.candidate !== 'string') continue;
-        (cur.remoteIceSeen ||= []).push(candidate);
-        if (cur.remoteIceSeen.length > 300) cur.remoteIceSeen.shift();
-        (cur.pendingIce ||= []).push({ dev: msg.dev, candidate, gen: msg.gen || 0 });
-      }
-      await flushIce(cur);
+  if (seenSignals.size > 1000) seenSignals.clear();
+
+  if (msg.t === 'offer') {
+    if (endedCalls.has(msg.id)) return;
+    if (call?.id === msg.id) {                              // повтор приглашения: ответ мог потеряться — шлём снова
+      if (call.dir === 'in' && call.answerSdp) sendSignal(call.conv, call.peer, { t: 'answer', id: call.id, sdp: call.answerSdp }).catch(() => {});
+      else if (call.dir === 'in' && !call.answered) sendSignal(env.conv, env.from, { t: 'ring', id: msg.id }).catch(() => {});
+      return;
     }
-    return;
+    return incomingOffer(env.conv, env.from, msg);
   }
-  if (msg.t === 'restart-request') {
-    if (call.dir === 'out' && (!call.remoteDev || call.remoteDev === msg.dev)) {
-      recoverIce(call).catch((e) => console.warn('Ошибка восстановления ICE', e));
-    }
-    return;
-  }
-  if (msg.t === 'restart-offer') {
-    if (call.dir === 'in' && call.remoteDev === msg.dev) {
-      await applyRestartOffer(call, msg);
-    }
-    return;
-  }
-  if (msg.t === 'restart-answer') {
-    const cur = call;
-    if (cur.dir !== 'out' || cur.remoteDev !== msg.dev || msg.gen !== cur.iceGeneration) return;
-    if (cur.pc.signalingState !== 'have-local-offer') return;
-    try {
-      await cur.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
-      cur.remoteIceGeneration = msg.gen;
-      clearInterval(cur.restartResend);
-      cur.restartResend = null;
-      await flushIce(cur);
-      cur.callStep = 'Проверяем новый ICE-маршрут';
-    } catch (e) {
-      cur.callError = (e?.name || 'Error') + ': ' + (e?.message || e);
-    }
-    return;
-  }
-  if (msg.t === 'ring' && call.dir === 'out' && !call.answered) {
-    call.ringing = true; call.callStep = 'Приглашение получено собеседником';
-    setCallStatus('Звонит…');
-    replayIce(call);
-  }
-  if (msg.t === 'answer' && call.dir === 'out' && !call.answered) {
-    const cur = call;
+  if (!call || call.id !== msg.id) return;
+  const cur = call;
+  if (msg.t === 'ring' && cur.dir === 'out' && !cur.answered) { cur.ringing = true; cur.step = 'звонит у собеседника'; setCallStatus('Звонит…'); }
+  if (msg.t === 'answer' && cur.dir === 'out' && !cur.answered) {
     cur.answered = true;
-    cur.remoteDev = msg.dev;
-    cur.remoteIceGeneration = 0;
-    cur.callStep = 'Ответ получен, согласование соединения';
-    clearInterval(cur.resend); stopTone();
+    cur.step = 'ответ получен';
+    clearInterval(cur.resend); clearTimeout(cur.giveUp); stopTone();
     setCallStatus('Соединяю…');
-    connectionDeadline(cur);
-    try {
-      await cur.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
-      await flushIce(cur);
-      replayIce(cur);
-    } catch (e) { if (call === cur) { cur.callError = e.name || 'SDPError'; finishCall('failed'); } }
+    armConnectTimeout(cur);
+    await cur.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+    await flushRemoteIce(cur);
   }
-  if (msg.t === 'busy') finishCall('busy');
-  if (msg.t === 'end') finishCall(msg.why === 'failed' ? 'failed' : msg.why === 'declined' ? 'declined' : call.connectedAt ? 'ok' : call.dir === 'in' ? 'missed' : 'cancel', { remote: true });
+  if (msg.t === 'ice' || msg.t === 'candidate') {
+    const list = msg.cands || (msg.candidate ? [msg.candidate] : []);
+    cur.remoteIce.push(...list);
+    if (cur.pc?.remoteDescription) await flushRemoteIce(cur);
+  }
+  if (msg.t === 'busy') finishCall('busy', { remote: true });
+  if (msg.t === 'end') finishCall(msg.why === 'declined' ? 'declined' : cur.connectedAt ? 'ok' : cur.dir === 'in' ? 'missed' : 'cancel', { remote: true });
 }
 
-// ICE может прийти раньше SDP; применяем его только после remoteDescription.
-async function flushIce(cur) {
-  if (cur.flushingIce || !cur.pc.remoteDescription || !cur.remoteDev) return;
-  cur.flushingIce = true;
-  try {
-    while (call === cur && cur.pendingIce?.length) {
-      const item = cur.pendingIce.shift();
-      if (item.dev !== cur.remoteDev) continue;
-      const generation = cur.remoteIceGeneration || 0;
-      if ((item.gen || 0) > generation) {
-        // Кандидат следующего ICE-restart пришёл раньше SDP: ждём новый offer/answer.
-        cur.pendingIce.unshift(item);
-        break;
-      }
-      if ((item.gen || 0) < generation) continue;
-      const key = JSON.stringify(item.candidate);
-      if ((cur.seenIce ||= new Set()).has(key)) continue;
-      try {
-        await cur.pc.addIceCandidate(item.candidate);
-        cur.seenIce.add(key);
-      } catch (e) {
-        // В мобильных сетях кандидаты могут устаревать; не валим весь звонок.
-        cur.lastCandidateError = (e?.name || 'Error') + ': ' + (e?.message || e);
-        console.warn('ICE-кандидат отклонён', e);
-      }
-    }
-  } finally { cur.flushingIce = false; }
+/** Адреса собеседника, пришедшие отдельно (после offer/answer) */
+async function flushRemoteIce(cur) {
+  while (cur.remoteIce.length && cur.pc?.remoteDescription) {
+    const c = cur.remoteIce.shift();
+    cur.remoteSeen.push(c);
+    try { await cur.pc.addIceCandidate(c); } catch {}
+  }
 }
-/* Адреса (ICE) шлём пачками: раньше на каждый адрес уходило отдельное сообщение — 10–20 штук разом,
-   часть терялась или приходила раньше приглашения. Основные адреса и так лежат в самом приглашении/ответе. */
-function queueIce(cur, data) {
-  (cur.iceQueue ||= []).push(data);
+/** Свои поздние адреса — пачками раз в 300 мс (по одному на адрес ломало звонки на телефонах) */
+function queueIce(cur, cand) {
+  cur.localSeen.push(cand);
+  if (!cur.sdpSent) return;                                 // ещё не отправили SDP — адрес и так попадёт в него
+  cur.iceQueue.push(cand);
   if (cur.iceTimer) return;
   cur.iceTimer = setTimeout(() => {
     cur.iceTimer = null;
-    if (call !== cur || !cur.iceQueue?.length) return;
     const cands = cur.iceQueue.splice(0);
-    sendIce(cur, cands);
-  }, 200);
-}
-function sendIce(cur, cands) {
-  for (let i = 0; i < cands.length; i += 20) {
-    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, cands: cands.slice(i, i + 20), gen: cur.iceGeneration || 0 }).catch(() => {});
-  }
-}
-function replayIce(cur) {
-  if (cur.localIce?.length) sendIce(cur, cur.localIce.slice());
-}
-function connectionDeadline(cur) {
-  if (cur.connectTimer || cur.connectedAt) return;
-  cur.connectStartedAt = Date.now();
-  cur.connectClock = setInterval(() => {
-    if (call !== cur || cur.connectedAt) return;
-    const elapsed = Date.now() - cur.connectStartedAt;
-    setCallStatus('Соединяю… ' + fmtDur(elapsed / 1000));
-    if (elapsed >= 30000) recoverIce(cur).catch((e) => console.warn('ICE restart не удался', e));
-  }, 1000);
-  cur.connectTimer = setTimeout(() => {
-    if (call === cur && cur.pc.connectionState !== 'connected') recoverIce(cur).catch((e) => console.warn('ICE restart не удался', e));
-  }, 30000);
+    if (cands.length && call === cur) sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, cands }).catch(() => {});
+  }, 300);
 }
 
-/** При проблемах сети только вызывающий инициирует новую ICE-сессию.
- * Это исключает одновременные offer (glare) на двух устройствах.
- * Если TURN не настроен, восстановление не сможет обойти блокировку NAT.
- */
-async function recoverIce(cur) {
-  if (call !== cur || cur.pc.signalingState === 'closed') return;
-  if (cur.iceRecovering) return;
-  if (!cur.answered) { finishCall('failed'); return; }
-  cur.iceRecovering = true;
-  cur.callStep = 'Повторное согласование ICE';
-  setCallStatus('Восстанавливаю связь…');
-  clearTimeout(cur.connectTimer);
-  clearInterval(cur.connectClock);
-  clearTimeout(cur.lostTimer);
-  cur.connectTimer = null;
-  cur.connectClock = null;
-  cur.lostTimer = null;
-  // Одна попытка восстановления на одну потерю связи.
-  cur.recoveryTimeout = setTimeout(() => {
-    if (call === cur && cur.pc.connectionState !== 'connected') {
-      cur.callError ||= 'ICE: не удалось найти сетевой маршрут даже после повторной попытки';
-      finishCall('failed');
-    }
-  }, 22000);
-  if (cur.dir === 'out') {
-    await startIceRestart(cur);
-  } else {
-    const ask = () => {
-      if (call !== cur || cur.pc.connectionState === 'connected' || cur.restartOfferReceived) return;
-      sendSignal(cur.conv, cur.peer, { t: 'restart-request', id: cur.id }).catch((e) => {
-        cur.lastSignalError = (e?.name || 'Error') + ': ' + (e?.message || e);
-      });
-    };
-    ask();
-    cur.restartRequestTimer = setInterval(ask, 4000);
-  }
-}
-
-async function startIceRestart(cur) {
-  if (call !== cur || cur.pc.signalingState === 'closed') return;
-  if (cur.pc.signalingState !== 'stable') return;
-  try {
-    cur.iceGeneration = (cur.iceGeneration || 0) + 1;
-    cur.localIce = [];
-    cur.seenIce = new Set();
-    cur.pc.restartIce?.();
-    await cur.pc.setLocalDescription(await cur.pc.createOffer({ iceRestart: true }));
-    await gathered(cur.pc, ICE_WAIT);
-    if (call !== cur) return;
-    cur.restartOfferSdp = cur.pc.localDescription.sdp;
-    const send = () => {
-      if (call !== cur || cur.pc.signalingState !== 'have-local-offer') return;
-      sendSignal(cur.conv, cur.peer, {
-        t: 'restart-offer', id: cur.id, gen: cur.iceGeneration, sdp: cur.restartOfferSdp,
-      }).catch((e) => { cur.lastSignalError = (e?.name || 'Error') + ': ' + (e?.message || e); });
-    };
-    send();
-    clearInterval(cur.restartResend);
-    cur.restartResend = setInterval(send, 4000);
-  } catch (e) {
-    if (call === cur) {
-      cur.callError = 'ICE restart: ' + (e?.message || String(e));
-      finishCall('failed');
-    }
-  }
-}
-
-async function applyRestartOffer(cur, msg) {
-  if (call !== cur || !cur.answered || !Number.isSafeInteger(msg.gen) || msg.gen < 1) return;
-  if (cur.restartAnswerGen === msg.gen && cur.restartAnswerSdp) {
-    sendSignal(cur.conv, cur.peer, {
-      t: 'restart-answer', id: cur.id, gen: msg.gen, sdp: cur.restartAnswerSdp,
-    }).catch(() => {});
-    return;
-  }
-  if (cur.pc.signalingState !== 'stable') return;
-  try {
-    cur.restartOfferReceived = true;
-    clearInterval(cur.restartRequestTimer);
-    cur.restartRequestTimer = null;
-    cur.callStep = 'Применяем новый сетевой маршрут';
-    await cur.pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
-    if (call !== cur) return;
-    cur.remoteIceGeneration = msg.gen;
-    cur.iceGeneration = msg.gen;
-    cur.localIce = [];
-    cur.seenIce = new Set();
-    await cur.pc.setLocalDescription(await cur.pc.createAnswer());
-    await gathered(cur.pc, ICE_WAIT);
-    if (call !== cur) return;
-    cur.restartAnswerGen = msg.gen;
-    cur.restartAnswerSdp = cur.pc.localDescription.sdp;
-    await flushIce(cur);
-    await sendSignal(cur.conv, cur.peer, {
-      t: 'restart-answer', id: cur.id, gen: msg.gen, sdp: cur.restartAnswerSdp,
-    });
-    cur.callStep = 'Проверяем новый ICE-маршрут';
-  } catch (e) {
-    cur.callError = 'Повторное согласование: ' + (e?.message || String(e));
-    console.warn('ICE restart answer не удался', e);
-  }
-}
-
-/** Подсказка в SDP: разрешаем видео до VIDEO_BITRATE (некоторые браузеры иначе держат ~600 кбит/с) */
+/** Подсказка в SDP: разрешаем видео до VIDEO_BITRATE */
 const withBitrate = (sdp) => sdp.replace(/(m=video[^\r\n]*\r?\n(?:(?!m=)[^\r\n]*\r?\n)*?c=[^\r\n]*\r?\n)/, `$1b=AS:${Math.round(VIDEO_BITRATE / 1000)}\r\n`);
-const gathered = (pc, ms = 2500) => new Promise((res) => {
+const gathered = (pc, ms = ICE_WAIT) => new Promise((res) => {
   if (pc.iceGatheringState === 'complete') return res();
   const t = setTimeout(res, ms);
   pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } });
 });
 
 async function getMedia(video) {
-  const media = navigator.mediaDevices;
-  if (!media?.getUserMedia) {
-    const err = new Error('Браузер не поддерживает микрофон. Откройте мессенджер через HTTPS в Safari или Chrome.');
-    err.name = 'NotSupportedError';
-    throw err;
-  }
-  let failure;
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Браузер не даёт доступ к микрофону. Откройте сайт в Safari или Chrome.');
   try {
-    return await media.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(CALL_BETA ? { channelCount: { ideal: 1 } } : {}) },
+    return await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: video ? camConstraints('user') : false,
     });
-  } catch (e) { failure = e; }
-  if (video) {
-    toast('Камера недоступна — пробую без видео');
-    return getMedia(false);
+  } catch (e) {
+    if (video) { toast('Камера недоступна — звоню без видео'); return getMedia(false); }
+    throw new Error('Нет доступа к микрофону. Разрешите его в настройках браузера.');
   }
-  // Safari иногда отклоняет расширенные ограничения. Проверяем стандартный запрос.
-  if (['OverconstrainedError', 'NotReadableError', 'AbortError', 'TypeError'].includes(failure?.name)) {
-    try { return await media.getUserMedia({ audio: true, video: false }); }
-    catch (e) { failure = e; }
-  }
-  const reasons = {
-    NotAllowedError: 'Микрофон запрещён. Разрешите его в настройках браузера и iPhone.',
-    PermissionDeniedError: 'Микрофон запрещён в настройках браузера.',
-    NotReadableError: 'Микрофон занят другим приложением или недоступен.',
-    NotFoundError: 'Микрофон не найден.',
-    SecurityError: 'Для микрофона требуется защищённое HTTPS-соединение.',
-  };
-  const error = new Error(reasons[failure?.name] || ('Микрофон недоступен: ' + (failure?.message || failure?.name || 'неизвестная ошибка')));
-  error.name = failure?.name || 'MediaError';
-  error.cause = failure;
-  throw error;
 }
 
-function makePeer() {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-  const remote = new MediaStream();
-  pc.onicecandidateerror = (e) => { if (call?.pc === pc) call.iceError = e.errorCode; };
-  pc.onicecandidate = ({ candidate }) => {
-    const cur = call;
-    if (!candidate || !cur || cur.pc !== pc) return;
-    const data = candidate.toJSON();
-    (cur.localIce ||= []).push(data);
-    queueIce(cur, data);
-  };
+function makePeer(cur) {
+  const pc = new RTCPeerConnection({ iceServers });
+  cur.pc = pc;
+  cur.iceUsed = iceInfo;
+  pc.onicecandidate = (e) => { if (e.candidate && call === cur) queueIce(cur, e.candidate.toJSON ? e.candidate.toJSON() : e.candidate); };
   pc.ontrack = (e) => {
-    for (const tr of (e.streams[0]?.getTracks() || [e.track])) if (!remote.getTracks().includes(tr)) remote.addTrack(tr);
-    e.track.onmute = e.track.onunmute = () => { if (call?.pc === pc) updateCallUi(); };
-    if (call?.pc === pc) { call.ui.remote.srcObject = remote; call.ui.remote.play?.().catch(() => {}); updateCallUi(); }
+    for (const tr of (e.streams[0]?.getTracks() || [e.track])) if (!cur.remote.getTracks().includes(tr)) cur.remote.addTrack(tr);
+    if (call === cur && cur.ui) { cur.ui.remote.srcObject = cur.remote; cur.ui.remote.play?.().catch(() => {}); updateCallUi(); }
   };
-  pc.onconnectionstatechange = () => {
-    if (!call || call.pc !== pc) return;
-    const st = pc.connectionState;
-    if (st === 'connected') {
-      const cur = call;
-      clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer); clearInterval(cur.connectClock);
-      clearTimeout(cur.recoveryTimeout); clearInterval(cur.restartResend); clearInterval(cur.restartRequestTimer);
-      cur.lostTimer = null; cur.connectTimer = null; cur.connectClock = null;
-      cur.recoveryTimeout = null; cur.restartResend = null; cur.restartRequestTimer = null;
-      cur.iceRecovering = false;
-      cur.callStep = 'Соединение установлено';
-      if (!cur.connectedAt) { cur.connectedAt = Date.now(); stopTone(); cur.clock = setInterval(updateCallUi, 1000); if (cur.extras) cur.extras.start(); else tuneSenders(pc); }
+  const onState = () => {
+    if (call !== cur || cur.pc !== pc) return;
+    const st = pc.connectionState || pc.iceConnectionState;
+    const ice = pc.iceConnectionState;
+    if (st === 'connected' || ice === 'connected' || ice === 'completed') {
+      clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer);
+      if (!cur.connectedAt) {
+        cur.connectedAt = Date.now(); cur.step = 'соединились';
+        stopTone(); cur.clock = setInterval(updateCallUi, 1000); tuneSenders(pc);
+        setTimeout(() => selectedRoute(pc).then((r) => { cur.route = r; }), 1500);
+      }
       updateCallUi();
-    }
-    if (st === 'disconnected') {
-      const cur = call;
-      clearTimeout(cur.lostTimer);
-      setCallStatus('Связь пропала. Восстанавливаю…');
-      cur.lostTimer = setTimeout(() => {
-        if (call === cur && cur.pc.connectionState !== 'connected') recoverIce(cur).catch((e) => console.warn('ICE recovery', e));
-      }, 4000);
-    }
-    if (st === 'failed') recoverIce(call).catch((e) => console.warn('ICE recovery', e));
-  };
-  pc.oniceconnectionstatechange = () => {
-    if (call?.pc === pc && pc.iceConnectionState === 'failed') {
-      recoverIce(call).catch((e) => console.warn('ICE recovery', e));
+    } else if (st === 'disconnected' || ice === 'disconnected') {
+      if (cur.connectedAt) {
+        setCallStatus('Связь пропала…');
+        clearTimeout(cur.lostTimer);
+        cur.lostTimer = setTimeout(() => finishCall('ok'), 12000);
+      }
+    } else if (st === 'failed' || ice === 'failed') {
+      finishCall(cur.connectedAt ? 'ok' : 'failed');
     }
   };
-  return { pc, remote };
+  pc.onconnectionstatechange = onState;
+  pc.oniceconnectionstatechange = onState;
+  return pc;
 }
+function armConnectTimeout(cur) {
+  clearTimeout(cur.connectTimer);
+  cur.connectTimer = setTimeout(() => { if (call === cur && !cur.connectedAt) finishCall('failed'); }, CONNECT_TIMEOUT);
+}
+const newCall = (fields) => ({ remote: new MediaStream(), remoteIce: [], remoteSeen: [], localSeen: [], iceQueue: [], startedAt: Date.now(), step: 'начало', ...fields });
 
 async function startCall(video) {
   const c = state.chats.get(state.activeId);
@@ -3198,77 +2980,42 @@ async function startCall(video) {
   const peer = otherOf(c);
   if (state.blocked.has(peer)) return toast('Вы заблокировали этого человека');
   if (!hasCurrentKey(c.id)) return toast('Ещё нет ключа шифрования — дождитесь, пока собеседник откроет приложение');
+  const iceP = iceSoon();                                   // параллельно с запросом микрофона
   let local;
   try { local = await getMedia(video); } catch (e) { return toast(e.message); }
   if (call) { local.getTracks().forEach((t) => t.stop()); return; }
   video = local.getVideoTracks().length > 0;
   const id = uuid();
-  const { pc, remote } = makePeer();
-  call = { id, conv: c.id, peer, video, dir: 'out', pc, local, remote, startedAt: Date.now() };
-  call.turnReady = configureCallIce(call);
-  local.getTracks().forEach((t) => pc.addTrack(t, local));
+  const cur = call = newCall({ id, conv: c.id, peer, video, dir: 'out', local });
   showCallUi();
   setCallStatus('Звоню…');
   startTone('out');
   try {
-    await call.turnReady;
-    if (!call || call.id !== id) return;
-    if (CALL_BETA) prepareVideo(pc, true);
+    await iceP;
+    if (call !== cur) return;
+    const pc = makePeer(cur);
+    local.getTracks().forEach((t) => pc.addTrack(t, local));
     await pc.setLocalDescription(await pc.createOffer());
-    // Ждём сбор адресов (до 1,5 с): они попадают в само приглашение и не зависят от доставки
-    // отдельных сообщений. Поздние адреса всё равно досылаются пачками.
-    await gathered(pc, ICE_WAIT);
-    if (!call || call.id !== id) return;
+    cur.step = 'сбор адресов';
+    await gathered(pc);
+    if (call !== cur) return;
     const sdp = withBitrate(pc.localDescription.sdp);
+    cur.sdpSent = true;
+    cur.step = 'приглашение отправлено';
     // запись о звонке в чате: заодно отправит push «новое сообщение», если приложение у собеседника закрыто
-    call.logP = insertMessage(c.id, { call: { id, v: video, s: 'ring' } }).then((m) => { addMessage(m); return m; }).catch(() => null);
-    const cur = call;
-    cur.callStep = 'Отправка приглашения';
-    const offer = () => {
-      if (call !== cur || cur.answered) return;
-      cur.offerAttempts = (cur.offerAttempts || 0) + 1;
-      sendSignal(c.id, peer, { t: 'offer', id, video, sdp })
-        .then(() => { if (call === cur) { cur.offerDelivered = true; cur.lastSignalError = null; } })
-        .catch((e) => {
-          if (call !== cur) return;
-          cur.offerFailures = (cur.offerFailures || 0) + 1;
-          cur.lastSignalError = (e?.name || 'Error') + ': ' + String(e?.message || e);
-          cur.callStep = 'Ошибка отправки приглашения (повторяем)';
-          console.warn('Не удалось отправить приглашение звонка', e);
-        });
-    };
+    cur.logP = insertMessage(c.id, { call: { id, v: video, s: 'ring' } }).then((m) => { addMessage(m); return m; }).catch(() => null);
+    const offer = () => { if (call === cur && !cur.answered) sendSignal(c.id, peer, { t: 'offer', id, video, sdp }).catch((e) => { cur.err = String(e?.message || e); }); };
     offer();
-    call.resend = setInterval(offer, 3000);                 // повторяем, пока собеседник не откроет приложение
-    call.giveUp = setTimeout(() => { if (call?.id === id && !call.answered) finishCall('missed'); }, RING_TIMEOUT);
-  } catch { if (call?.id === id) finishCall('failed'); }
+    cur.resend = setInterval(offer, 3000);                  // повторяем, пока собеседник не откроет приложение
+    cur.giveUp = setTimeout(() => { if (call === cur && !cur.answered) finishCall('missed'); }, RING_TIMEOUT);
+  } catch (e) { cur.err = String(e?.message || e); finishCall('failed'); }
 }
 
 async function incomingOffer(conv, from, msg) {
-  if (call) {
-    if (call.id !== msg.id) {
-      sendSignal(conv, from, { t: 'busy', id: msg.id }).catch(() => {});
-    } else if (call.dir === 'in' && call.conv === conv && call.peer === from && call.remoteDev === msg.dev) {
-      // Если исходный ответ WebRTC потерялся, повторный offer должен его восстановить.
-      // Нельзя создавать новый RTCPeerConnection для того же звонка.
-      if (call.answerSdp) {
-        const cur = call;
-        const now = Date.now();
-        if (!cur.lastAnswerRetry || now - cur.lastAnswerRetry > 1500) {
-          cur.lastAnswerRetry = now;
-          sendSignal(conv, from, { t: 'answer', id: cur.id, sdp: cur.answerSdp })
-            .then(() => { if (call === cur) cur.callError = null; })
-            .catch((e) => { if (call === cur) cur.callError = (e?.name || 'Error') + ': ' + (e?.message || String(e)); });
-        }
-      } else if (!call.accepting) {
-        sendSignal(conv, from, { t: 'ring', id: msg.id }).catch(() => {});
-      }
-    }
-    return;
-  }
+  if (call) { sendSignal(conv, from, { t: 'busy', id: msg.id }).catch(() => {}); return; }
   if (state.blocked.has(from)) return;
-  const { pc, remote } = makePeer();
-  call = { id: msg.id, conv, peer: from, video: !!msg.video, dir: 'in', pc, remote, offer: msg.sdp, remoteDev: msg.dev, startedAt: Date.now() };
-  call.turnReady = configureCallIce(call);
+  const cur = call = newCall({ id: msg.id, conv, peer: from, video: !!msg.video, dir: 'in', offer: msg.sdp, step: 'звонит' });
+  cur.iceP = iceSoon(4000);                                 // пока звонит — обновляем TURN
   sendSignal(conv, from, { t: 'ring', id: msg.id }).catch(() => {});
   showCallUi();
   setCallStatus(msg.video ? 'Входящий видеозвонок' : 'Входящий звонок');
@@ -3278,124 +3025,86 @@ async function incomingOffer(conv, from, msg) {
   if ((document.hidden || !document.hasFocus()) && 'Notification' in window && Notification.permission === 'granted') {
     try { (swReg || await navigator.serviceWorker.ready).showNotification(nameOf(from), { body: msg.video ? 'Входящий видеозвонок' : 'Входящий звонок', tag: 'call', renotify: true, requireInteraction: true, data: { conv } }); } catch {}
   }
-  if (call?.id !== msg.id) return;
-  call.giveUp = setTimeout(() => { if (call?.id === msg.id && !call.answered) finishCall('missed'); }, RING_TIMEOUT);
+  if (call !== cur) return;
+  cur.giveUp = setTimeout(() => { if (call === cur && !cur.answered) finishCall('missed'); }, RING_TIMEOUT);
 }
 
 async function acceptCall(withVideo) {
-  if (!call || call.dir !== 'in' || call.answered || call.accepting) return;
   const cur = call;
-  cur.accepting = true;
-  cur.callStep = 'Принятие звонка';
-  // Не отсчитываем 30 секунд соединения, пока пользователь разрешает микрофон.
+  if (!cur || cur.dir !== 'in' || cur.answered) return;
+  cur.answered = true;
   clearTimeout(cur.giveUp);
-  cur.giveUp = null;
-  stopTone();
-  stopTitle();
+  stopTone(); stopTitle();
   setCallStatus('Соединяю…');
+  updateCallUi();
+  tellMyDevices(cur.conv, cur.id).catch(() => {});
   try {
-    // Запрос микрофона должен запускаться непосредственно после нажатия кнопки:
-    // Safari может требовать пользовательский жест для доступа к устройствам.
-    cur.callStep = 'Разрешение микрофона (getUserMedia)';
-    const local = await getMedia(withVideo && cur.video);
-    if (call !== cur) { local.getTracks().forEach((t) => t.stop()); return; }
-    cur.local = local;
-    cur.callStep = 'Добавление аудио/видео';
-    local.getTracks().forEach((t) => cur.pc.addTrack(t, local));
-    cur.callStep = 'Настройка STUN/TURN';
-    await cur.turnReady;
+    cur.step = 'микрофон';
+    cur.local = await getMedia(withVideo && cur.video);   // первым делом — Safari требует жест пользователя
+    if (call !== cur) { cur.local.getTracks().forEach((t) => t.stop()); return; }
+    armConnectTimeout(cur);
+    await cur.iceP;
     if (call !== cur) return;
-    cur.callStep = 'Обработка предложения (setRemoteDescription)';
-    await cur.pc.setRemoteDescription({ type: 'offer', sdp: cur.offer });
+    const pc = makePeer(cur);
+    cur.local.getTracks().forEach((t) => pc.addTrack(t, cur.local));
+    cur.step = 'обработка приглашения';
+    await pc.setRemoteDescription({ type: 'offer', sdp: cur.offer });
+    await flushRemoteIce(cur);
+    await pc.setLocalDescription(await pc.createAnswer());
+    cur.step = 'сбор адресов';
+    await gathered(pc);
     if (call !== cur) return;
-    if (CALL_BETA) prepareVideo(cur.pc);
-    await flushIce(cur);
-
-    cur.callStep = 'Формирование ответа (createAnswer)';
-    await cur.pc.setLocalDescription(await cur.pc.createAnswer());
-    cur.callStep = 'Сбор сетевых адресов';
-    await gathered(cur.pc, ICE_WAIT);                          // адреса — прямо в ответ (см. startCall)
-    if (call !== cur) return;
-
-    cur.callStep = 'Отправка ответа (sendSignal)';
-    cur.answerSdp = withBitrate(cur.pc.localDescription.sdp);
-    cur.answered = true; // SDP сформирован, хотя доставка ответа пока может потребовать повторения
-    tellMyDevices(cur.conv, cur.id).catch(() => {});
-    // Ошибка отправки не уничтожает готовое соединение: звонящий повторяет offer
-    // раз в три секунды, и обработчик incomingOffer повторит наш answer.
-    try {
-      await sendSignal(cur.conv, cur.peer, { t: 'answer', id: cur.id, sdp: cur.answerSdp });
-      if (call === cur) cur.callError = null;
-    } catch (e) {
-      if (call === cur) {
-        cur.callError = (e?.name || 'Error') + ': ' + String(e?.message || e).slice(0, 260);
-        console.warn('Ответ на звонок не доставлен, ожидаем повторного приглашения', e);
-      }
-    }
-    if (call !== cur) return;
-    cur.callStep = 'Ожидание соединения';
-    connectionDeadline(cur);
+    cur.answerSdp = withBitrate(pc.localDescription.sdp);
+    cur.sdpSent = true;
+    cur.step = 'ответ отправлен';
+    await sendSignal(cur.conv, cur.peer, { t: 'answer', id: cur.id, sdp: cur.answerSdp });
     updateCallUi();
   } catch (e) {
-    if (call === cur) {
-      cur.callError = (e?.name || 'Error') + ': ' + String(e?.message || e).slice(0, 260);
-      toast('Не удалось принять звонок: ' + (e?.message || 'неизвестная ошибка'));
-      finishCall('failed');
-    }
-  } finally { cur.accepting = false; }
+    cur.err = String(e?.message || e);
+    if (call === cur) { toast(e.message || 'Не получилось ответить'); finishCall('failed'); }
+  }
 }
 
 function hangUp(why = 'hangup') {
-  if (!call) return;
-  sendSignal(call.conv, call.peer, { t: 'end', id: call.id, why }).catch(() => {});
-  if (call.dir === 'in' && !call.answered) tellMyDevices(call.conv, call.id).catch(() => {});
-  finishCall(why === 'declined' ? 'declined' : call.connectedAt ? 'ok' : call.dir === 'in' ? 'declined' : 'cancel');
+  const cur = call;
+  if (!cur) return;
+  sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why }).catch(() => {});
+  if (cur.dir === 'in' && !cur.answered) tellMyDevices(cur.conv, cur.id).catch(() => {});
+  finishCall(why === 'declined' ? 'declined' : cur.connectedAt ? 'ok' : cur.dir === 'in' ? 'declined' : 'cancel');
 }
 
-function callDiagnostics(cur) {
-  return [
-    'Версия: ' + (new URL(import.meta.url).searchParams.get('v') || '?'),
-    'Направление: ' + (cur.dir === 'in' ? 'входящий' : 'исходящий'),
-    'Ответ: ' + (cur.answered ? 'да' : 'нет'),
-    'Локальное описание: ' + (cur.pc.localDescription?.type || 'нет'),
-    'Описание собеседника: ' + (cur.pc.remoteDescription?.type || 'нет'),
-    'Соединение: ' + cur.pc.connectionState,
-    'ICE: ' + cur.pc.iceConnectionState,
-    'Сбор адресов: ' + cur.pc.iceGatheringState,
-    'Адреса: свои ' + (cur.localIce?.length || 0) + ', принятые отдельно ' + (cur.seenIce?.size || 0),
-    'Адреса в SDP: свои ' + ((cur.pc.localDescription?.sdp || '').match(/^a=candidate/gm)?.length || 0) +
-      ', собеседника ' + ((cur.pc.remoteDescription?.sdp || '').match(/^a=candidate/gm)?.length || 0),
-    'Канал входящих: ' + (callInbox?.ready ? 'подключён' : 'нет'),
-    'Свои типы: ' + describeCandidates(cur.localIce || []),
-    'Чужие типы: ' + describeCandidates(cur.remoteIceSeen || []),
-    'TURN: ' + (cur.turnAvailable ? 'подключён в браузере' : 'не настроен'),
-    'Проверка TURN: ' + (cur.turnError || 'нет ошибок загрузки'),
-    'ICE restart: ' + (cur.iceGeneration || 0),
-    'Этап: ' + (cur.callStep || 'не определён'),
-    'Ошибка: ' + (cur.callError || cur.iceError || cur.lastSignalError || 'нет кода'),
-    'Приглашение: попыток ' + (cur.offerAttempts || 0) +
-      ', ошибок ' + (cur.offerFailures || 0) + ', принято сервером ' + (cur.offerDelivered ? 'да' : 'нет'),
-    'Подтверждение получателя: ' + (cur.ringing ? 'да' : 'нет'),
-    'Резервная отправка ответа: ' + (cur.answerSdp ? 'доступна' : 'пока нет'),
+/** Короткий отчёт для создателя (без IP): чтобы понять, почему не соединилось */
+function sendCallReport(cur, status) {
+  const pc = cur.pc;
+  const report = [
+    'Итог: ' + status, 'Версия: ' + CLIENT_V,
+    'Этап: ' + cur.step, 'Соединились: ' + (cur.connectedAt ? 'да, ' + Math.round((Date.now() - cur.connectedAt) / 1000) + ' с' : 'нет'),
+    'С начала: ' + Math.round((Date.now() - cur.startedAt) / 1000) + ' с',
+    'Серверы: ' + (cur.iceUsed || 'соединение не создано'),
+    'Состояние: ' + (pc ? pc.connectionState + ' / ICE ' + pc.iceConnectionState + ' / сбор ' + pc.iceGatheringState : '—'),
+    'Свои адреса: ' + describeCandidates(cur.localSeen),
+    'Чужие отдельно: ' + describeCandidates(cur.remoteSeen),
+    'Маршрут: ' + (cur.route || 'не выбран'),
+    'Ошибка: ' + (cur.err || 'нет'),
   ].join('\n');
+  sb.from('call_reports').insert({ call_id: cur.id, dir: cur.dir, status, report: report.slice(0, 4000), ua: navigator.userAgent.slice(0, 300) }).then(() => {}, () => {});
 }
 
 function finishCall(status, { remote = false, silent = false } = {}) {
   const cur = call;
   if (!cur) return;
-  // Отчёт о звонке (без IP-адресов) — и на экран при ошибке, и в базу: по нему видно, на каком шаге сломалось
-  const diagnostics = selectedRoute(cur.pc).then((route) => callDiagnostics(cur) + '\nМаршрут: ' + route, () => callDiagnostics(cur));
-  if (!silent) diagnostics.then((report) => sb.from('call_reports').insert({
-    call_id: cur.id, dir: cur.dir, status: String(status).slice(0, 20),
-    report: ('Итог: ' + status + '\nДлительность: ' + (cur.connectedAt ? Math.round((Date.now() - cur.connectedAt) / 1000) + ' с' : 'не соединились') +
-      '\nС начала: ' + Math.round((Date.now() - cur.startedAt) / 1000) + ' с\n' + report).slice(0, 4000),
-    ua: navigator.userAgent.slice(0, 300),
-  })).then(() => {}, () => {});
   call = null;
   endedCalls.add(cur.id);
-  clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer);
-  clearInterval(cur.connectClock); clearTimeout(cur.recoveryTimeout);
-  clearInterval(cur.restartResend); clearInterval(cur.restartRequestTimer);
+  clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer); clearTimeout(cur.iceTimer);
+  cur.unfit?.();
+  stopTone(); stopTitle();
+  if (cur.dir === 'in') (swReg ? Promise.resolve(swReg) : navigator.serviceWorker?.ready)?.then((r) => r?.getNotifications({ tag: 'call' }))
+    .then((list) => list?.forEach((n) => n.close())).catch(() => {});
+  navigator.vibrate?.(0);
+  if (!silent || cur.answered) sendCallReport(cur, status);
+  cur.local?.getTracks().forEach((t) => t.stop());
+  try { cur.pc?.close(); } catch {}
+  if (!remote && (status === 'missed' || status === 'failed')) sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: status }).catch(() => {});
   const dur = cur.connectedAt ? Math.round((Date.now() - cur.connectedAt) / 1000) : 0;
   const text = { ok: 'Звонок завершён · ' + fmtDur(dur), missed: cur.dir === 'out' ? 'Нет ответа' : 'Пропущенный звонок', declined: cur.dir === 'out' ? 'Звонок отклонён' : 'Вы отклонили звонок',
     busy: 'Собеседник занят', failed: 'Не удалось соединиться', cancel: 'Звонок отменён' }[status] || 'Звонок завершён';
@@ -3405,32 +3114,9 @@ function finishCall(status, { remote = false, silent = false } = {}) {
     cur.ui.status.textContent = text;
     cur.ui.controls.replaceChildren();
   }
-  try { cur.extras?.dispose(); } catch {}
-  try { cur.unfit?.(); } catch {}
-  try { stopTone(); } catch {}
-  try { stopTitle(); } catch {}
-  try { if (cur.dir === 'in') (swReg ? Promise.resolve(swReg) : navigator.serviceWorker?.ready)?.then((r) => r?.getNotifications({ tag: 'call' }))
-    .then((list) => list?.forEach((n) => n.close())).catch(() => {}); } catch {}
-  try { navigator.vibrate?.(0); } catch {}
-  cur.local?.getTracks().forEach((t) => { try { t.stop(); } catch {} });
-  try { cur.pc.close(); } catch {}
-  if (!remote && status === 'failed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'failed' }).catch(() => {});
-  if (!remote && !cur.answered && cur.dir === 'out' && status === 'missed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'timeout' }).catch(() => {});
-  if (!silent && status === 'failed') {
-    setTimeout(async () => {
-      if (call) return;
-      const report = await diagnostics;
-      if (call) return;
-      openModal({ title: 'Звонок не соединился' },
-        h('p', { text: 'Эти данные помогут найти причину. Можно отправить скриншот этого окна.' }),
-        h('pre', { text: report, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '12px' } }));
-    }, 950);
-  }
-  // итог звонка записывает тот, кто звонил
-  if (cur.dir === 'out' && cur.logP) {
-    // ждём, пока запишется «звоню…», и только потом меняем её на итог (иначе итог мог потеряться)
-    cur.logP.then((m) => m && updatePayload(m, { call: { id: cur.id, v: cur.video, s: status === 'ok' ? 'ok' : status, d: dur } })).catch(() => {});
-  }
+  if (!silent && status === 'failed') toast('Не удалось соединиться. Попробуйте ещё раз или переключитесь на Wi-Fi.');
+  // итог звонка записывает тот, кто звонил (после записи «звоню…», иначе итог мог потеряться)
+  if (cur.dir === 'out' && cur.logP) cur.logP.then((m) => m && updatePayload(m, { call: { id: cur.id, v: cur.video, s: status === 'ok' ? 'ok' : status, d: dur } })).catch(() => {});
 }
 
 /* ---------- Экран звонка ---------- */
@@ -3439,21 +3125,14 @@ function callButton(cls, ic, label, onclick) {
 }
 function showCallUi() {
   const cur = call;
-  if (CALL_BETA) cur.extras = createCallExtras(cur, {
-    active: () => call === cur, update: updateCallUi, notice: toast,
-    signal: (msg) => sendSignal(cur.conv, cur.peer, { ...msg, id: cur.id }),
-  });
   const remote = h('video', { class: 'call-remote', autoplay: true, playsInline: true });
   remote.setAttribute('playsinline', '');
   const local = h('video', { class: 'call-local', autoplay: true, playsInline: true, muted: true });
   local.setAttribute('playsinline', ''); local.muted = true;
   const status = h('div', { class: 'call-status' });
   const controls = h('div', { class: 'call-controls' });
-  const quality = h('div', { class: 'call-quality', text: CALL_BETA ? 'Тест звонков' : '' });
-  const peerBox = h('div', { class: 'call-peer' }, userAvatar(cur.peer, 'xl'), h('div', { class: 'call-name', text: nameOf(cur.peer) }), status, quality);
+  const peerBox = h('div', { class: 'call-peer' }, userAvatar(cur.peer, 'xl'), h('div', { class: 'call-name', text: nameOf(cur.peer) }), status);
   const root = h('div', { class: 'call-screen' + (cur.video ? ' is-video' : ''), role: 'dialog', 'aria-label': 'Звонок' }, remote, peerBox, local, controls);
-  // Вертикальное видео с телефона на широком экране не растягиваем (иначе кадр режется и мылится).
-  // Двойное нажатие — переключить «вписать / на весь экран».
   const fit = () => {
     if (root.dataset.fill) return;
     const va = remote.videoWidth / (remote.videoHeight || 1), sa = innerWidth / (innerHeight || 1);
@@ -3464,7 +3143,7 @@ function showCallUi() {
   addEventListener('resize', fit);
   cur.unfit = () => removeEventListener('resize', fit);
   remote.addEventListener('dblclick', () => { root.dataset.fill = '1'; root.classList.toggle('fit-contain'); });
-  cur.ui = { root, remote, local, status, controls, quality };
+  cur.ui = { root, remote, local, status, controls };
   document.body.append(root);
   updateCallUi();
 }
@@ -3473,14 +3152,10 @@ function updateCallUi() {
   const cur = call;
   if (!cur?.ui) return;
   const { ui } = cur;
-  const preview = cur.screenPreview || cur.local;
-  if (preview && ui.local.srcObject !== preview) { ui.local.srcObject = preview; ui.local.play?.().catch(() => {}); }
-  const hasRemoteVideo = cur.remote.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted) && cur.remoteMedia?.video !== false;
+  if (cur.local && ui.local.srcObject !== cur.local) { ui.local.srcObject = cur.local; ui.local.play?.().catch(() => {}); }
+  const hasRemoteVideo = cur.remote.getVideoTracks().some((t) => t.readyState === 'live');
   ui.root.classList.toggle('remote-video', hasRemoteVideo && !!cur.connectedAt);
-  ui.root.classList.toggle('local-video', !!preview?.getVideoTracks().length);
-  ui.root.classList.toggle('local-screen', !!cur.sharingScreen);
-  ui.root.classList.toggle('remote-screen', !!cur.remoteMedia?.screen);
-  ui.quality.textContent = [CALL_BETA ? 'Тест звонков' : '', cur.callQuality || '', cur.sharingScreen ? 'Вы показываете экран' : cur.remoteMedia?.screen ? 'Собеседник показывает экран' : ''].filter(Boolean).join(' · ');
+  ui.root.classList.toggle('local-video', !!cur.local?.getVideoTracks().length);
   if (cur.connectedAt) ui.status.textContent = fmtDur((Date.now() - cur.connectedAt) / 1000);
   const mic = cur.local?.getAudioTracks()[0], cam = cur.local?.getVideoTracks()[0];
   const btns = [];
@@ -3490,13 +3165,9 @@ function updateCallUi() {
     btns.push(callButton('accept', 'phone', cur.video ? 'Без видео' : 'Принять', () => acceptCall(false)));
   } else {
     if (mic) btns.push(callButton(mic.enabled ? '' : 'off', 'mic', mic.enabled ? 'Микрофон' : 'Без звука', () => { mic.enabled = !mic.enabled; updateCallUi(); }));
-    if (cam && !cur.sharingScreen) {
-      btns.push(callButton(cam.enabled ? '' : 'off', 'video', cam.enabled ? 'Камера' : 'Камера выкл.', () => { cam.enabled = !cam.enabled; cur.extras?.publish(); updateCallUi(); }));
+    if (cam) {
+      btns.push(callButton(cam.enabled ? '' : 'off', 'video', cam.enabled ? 'Камера' : 'Камера выкл.', () => { cam.enabled = !cam.enabled; updateCallUi(); }));
       btns.push(callButton('', 'flip', 'Сменить', () => flipCamera()));
-    }
-    if (cur.extras && cur.connectedAt) {
-      btns.push(callButton(cur.naturalVoice ? 'off' : '', 'settings', cur.naturalVoice ? 'Естественный' : 'Шумоподавление', () => cur.extras.toggleVoice()));
-      if (navigator.mediaDevices?.getDisplayMedia) btns.push(callButton(cur.sharingScreen ? 'off' : '', 'screen', cur.sharingScreen ? 'Стоп показ' : 'Экран', () => cur.sharingScreen ? cur.extras.stopScreen() : cur.extras.startScreen()));
     }
     btns.push(callButton('decline', 'phone', 'Завершить', () => hangUp()));
   }
@@ -3505,7 +3176,7 @@ function updateCallUi() {
 async function flipCamera() {
   const cur = call;
   const old = cur?.local?.getVideoTracks()[0];
-  if (!old || cur.sharingScreen) return;
+  if (!old || !cur.pc) return;
   cur.facing = cur.facing === 'environment' ? 'user' : 'environment';
   try {
     const s = await navigator.mediaDevices.getUserMedia({ video: { ...camConstraints(), facingMode: { exact: cur.facing } } });
@@ -3518,7 +3189,7 @@ async function flipCamera() {
   } catch { cur.facing = cur.facing === 'environment' ? 'user' : 'environment'; toast('Другой камеры нет'); }
 }
 
-/** Мигающий заголовок вкладки, пока звонят (если окно на компьютере свёрнуто или за другими окнами) */
+/** Мигающий заголовок вкладки, пока звонят */
 let titleTimer = null;
 function flashTitle(text) {
   stopTitle();
@@ -3531,7 +3202,7 @@ function stopTitle(orig = flashTitle.orig) {
   if (!titleTimer) return;
   clearInterval(titleTimer); titleTimer = null;
   if (orig) document.title = orig;
-  if (state.me) renderChats();                            // вернуть заголовок со счётчиком непрочитанных
+  if (state.me) renderChats();
 }
 
 /* ---------- Гудки ---------- */
@@ -3574,7 +3245,7 @@ function callBubble(m) {
   const cl = m.p.call, mine = m.sender_id === state.me.id;
   const bad = cl.s && cl.s !== 'ok' && cl.s !== 'ring';
   const title = callLabel(cl, mine).replace(/^\S+\s/, '');
-  const sub = cl.s === 'ok' ? (mine ? 'Исходящий' : 'Входящий') + ' · ' + fmtDur(cl.d) : cl.s === 'ring' ? (mine ? 'Исходящий' : 'Входящий') : mine ? 'Исходящий' : 'Входящий';
+  const sub = cl.s === 'ok' ? (mine ? 'Исходящий' : 'Входящий') + ' · ' + fmtDur(cl.d) : mine ? 'Исходящий' : 'Входящий';
   return h('div', { class: 'call-box' + (bad ? ' bad' : '') },
     h('span', { class: 'call-box-ic' }, icon(cl.v ? 'video' : 'phone')),
     h('div', { class: 'row-text' }, h('b', { text: title.replace(/ · .*/, '') }), h('small', { text: sub })),
