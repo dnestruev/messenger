@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110104500';
-import * as CONFIG from '../config.js?v=20261110104500';
-import * as E2E from './crypto.js?v=20261110104500';
-import { createNet } from './net.js?v=20261110104500';
-import { qrSvg } from './qr.js?v=20261110104500';
-import { findEmbed } from './embeds.js?v=20261110104500';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110104500';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110104500';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110104500';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110123500';
+import * as CONFIG from '../config.js?v=20261110123500';
+import * as E2E from './crypto.js?v=20261110123500';
+import { createNet } from './net.js?v=20261110123500';
+import { qrSvg } from './qr.js?v=20261110123500';
+import { findEmbed } from './embeds.js?v=20261110123500';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110123500';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110123500';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110123500';
 
 /* =====================================================================
    Утилиты
@@ -2524,7 +2524,7 @@ const seenSignals = new Set();
 function startCallInbox() {
   if (callInbox) sb.removeChannel(callInbox);
   callInbox = sb.channel('call-' + state.me.id)
-    .on('broadcast', { event: 'sig' }, ({ payload }) => onSignal(payload).catch(() => {}))
+    .on('broadcast', { event: 'sig' }, ({ payload }) => onSignal(payload).catch((e) => console.warn('Ошибка обработки сигнала звонка', e)))
     .subscribe();
 }
 function stopCalls() {
@@ -2561,7 +2561,7 @@ async function sendSignal(conv, to, msg) {
   const sealed = await E2E.sealJson(key, { ...msg, dev: DEVICE, sid: uuid(), ts: Date.now() }, `call|${conv}|${state.me.id}`);
   const ch = await outChannel(to);
   const result = await ch.send({ type: 'broadcast', event: 'sig', payload: { from: state.me.id, conv, kv, ...sealed } });
-  if (result !== 'ok') throw new Error('Не удалось отправить сигнал звонка');
+  if (result !== 'ok') throw new Error('Не удалось отправить сигнал звонка: ' + String(result));
 }
 const DEVICE = uuid();                 // эта вкладка: чтобы отличать свои другие устройства
 const endedCalls = new Set();          // завершённые звонки: их запоздавшие повторы offer не должны звонить снова
@@ -2617,6 +2617,7 @@ async function onSignal(env) {
     const cur = call;
     cur.answered = true;
     cur.remoteDev = msg.dev;
+    cur.callStep = 'Ответ получен, согласование соединения';
     clearInterval(cur.resend); stopTone();
     setCallStatus('Соединяю…');
     connectionDeadline(cur);
@@ -2774,7 +2775,24 @@ async function startCall(video) {
 
 async function incomingOffer(conv, from, msg) {
   if (call) {
-    if (call.id !== msg.id) sendSignal(conv, from, { t: 'busy', id: msg.id }).catch(() => {});
+    if (call.id !== msg.id) {
+      sendSignal(conv, from, { t: 'busy', id: msg.id }).catch(() => {});
+    } else if (call.dir === 'in' && call.conv === conv && call.peer === from && call.remoteDev === msg.dev) {
+      // Если исходный ответ WebRTC потерялся, повторный offer должен его восстановить.
+      // Нельзя создавать новый RTCPeerConnection для того же звонка.
+      if (call.answerSdp) {
+        const cur = call;
+        const now = Date.now();
+        if (!cur.lastAnswerRetry || now - cur.lastAnswerRetry > 1500) {
+          cur.lastAnswerRetry = now;
+          sendSignal(conv, from, { t: 'answer', id: cur.id, sdp: cur.answerSdp })
+            .then(() => { if (call === cur) cur.callError = null; })
+            .catch((e) => { if (call === cur) cur.callError = (e?.name || 'Error') + ': ' + (e?.message || String(e)); });
+        }
+      } else if (!call.accepting) {
+        sendSignal(conv, from, { t: 'ring', id: msg.id }).catch(() => {});
+      }
+    }
     return;
   }
   if (state.blocked.has(from)) return;
@@ -2798,7 +2816,9 @@ async function acceptCall(withVideo) {
   const cur = call;
   cur.accepting = true;
   cur.callStep = 'Принятие звонка';
-  connectionDeadline(cur);
+  // Не отсчитываем 30 секунд соединения, пока пользователь разрешает микрофон.
+  clearTimeout(cur.giveUp);
+  cur.giveUp = null;
   stopTone();
   stopTitle();
   setCallStatus('Соединяю…');
@@ -2824,11 +2844,23 @@ async function acceptCall(withVideo) {
     if (call !== cur) return;
 
     cur.callStep = 'Отправка ответа (sendSignal)';
-    await sendSignal(cur.conv, cur.peer, { t: 'answer', id: cur.id, sdp: withBitrate(cur.pc.localDescription.sdp) });
-    if (call !== cur) return;
-    cur.answered = true;
-    cur.callStep = 'Ожидание соединения';
+    cur.answerSdp = withBitrate(cur.pc.localDescription.sdp);
+    cur.answered = true; // SDP сформирован, хотя доставка ответа пока может потребовать повторения
     tellMyDevices(cur.conv, cur.id).catch(() => {});
+    // Ошибка отправки не уничтожает готовое соединение: звонящий повторяет offer
+    // раз в три секунды, и обработчик incomingOffer повторит наш answer.
+    try {
+      await sendSignal(cur.conv, cur.peer, { t: 'answer', id: cur.id, sdp: cur.answerSdp });
+      if (call === cur) cur.callError = null;
+    } catch (e) {
+      if (call === cur) {
+        cur.callError = (e?.name || 'Error') + ': ' + String(e?.message || e).slice(0, 260);
+        console.warn('Ответ на звонок не доставлен, ожидаем повторного приглашения', e);
+      }
+    }
+    if (call !== cur) return;
+    cur.callStep = 'Ожидание соединения';
+    connectionDeadline(cur);
     updateCallUi();
   } catch (e) {
     if (call === cur) {
@@ -2861,6 +2893,7 @@ function callDiagnostics(cur) {
     'TURN: ' + (hasTurn ? 'настроен' : 'не настроен (нужен не для всех сетей)'),
     'Этап: ' + (cur.callStep || 'не определён'),
     'Ошибка: ' + (cur.callError || cur.iceError || 'нет кода'),
+    'Резервная отправка ответа: ' + (cur.answerSdp ? 'доступна' : 'пока нет'),
   ].join('\n');
 }
 
