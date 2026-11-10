@@ -1125,3 +1125,18 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 /* на телефонах размытие фона под окном дорогое (старые iPhone подтормаживают) — просто затемняем */
 @media (max-width: 720px) { .overlay { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(10, 10, 16, .55); } }
 @media (prefers-reduced-motion: reduce) { .role.partner::after, .unread-dot::after, .md-spoiler:not(.open) { animation: none; } }
+
+/* Opt-in call tools; safe at 320px and in landscape. */
+.call-quality { font-size: 11px; color: #c9d6e9; max-width: min(80vw, 400px); }
+.call-quality:empty { display: none; }
+.call-screen.remote-video .call-quality { max-width: 180px; }
+.call-screen.remote-screen .call-remote { object-fit: contain; }
+.call-screen.local-screen .call-local { transform: none; object-fit: contain; aspect-ratio: 16 / 9; }
+.call-controls { max-width: 100%; gap: 12px; }
+.call-ctl small { max-width: 90px; overflow-wrap: anywhere; }
+@media (max-width: 480px), (max-height: 480px) {
+  .call-ctl-ic { width: 46px; height: 46px; }
+  .call-ctl small { font-size: 10px; max-width: 70px; }
+  .call-controls { gap: 8px; }
+  .call-screen.remote-video .call-peer { grid-auto-flow: row; gap: 3px; border-radius: 14px; }
+}

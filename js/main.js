@@ -1,12 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110063102';
-import * as CONFIG from '../config.js?v=20261110063102';
-import * as E2E from './crypto.js?v=20261110063102';
-import { createNet } from './net.js?v=20261110063102';
-import { qrSvg } from './qr.js?v=20261110063102';
-import { findEmbed } from './embeds.js?v=20261110063102';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110063102';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110063102';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110070558';
+import * as CONFIG from '../config.js?v=20261110070558';
+import * as E2E from './crypto.js?v=20261110070558';
+import { createNet } from './net.js?v=20261110070558';
+import { qrSvg } from './qr.js?v=20261110070558';
+import { findEmbed } from './embeds.js?v=20261110070558';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110070558';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110070558';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110070558';
 
 /* =====================================================================
    Утилиты
@@ -2587,6 +2588,13 @@ async function onSignal(env) {
   if (seenSignals.size > 500) seenSignals.clear();
   if (msg.t === 'offer') return endedCalls.has(msg.id) ? undefined : incomingOffer(env.conv, env.from, msg);
   if (!call || call.id !== msg.id || call.conv !== env.conv || call.peer !== env.from) return;
+  if (msg.t === 'media') {
+    if (msg.dev !== call.remoteDev || (call.remoteMediaTs || 0) > msg.ts) return;
+    call.remoteMediaTs = msg.ts;
+    call.remoteMedia = { screen: msg.screen === true, video: msg.video === true };
+    updateCallUi();
+    return;
+  }
   if (msg.t === 'ice') {
     const cur = call;
     if (msg.candidate && (!cur.remoteDev || cur.remoteDev === msg.dev)) {
@@ -2661,7 +2669,7 @@ const gathered = (pc, ms = 2500) => new Promise((res) => {
 async function getMedia(video) {
   try {
     return await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(CALL_BETA ? { channelCount: { ideal: 1 } } : {}) },
       video: video ? camConstraints('user') : false,
     });
   } catch (e) {
@@ -2682,6 +2690,7 @@ function makePeer() {
   };
   pc.ontrack = (e) => {
     for (const tr of (e.streams[0]?.getTracks() || [e.track])) if (!remote.getTracks().includes(tr)) remote.addTrack(tr);
+    e.track.onmute = e.track.onunmute = () => { if (call?.pc === pc) updateCallUi(); };
     if (call?.pc === pc) { call.ui.remote.srcObject = remote; call.ui.remote.play?.().catch(() => {}); updateCallUi(); }
   };
   pc.onconnectionstatechange = () => {
@@ -2689,7 +2698,7 @@ function makePeer() {
     const st = pc.connectionState;
     if (st === 'connected') {
       clearTimeout(call.lostTimer); clearTimeout(call.connectTimer); clearInterval(call.connectClock);
-      if (!call.connectedAt) { call.connectedAt = Date.now(); stopTone(); call.clock = setInterval(updateCallUi, 1000); tuneSenders(pc); }
+      if (!call.connectedAt) { call.connectedAt = Date.now(); stopTone(); call.clock = setInterval(updateCallUi, 1000); if (call.extras) call.extras.start(); else tuneSenders(pc); }
       updateCallUi();
     }
     if (st === 'disconnected') { const cur = call; clearTimeout(cur.lostTimer); setCallStatus('Связь пропала…'); cur.lostTimer = setTimeout(() => { if (call === cur) finishCall(cur.connectedAt ? 'ok' : 'failed'); }, 10000); }
@@ -2718,6 +2727,7 @@ async function startCall(video) {
   setCallStatus('Звоню…');
   startTone('out');
   try {
+    if (CALL_BETA) prepareVideo(pc, true);
     await pc.setLocalDescription(await pc.createOffer());
     await gathered(pc);
     if (!call || call.id !== id) return;
@@ -2767,6 +2777,7 @@ async function acceptCall(withVideo) {
     if (call !== cur) { cur.local.getTracks().forEach((t) => t.stop()); return; }
     cur.local.getTracks().forEach((t) => cur.pc.addTrack(t, cur.local));
     await cur.pc.setRemoteDescription({ type: 'offer', sdp: cur.offer });
+    if (CALL_BETA) prepareVideo(cur.pc);
     await flushIce(cur);
     await cur.pc.setLocalDescription(await cur.pc.createAnswer());
     await gathered(cur.pc);
@@ -2800,6 +2811,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
     cur.ui.status.textContent = text;
     cur.ui.controls.replaceChildren();
   }
+  try { cur.extras?.dispose(); } catch {}
   try { cur.unfit?.(); } catch {}
   try { stopTone(); } catch {}
   try { stopTitle(); } catch {}
@@ -2824,13 +2836,18 @@ function callButton(cls, ic, label, onclick) {
 }
 function showCallUi() {
   const cur = call;
+  if (CALL_BETA) cur.extras = createCallExtras(cur, {
+    active: () => call === cur, update: updateCallUi, notice: toast,
+    signal: (msg) => sendSignal(cur.conv, cur.peer, { ...msg, id: cur.id }),
+  });
   const remote = h('video', { class: 'call-remote', autoplay: true, playsInline: true });
   remote.setAttribute('playsinline', '');
   const local = h('video', { class: 'call-local', autoplay: true, playsInline: true, muted: true });
   local.setAttribute('playsinline', ''); local.muted = true;
   const status = h('div', { class: 'call-status' });
   const controls = h('div', { class: 'call-controls' });
-  const peerBox = h('div', { class: 'call-peer' }, userAvatar(cur.peer, 'xl'), h('div', { class: 'call-name', text: nameOf(cur.peer) }), status);
+  const quality = h('div', { class: 'call-quality', text: CALL_BETA ? 'Тест звонков' : '' });
+  const peerBox = h('div', { class: 'call-peer' }, userAvatar(cur.peer, 'xl'), h('div', { class: 'call-name', text: nameOf(cur.peer) }), status, quality);
   const root = h('div', { class: 'call-screen' + (cur.video ? ' is-video' : ''), role: 'dialog', 'aria-label': 'Звонок' }, remote, peerBox, local, controls);
   // Вертикальное видео с телефона на широком экране не растягиваем (иначе кадр режется и мылится).
   // Двойное нажатие — переключить «вписать / на весь экран».
@@ -2844,7 +2861,7 @@ function showCallUi() {
   addEventListener('resize', fit);
   cur.unfit = () => removeEventListener('resize', fit);
   remote.addEventListener('dblclick', () => { root.dataset.fill = '1'; root.classList.toggle('fit-contain'); });
-  cur.ui = { root, remote, local, status, controls };
+  cur.ui = { root, remote, local, status, controls, quality };
   document.body.append(root);
   updateCallUi();
 }
@@ -2853,10 +2870,14 @@ function updateCallUi() {
   const cur = call;
   if (!cur?.ui) return;
   const { ui } = cur;
-  if (cur.local && ui.local.srcObject !== cur.local) { ui.local.srcObject = cur.local; ui.local.play?.().catch(() => {}); }
-  const hasRemoteVideo = cur.remote.getVideoTracks().some((t) => t.readyState === 'live');
+  const preview = cur.screenPreview || cur.local;
+  if (preview && ui.local.srcObject !== preview) { ui.local.srcObject = preview; ui.local.play?.().catch(() => {}); }
+  const hasRemoteVideo = cur.remote.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted) && cur.remoteMedia?.video !== false;
   ui.root.classList.toggle('remote-video', hasRemoteVideo && !!cur.connectedAt);
-  ui.root.classList.toggle('local-video', !!cur.local?.getVideoTracks().length);
+  ui.root.classList.toggle('local-video', !!preview?.getVideoTracks().length);
+  ui.root.classList.toggle('local-screen', !!cur.sharingScreen);
+  ui.root.classList.toggle('remote-screen', !!cur.remoteMedia?.screen);
+  ui.quality.textContent = [CALL_BETA ? 'Тест звонков' : '', cur.callQuality || '', cur.sharingScreen ? 'Вы показываете экран' : cur.remoteMedia?.screen ? 'Собеседник показывает экран' : ''].filter(Boolean).join(' · ');
   if (cur.connectedAt) ui.status.textContent = fmtDur((Date.now() - cur.connectedAt) / 1000);
   const mic = cur.local?.getAudioTracks()[0], cam = cur.local?.getVideoTracks()[0];
   const btns = [];
@@ -2866,9 +2887,13 @@ function updateCallUi() {
     btns.push(callButton('accept', 'phone', cur.video ? 'Без видео' : 'Принять', () => acceptCall(false)));
   } else {
     if (mic) btns.push(callButton(mic.enabled ? '' : 'off', 'mic', mic.enabled ? 'Микрофон' : 'Без звука', () => { mic.enabled = !mic.enabled; updateCallUi(); }));
-    if (cam) {
-      btns.push(callButton(cam.enabled ? '' : 'off', 'video', cam.enabled ? 'Камера' : 'Камера выкл.', () => { cam.enabled = !cam.enabled; updateCallUi(); }));
+    if (cam && !cur.sharingScreen) {
+      btns.push(callButton(cam.enabled ? '' : 'off', 'video', cam.enabled ? 'Камера' : 'Камера выкл.', () => { cam.enabled = !cam.enabled; cur.extras?.publish(); updateCallUi(); }));
       btns.push(callButton('', 'flip', 'Сменить', () => flipCamera()));
+    }
+    if (cur.extras && cur.connectedAt) {
+      btns.push(callButton(cur.naturalVoice ? 'off' : '', 'settings', cur.naturalVoice ? 'Естественный' : 'Шумоподавление', () => cur.extras.toggleVoice()));
+      if (navigator.mediaDevices?.getDisplayMedia) btns.push(callButton(cur.sharingScreen ? 'off' : '', 'screen', cur.sharingScreen ? 'Стоп показ' : 'Экран', () => cur.sharingScreen ? cur.extras.stopScreen() : cur.extras.startScreen()));
     }
     btns.push(callButton('decline', 'phone', 'Завершить', () => hangUp()));
   }
@@ -2877,7 +2902,7 @@ function updateCallUi() {
 async function flipCamera() {
   const cur = call;
   const old = cur?.local?.getVideoTracks()[0];
-  if (!old) return;
+  if (!old || cur.sharingScreen) return;
   cur.facing = cur.facing === 'environment' ? 'user' : 'environment';
   try {
     const s = await navigator.mediaDevices.getUserMedia({ video: { ...camConstraints(), facingMode: { exact: cur.facing } } });
