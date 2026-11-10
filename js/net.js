@@ -1,6 +1,6 @@
 // Сеть партнёров. Узлы хранят зашифрованные куски; имя куска = <id чата>/<sha-256 содержимого>.
 // Всё, что приходит с узла, проверяется по хешу: подмену видно сразу, а на узел уходит жалоба.
-import { b64, sha256hex } from './crypto.js?v=20261110070734';
+import { b64, sha256hex } from './crypto.js?v=20261110104500';
 
 const COPIES = 2;            // сколько копий держим в сети
 const TIMEOUT = 7000;        // сколько ждём узел, мс
@@ -102,8 +102,8 @@ export function createNet(sb) {
   async function get(nodeIds, key, hash) {
     await load();
     const all = ordered((nodeIds || []).map((id) => nodes.get(id)).filter(Boolean));
-    const awake = all.filter((n) => !isSleepy(n.id));
-    const list = awake.length ? awake : all;   // уснувшие узлы спрашиваем, только если других нет
+    // Сначала быстрые, затем временно недоступные: последняя копия может быть у них.
+    const list = all;
     for (const node of list) {
       try {
         const r = await fetchWithTimeout(`${node.url}/storage/v1/object/public/blobs/${key}`);
