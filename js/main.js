@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110160928';
-import * as CONFIG from '../config.js?v=20261110160928';
-import * as E2E from './crypto.js?v=20261110160928';
-import { createNet } from './net.js?v=20261110160928';
-import { qrSvg } from './qr.js?v=20261110160928';
-import { findEmbed } from './embeds.js?v=20261110160928';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110160928';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110160928';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110160928';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110162413';
+import * as CONFIG from '../config.js?v=20261110162413';
+import * as E2E from './crypto.js?v=20261110162413';
+import { createNet } from './net.js?v=20261110162413';
+import { qrSvg } from './qr.js?v=20261110162413';
+import { findEmbed } from './embeds.js?v=20261110162413';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110162413';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110162413';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110162413';
 
 /* =====================================================================
    Утилиты
@@ -954,6 +954,7 @@ async function startApp(user) {
   await ensureSaved();
   if (!alive()) return;
   startNews();
+  setTimeout(() => { if (alive()) syncStickers(); }, 4000);   // «Мои стикеры» с других устройств
   scheduleCleanup();
   setTimeout(() => $('chatList').classList.remove('list-enter'), 600);
   clearInterval(state.perksTimer);
@@ -1157,6 +1158,7 @@ function previewText(p) {
   const t = p.t ? stripMarkdown(p.t) : p.t;
   if (p.v) return '🎤 Голосовое ' + fmtDur(p.v.dur) + (p.v.gone ? ' (удалено)' : '');
   if (p.call) return callLabel(p.call, null);
+  if (p.mst) return '🙂 «Мои стикеры» обновлены';
   if (p.st) return '🙂 Стикер «' + stickerLabel(p.st) + '»';
   if (p.file) return '📎 ' + p.file.name + (p.t ? ': ' + stripMarkdown(p.t) : '');
   if (p.img?.st) return '🙂 Стикер';
@@ -1164,6 +1166,7 @@ function previewText(p) {
 }
 function previewOf(c) {
   if (!c.last_sender) return isSaved(c) ? 'Заметки и сохранённое' : c.is_group ? (c.is_official ? 'Официальный чат' : 'Группа создана') : 'Новый чат';
+  if (c.last_p?.mst) return isSaved(c) ? 'Заметки и сохранённое' : 'Стикер';
   if (state.blocked.has(c.last_sender)) return 'Сообщение скрыто';
   const who = c.last_sender === state.me.id ? 'Вы: ' : c.is_group ? nameOf(c.last_sender) + ': ' : '';
   return who + previewText(c.last_p);
@@ -1968,7 +1971,7 @@ function renderMessages({ keepScroll = false, toBottom = false } = {}) {
   for (const fr of box.querySelectorAll('.embed-open[data-mid]')) embedPool.set(fr.dataset.mid, fr);
   for (const im of box.querySelectorAll('img.msg-img[data-ref]')) if (im.src) imgPool.set(im.dataset.ref, im);
   const c = state.chats.get(state.activeId);
-  const all = state.history.get(state.activeId) || [];
+  const all = (state.history.get(state.activeId) || []).filter((m) => !m.p?.mst);   // копии «Моих стикеров» в Избранном не показываем
   // Рисуем не всю историю, а последние сообщения (окно растёт по кнопке): длинная лента открывается быстро
   const list = all.slice(-(state.shown.get(state.activeId) || RENDER_STEP));
   const hiddenOlder = all.length > list.length;
@@ -2965,11 +2968,87 @@ async function stickerImage(file) {
   if (!blob || blob.type !== 'image/webp') blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
   return { blob, type: blob.type, w: canvas.width, h: canvas.height };
 }
+/*
+ * «Мои стикеры» лежат на устройстве (быстро) и копией в «Избранном» — скрытыми зашифрованными сообщениями {mst}.
+ * Так они есть на всех устройствах и не пропадают, когда браузер чистит память (iPhone чистит сайты без
+ * «На экран Домой» через 7 дней; у Safari и у приложения на экране «Домой» разная память).
+ */
 async function myStickers() { try { return (await E2E.store.get(MY_STICKERS)) || []; } catch { return []; } }
+const saveMyStickers = (list) => E2E.store.set(MY_STICKERS, list.slice(0, 60));
 async function addMySticker(blob) {
   const list = await myStickers();
-  list.unshift({ id: uuid(), blob, at: Date.now() });
-  await E2E.store.set(MY_STICKERS, list.slice(0, 60));
+  const st = { id: uuid(), blob, at: Date.now() };
+  list.unshift(st);
+  await saveMyStickers(list);
+  uploadMySticker(st).then(() => syncStickers()).catch(() => {});   // не вышло сейчас — догрузит следующая сверка
+}
+async function removeMySticker(st) {
+  await saveMyStickers((await myStickers()).filter((x) => x.id !== st.id));
+  if (st.mid) {
+    await sb.from('messages').delete().eq('id', st.mid);
+    removeMessage(st.mid);
+    if (st.img) dropMedia(state.savedId, st.img);
+  }
+}
+/** Зашифровать картинку ключом «Избранного» и положить на узлы (или в центр) — как фото */
+async function uploadMySticker(st) {
+  const chatId = state.savedId;
+  if (!chatId || st.mid || !(await ensureChatKey(chatId).catch(() => false))) return;   // ключ «Избранного» создаётся при первой записи
+  const kv = currentVersion(chatId);
+  const sealed = await E2E.sealBytes(chatKey(chatId, kv), await st.blob.arrayBuffer(), 'img|' + chatId);
+  const bytes = new Uint8Array(sealed.data);
+  const hash = await E2E.sha256hex(bytes);
+  const img = { iv: sealed.iv, mime: st.blob.type || 'image/png', a: 2, hash, kv, st: 1 };
+  const nodes = await net.put(`${chatId}/${hash}`, bytes).catch(() => []);
+  if (nodes.length) img.nodes = nodes;
+  else {
+    img.path = `${chatId}/${uuid()}.bin`;
+    const { error } = await sb.storage.from(BUCKET).upload(img.path, new Blob([bytes], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream' });
+    if (error) throw error;
+  }
+  const m = await insertMessage(chatId, { mst: { id: st.id, img } });
+  const list = await myStickers();
+  const mine = list.find((x) => x.id === st.id);
+  if (mine) { mine.mid = m.id; mine.img = img; await saveMyStickers(list); }
+}
+async function downloadMySticker(chatId, img) {
+  let cipher;
+  if (img.path) {
+    const { data, error } = await sb.storage.from(BUCKET).download(img.path);
+    if (error) throw error;
+    cipher = await data.arrayBuffer();
+  } else {
+    cipher = await net.get(img.nodes || [], `${chatId}/${img.hash}`, img.hash);
+    if (!cipher) throw new Error('missing');
+  }
+  const key = chatKey(chatId, img.kv || 1);
+  if (!key) throw new Error('no key');
+  return new Blob([await E2E.openBytes(key, cipher, img.iv, 'img|' + chatId)], { type: img.mime });
+}
+/** Сверка с «Избранным»: докачать добавленные на других устройствах, убрать удалённые, выгрузить свои старые */
+async function syncStickers() {
+  const chatId = state.savedId;
+  if (!chatId || syncStickers.busy || !(await ensureChatKey(chatId).catch(() => false))) return;
+  syncStickers.busy = true;
+  try {
+    const { data, error } = await sb.from('messages').select(MSG_COLUMNS).eq('conversation_id', chatId).order('created_at', { ascending: false }).limit(500);
+    if (error) return;
+    await Promise.all(data.map(decryptMessage));
+    const remote = new Map(data.filter((m) => m.p?.mst?.id).map((m) => [m.p.mst.id, m]));
+    let list = await myStickers();
+    const before = JSON.stringify(list.map((x) => x.id + (x.mid || '')));
+    const complete = data.length < 500;                     // видим все копии — можно убирать удалённые в другом месте
+    if (complete) list = list.filter((x) => !x.mid || remote.has(x.id));
+    for (const [id, m] of remote) {
+      const have = list.find((x) => x.id === id);
+      if (have) { if (!have.mid) { have.mid = m.id; have.img = m.p.mst.img; } continue; }
+      try { list.push({ id, blob: await downloadMySticker(chatId, m.p.mst.img), at: Date.parse(m.created_at) || Date.now(), mid: m.id, img: m.p.mst.img }); } catch {}
+    }
+    list.sort((a, b) => b.at - a.at);
+    await saveMyStickers(list);
+    for (const st of list.filter((x) => !x.mid).slice(0, 10)) await uploadMySticker(st).catch(() => {});   // старые, сохранённые до синхронизации
+    if (JSON.stringify((await myStickers()).map((x) => x.id + (x.mid || ''))) !== before && stickerTab === 'mine' && !$('stickerPanel').hidden) renderStickers();
+  } finally { syncStickers.busy = false; }
 }
 async function saveCustomSticker(m) {
   const src = state.images.get(m.p.img.path || m.p.img.hash);
@@ -3019,20 +3098,20 @@ async function renderStickers() {
     grid.append(input, h('button', { type: 'button', class: 'sticker-tile sticker-add', title: 'Сделать стикер из картинки', onclick: () => input.click() }, icon('plus'), h('small', { text: 'Свой' })));
     for (const st of await myStickers()) {
       const url = URL.createObjectURL(st.blob);
-      grid.append(h('button', { type: 'button', class: 'sticker-tile', title: 'Отправить (долгое нажатие — удалить)',
+      let lp = null;
+      const askRemove = async () => { if (!confirm('Убрать стикер из «Моих» на всех устройствах?')) return; await removeMySticker(st); renderStickers(); };
+      grid.append(h('button', {
+        ontouchstart: () => { lp = setTimeout(() => { lp = 'done'; navigator.vibrate?.(10); askRemove(); }, 550); },
+        ontouchend: (e) => { if (lp === 'done') e.preventDefault(); clearTimeout(lp); lp = null; },
+        ontouchmove: () => { clearTimeout(lp); lp = null; }, type: 'button', class: 'sticker-tile', title: 'Отправить (долгое нажатие — удалить)',
         onclick: async () => { closeStickers(); await sendImage(new File([st.blob], 'sticker', { type: st.blob.type }), null, null, { sticker: true }); },
-        oncontextmenu: async (e) => {
-          e.preventDefault();
-          if (!confirm('Убрать стикер из «Моих»?')) return;
-          await E2E.store.set(MY_STICKERS, (await myStickers()).filter((x) => x.id !== st.id));
-          renderStickers();
-        } }, h('img', { src: url, alt: '', draggable: false })));
+        oncontextmenu: (e) => { e.preventDefault(); if (lp) return; askRemove(); } }, h('img', { src: url, alt: '', draggable: false })));
     }
     grid.append(h('p', { class: 'muted sticker-hint', text: 'Совет: картинка с прозрачным фоном (PNG) выглядит как настоящий стикер. Чужой стикер можно сохранить: долгое нажатие на него → «В мои стикеры».' }));
   }
   panel.replaceChildren(tabs, grid);
 }
-function openStickers() { $('stickerPanel').hidden = false; $('stickerBtn').classList.add('on'); renderStickers(); }
+function openStickers() { $('stickerPanel').hidden = false; $('stickerBtn').classList.add('on'); renderStickers(); syncStickers(); }
 function closeStickers() { $('stickerPanel').hidden = true; $('stickerBtn').classList.remove('on'); }
 $('stickerBtn').onclick = () => ($('stickerPanel').hidden ? openStickers() : closeStickers());
 
@@ -3962,7 +4041,8 @@ async function addMessage(m, fromServer = false) {
 
   const visible = c.id === state.activeId && !document.hidden;
   if (c.id === state.activeId) {
-    if (hist && isNew) appendBubble(m, m.sender_id === state.me.id);   // повтор своего же с сервера — ничего не меняем
+    if (hist && isNew && !m.p?.mst) appendBubble(m, m.sender_id === state.me.id);
+    if (m.p?.mst && m.sender_id === state.me.id && fromServer) syncStickers();   // добавили стикер на другом устройстве   // повтор своего же с сервера — ничего не меняем
     if (m.sender_id !== state.me.id) markRead(c.id);
   }
   if (fromServer && isNew && m.sender_id !== state.me.id && !visible && prefs.sound && !state.blocked.has(m.sender_id)) ding();
