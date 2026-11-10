@@ -7,6 +7,9 @@ ARGS = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', 
 def reset():
     urllib.request.urlopen(urllib.request.Request(BASE + 'api/reset', data=b'{}', method='POST'))
 
+def api(path, body):
+    return json.load(urllib.request.urlopen(urllib.request.Request(BASE + 'api/' + path, data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'}, method='POST')))
+
 def debug():
     return json.load(urllib.request.urlopen(urllib.request.Request(BASE + 'api/debug', data=b'{}', method='POST')))
 

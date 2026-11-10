@@ -13,7 +13,7 @@ const uuid = () => crypto.randomUUID();
 const db = {
   users: [], profiles: [], user_keys: [], key_backups: [], conversations: [], conversation_members: [],
   conversation_keys: [], conversation_key_claims: [], messages: [], reactions: [], blocks: [], nodes: [],
-  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [],
+  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], donors: [], app_settings: [], turn_providers: [],
 };
 const files = new Map();        // bucket/path -> { bytes, owner, type }
 let msgSeq = 1;
@@ -67,6 +67,7 @@ function readable(uid, table, r) {
     case 'blocks': return r.blocker === uid;
     case 'partner_gifts': return r.partner_id === uid || r.friend_id === uid;
     case 'nodes': return r.status === 'active' || r.owner === uid;
+    case 'turn_providers': return r.owner === uid;
     default: return true;
   }
 }
@@ -79,6 +80,7 @@ function query(uid, q) {
     if (q.order) res.sort((a, b) => (a[q.order.col] < b[q.order.col] ? -1 : a[q.order.col] > b[q.order.col] ? 1 : 0) * (q.order.asc ? 1 : -1));
     if (q.limit) res = res.slice(0, q.limit);
     res = res.map((r) => ({ ...r }));
+    if (q.table === 'turn_providers') res.forEach((r) => delete r.credential);   // пароль не отдаётся, как в базе
   } else if (q.op === 'insert' || q.op === 'upsert') {
     res = [];
     for (const raw of [].concat(q.values)) {
@@ -235,7 +237,30 @@ const RPC = {
     c.key_checks = { ...c.key_checks, [v]: p_check };
     return true;
   },
-  perks_list: () => [], partner_top: () => [], node_stats: () => [],
+  perks_list: () => db.partner_state.filter((s) => s.active).map((s) => ({ user_id: s.user_id, kind: 'partner', tier: s.tier || 'bronze' })),
+  partner_top: () => [], node_stats: () => [],
+  register_turn: (uid, { p_urls, p_username, p_credential }) => {
+    if (!p_urls?.length || p_urls.some((u) => !/^turns?:[A-Za-z0-9.-]{3,253}(:[0-9]{2,5})?(\?transport=(udp|tcp))?$/.test(u))) return fail('bad turn urls');
+    if (db.turn_providers.filter((t) => t.owner === uid).length >= 2) return fail('too many turn servers');
+    const t = { id: uuid(), owner: uid, urls: p_urls, username: p_username, credential: p_credential, status: 'pending', last_ok: null, last_error: null, created_at: now() };
+    db.turn_providers.push(t); return t.id;
+  },
+  delete_turn: (uid, { p_id }) => { db.turn_providers = db.turn_providers.filter((t) => !(t.id === p_id && t.owner === uid)); return null; },
+  set_app_setting: (uid, { p_key, p_value }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators change settings');
+    if (p_key === 'donate_url' && p_value && !/^https:\/\/\S{8,}$/.test(p_value)) return fail('bad donate url');
+    db.app_settings = db.app_settings.filter((x) => x.key !== p_key);
+    if (p_value) db.app_settings.push({ key: p_key, value: p_value });
+    return null;
+  },
+  set_donor: (uid, { p_username, p_on }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators can mark donors');
+    const p = db.profiles.find((x) => x.username === String(p_username).replace(/^@/, '').toLowerCase());
+    if (!p) return fail('user not found');
+    db.donors = db.donors.filter((d) => d.user_id !== p.id);
+    if (p_on) db.donors.push({ user_id: p.id, since: now() });
+    return null;
+  },
   touch_seen: (uid) => { const r = db.last_seen.find((x) => x.user_id === uid); if (r) r.seen_at = now(); else db.last_seen.push({ user_id: uid, seen_at: now(), hidden: false }); return null; },
   seen_of: (uid, { p_ids }) => db.last_seen.filter((s) => p_ids.includes(s.user_id)).map((s) => ({ user_id: s.user_id, seen_at: s.seen_at, recently: true, hidden: s.hidden })),
   set_hide_seen: (uid, { p_hidden }) => { RPC.touch_seen(uid); db.last_seen.find((x) => x.user_id === uid).hidden = p_hidden; return null; },
@@ -332,6 +357,22 @@ http.createServer(async (req, res) => {
       if (!client.queue.length) await new Promise((r) => { client.wait = r; setTimeout(r, 20000); });
       const q = client.queue; client.queue = [];
       return send(res, 200, q);
+    }
+    case '/api/fn/turn-check': {
+      const t = db.turn_providers.find((x) => x.id === j.id);
+      if (!t) return send(res, 200, { data: { checked: 0, results: [] } });
+      const ok = t.username === 'good';
+      Object.assign(t, ok ? { status: 'active', last_ok: now(), last_error: null } : { status: 'failing', last_error: 'неверный логин или пароль' });
+      const s = db.partner_state.find((x) => x.user_id === t.owner);
+      if (s) { s.turn_active = db.turn_providers.some((x) => x.owner === t.owner && x.status === 'active'); s.silver_since = s.turn_active ? (s.silver_since || now()) : null; s.tier = s.turn_active ? 'silver' : 'bronze'; }
+      return send(res, 200, { data: { checked: 1, results: [{ id: t.id, ok, error: t.last_error }] } });
+    }
+    case '/api/role': { const p = db.profiles.find((x) => x.username === j.username); p.role = j.role; return send(res, 200, { ok: true }); }
+    case '/api/partner': {   // тест: сделать человека партнёром (узел)
+      const p = db.profiles.find((x) => x.username === j.username);
+      db.partner_state = db.partner_state.filter((x) => x.user_id !== p.id);
+      db.partner_state.push({ user_id: p.id, active: true, since: now(), msgs: 0, score: 0, turn_active: false, silver_since: j.silver_since || null, tier: j.tier || 'bronze' });
+      return send(res, 200, { ok: true });
     }
     case '/api/debug': return send(res, 200, { db, files: [...files.keys()] });
     case '/api/reset': for (const k of Object.keys(db)) db[k] = []; files.clear(); return send(res, 200, { ok: true });

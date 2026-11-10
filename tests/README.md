@@ -21,6 +21,7 @@ python3 tests/app/t_calls.py   # звонки (в т.ч. 2 устройства)
 python3 tests/app/t_calls2.py  # звонки: адреса только из SDP, поздний ответ, перевход, «печатает»
 python3 tests/app/t_more.py    # добавление в группу, подписи к фото, правка + стикер, счётчик
 python3 tests/app/t_window.py  # окно из 80 сообщений, «Показать более ранние», цитата/поиск за окном
+python3 tests/app/t_partner.py # уровни партнёров, TURN партнёра, донаты, значки
 python3 tests/app/t_layout.py  # скриншоты 320×568, 375×667, 667×375, 1440×900 → /home/claude/test/shots
 ```
 Заглушка не проверяет правила доступа (RLS) — их проверяют SQL-сценарии в `tests/db`.

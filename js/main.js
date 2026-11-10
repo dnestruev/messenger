@@ -1,14 +1,14 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110085106';
-import * as CONFIG from '../config.js?v=20261110085106';
-import * as E2E from './crypto.js?v=20261110085106';
-import { createNet } from './net.js?v=20261110085106';
-import { qrSvg } from './qr.js?v=20261110085106';
-import { findEmbed } from './embeds.js?v=20261110085106';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110085106';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110085106';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110085106';
-import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110085106';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110095302';
+import * as CONFIG from '../config.js?v=20261110095302';
+import * as E2E from './crypto.js?v=20261110095302';
+import { createNet } from './net.js?v=20261110095302';
+import { qrSvg } from './qr.js?v=20261110095302';
+import { findEmbed } from './embeds.js?v=20261110095302';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110095302';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110095302';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110095302';
+import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110095302';
 
 /* =====================================================================
    Утилиты
@@ -117,6 +117,9 @@ function humanError(err) {
     [/Unable to validate email|invalid format/i, 'Проверьте email: похоже, в нём опечатка'],
     [/too many nodes/i, 'Можно подключить не больше 3 узлов'],
     [/stale key/i, 'Ключ чата обновился — попробуйте ещё раз'],
+    [/bad turn urls/i, 'Адрес TURN должен выглядеть так: turn:сервер:порт'],
+    [/too many turn servers/i, 'Можно добавить не больше 2 TURN-серверов'],
+    [/empty turn login/i, 'Укажите логин и пароль TURN'],
   ];
   for (const [re, text] of rules) if (re.test(m)) return text;
   if (/(user_keys|key_backups|conversation_keys|messages_e2ee|last_ct|my_chats|conversation)/i.test(m)
@@ -149,6 +152,9 @@ const state = {
   more: new Map(),          // id чата -> есть ли более ранние сообщения
   typing: { channel: null, until: 0, sentAt: 0, timer: null },
   perks: new Map(),         // id -> 'partner' | 'plus' (награды за узел-партнёр)
+  tiers: new Map(),         // id партнёра -> 'bronze' | 'silver' | 'gold'
+  donors: new Set(),        // id тех, кто поддержал проект
+  settings: {},             // общие настройки: donate_url, donate_text
   seen: new Map(),          // chatId -> Set: какие сообщения уже показаны (новые появляются с анимацией)
   online: new Set(),        // кто сейчас в сети (Realtime Presence)
   lastSeen: new Map(),      // id -> { at: Date|null, recently }
@@ -329,7 +335,20 @@ const ROLE_LABEL = { creator: 'Создатель', tester: 'Тестер' };
 const perkOf = (id) => state.perks.get(id) || null;
 const hasPlus = (id = state.me?.id) => !!perkOf(id);
 const PERK_LABEL = { partner: 'Партнёр', plus: 'Плюс' };
-const PERK_TITLE = { partner: 'Держит узел сети: хранит зашифрованные сообщения для всех', plus: 'Плюс в подарок от партнёра сети' };
+const TIER_LABEL = { bronze: 'Бронза', silver: 'Серебро', gold: 'Золото' };
+/** Уровень партнёра: бронза — узел, серебро — узел + TURN, золото — серебро 30 дней */
+const tierOf = (id) => (perkOf(id) === 'partner' ? state.tiers.get(id) || 'bronze' : null);
+const isDonor = (id) => state.donors.has(id);
+/** Как выглядит каждый значок: иконка, короткая надпись (в профиле) и класс цвета */
+const BADGE = {
+  creator: { icon: 'crown', label: 'Создатель' },
+  tester: { icon: 'flask', label: 'Тестер' },
+  bronze: { icon: 'medal', label: 'Бронза', cls: 'partner tier-bronze' },
+  silver: { icon: 'medal', label: 'Серебро', cls: 'partner tier-silver' },
+  gold: { icon: 'medal', label: 'Золото', cls: 'partner tier-gold' },
+  plus: { icon: 'plus', label: 'Плюс' },
+  donor: { icon: 'heart', label: 'Донатер' },
+};
 /** Информация о подтверждённых статусах пользователя. Права определяет база, не значок. */
 const STATUS_INFO = {
   creator: {
@@ -342,10 +361,29 @@ const STATUS_INFO = {
     description: 'Участник команды тестирования мессенджера.',
     benefits: ['Значок тестера у имени', 'Возможность писать в официальных чатах', 'Участие в тестировании новых функций'],
   },
-  partner: {
-    label: 'Партнёр',
-    description: 'Владелец активного партнёрского узла, который хранит зашифрованные данные сети.',
-    benefits: ['Значок партнёра', 'Фото высокого качества и альбомы до 10 фото', 'До 100 групп и 500 участников в группе', 'Дополнительные темы, рамки и цвет акцента', 'Возможность подарить Плюс друзьям'],
+  bronze: {
+    label: 'Партнёр · Бронза',
+    description: 'Держит узел сети: на нём хранятся зашифрованные сообщения и фото других людей.',
+    benefits: ['Бронзовый значок у ника', 'Фото высокого качества и альбомы до 10 фото', 'До 100 групп и 500 участников в группе', 'Дополнительные темы, рамки и цвет акцента', 'Плюс в подарок пятерым друзьям'],
+    how: 'Подключить свой узел: Настройки → Партнёрство → «Стать партнёром».',
+  },
+  silver: {
+    label: 'Партнёр · Серебро',
+    description: 'Держит узел сети и свой TURN-сервер: через него проходят звонки, когда телефоны не могут соединиться напрямую.',
+    benefits: ['Серебряный значок у ника', 'Всё, что даёт бронза', '+500 очков в рейтинге партнёров'],
+    how: 'Быть бронзовым партнёром и добавить рабочий TURN: Настройки → Партнёрство → «TURN для звонков».',
+  },
+  gold: {
+    label: 'Партнёр · Золото',
+    description: 'Серебряный партнёр больше 30 дней подряд — опора сети.',
+    benefits: ['Золотой переливающийся значок у ника', 'Всё, что даёт серебро'],
+    how: 'Продержать серебро 30 дней без перерыва (узел и TURN должны работать).',
+  },
+  donor: {
+    label: 'Донатер',
+    description: 'Поддержал проект деньгами — на эти деньги мессенджер растёт.',
+    benefits: ['Значок с сердцем у ника', 'Огромное спасибо от команды'],
+    how: 'Поддержать проект: Настройки → «Поддержать проект». Значок выдаёт создатель.',
   },
   plus: {
     label: 'Плюс',
@@ -360,7 +398,7 @@ async function openStatusInfo(uid, kind) {
   if (!info || !state.me) return;
   document.querySelector('.status-info-overlay')?.remove();
   const status = h('div', { class: 'status-check', role: 'status', text: 'Проверяем статус на сервере…' });
-  const badge = h('span', { class: 'role ' + kind, text: info.label });
+  const badge = badgeEl(kind);
   const bullets = h('ul', { class: 'status-benefits' }, ...info.benefits.map((t) => h('li', { text: t })));
   let overlay;
   const close = () => {
@@ -381,6 +419,7 @@ async function openStatusInfo(uid, kind) {
       h('p', { text: info.description }),
       h('b', { text: 'Возможности и привилегии' }),
       bullets,
+      info.how ? h('p', { class: 'muted' }, h('b', { text: 'Как получить: ' }), info.how) : null,
       h('p', { class: 'status-info-note', text: 'Статус проверяется по данным сервера Supabase. Оформление значка само по себе не предоставляет прав.' }),
       h('button', { class: 'btn btn-block', type: 'button', text: 'Понятно', onclick: close })));
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -392,10 +431,15 @@ async function openStatusInfo(uid, kind) {
       const { data, error } = await sb.from('profiles').select('role').eq('id', uid).maybeSingle();
       if (error) throw error;
       confirmed = data?.role === kind;
+    } else if (kind === 'donor') {
+      const { data, error } = await sb.from('donors').select('user_id').eq('user_id', uid).maybeSingle();
+      if (error) throw error;
+      confirmed = !!data;
     } else {
       const { data, error } = await sb.rpc('perks_list');
       if (error) throw error;
-      confirmed = (data || []).some((row) => row.user_id === uid && row.kind === kind);
+      const row = (data || []).find((r) => r.user_id === uid);
+      confirmed = kind === 'plus' ? row?.kind === 'plus' : row?.kind === 'partner' && (row.tier || 'bronze') === kind;
     }
     if (!overlay.isConnected) return;
     status.classList.add(confirmed ? 'verified' : 'unverified');
@@ -409,28 +453,32 @@ async function openStatusInfo(uid, kind) {
   }
 }
 
+/** Значок: иконка + надпись; compact — только иконка (список чатов, шапка) */
+function badgeEl(kind, compact = false, extra = {}) {
+  const b = BADGE[kind];
+  return h('span', { class: 'role ' + (b.cls || kind) + (compact ? ' mini' : ''), ...extra }, icon(b.icon), compact ? null : h('span', { text: b.label }));
+}
 function clickableBadge(id, kind, compact = false) {
-  const team = kind === 'creator' || kind === 'tester';
-  const label = (team ? ROLE_LABEL : PERK_LABEL)[kind];
-  const shown = !team && compact ? (kind === 'partner' ? '★' : '+') : label;
+  const label = STATUS_INFO[kind]?.label || BADGE[kind].label;
   const open = (e) => { e.preventDefault(); e.stopPropagation(); openStatusInfo(id, kind); };
-  return h('span', {
-    class: 'role ' + kind + (!team && compact ? ' mini' : '') + ' status-clickable',
+  const el = badgeEl(kind, compact, {
     role: 'button', tabindex: 0,
-    title: 'Нажмите, чтобы проверить статус «' + label + '»',
+    title: label + ' — нажмите, чтобы проверить',
     'aria-label': 'Проверить статус «' + label + '»',
     onclick: open,
     onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') open(e); },
-    text: shown,
   });
+  el.classList.add('status-clickable');
+  return el;
 }
 
-/** compact — маленькая награда в списке чатов и шапке. */
+/** Все значки человека: команда, партнёрка (уровень) или Плюс, донатер. compact — только иконки. */
 function roleBadge(id, compact = false) {
   const r = roleOf(id), k = perkOf(id);
   return [
-    r && ROLE_LABEL[r] ? clickableBadge(id, r) : null,
-    k && PERK_LABEL[k] ? clickableBadge(id, k, compact) : null,
+    r && BADGE[r] ? clickableBadge(id, r, compact) : null,
+    k === 'partner' ? clickableBadge(id, tierOf(id), compact) : k === 'plus' ? clickableBadge(id, 'plus', compact) : null,
+    isDonor(id) ? clickableBadge(id, 'donor', compact) : null,
   ];
 }
 /** Рамка видна, только пока у человека есть Плюс */
@@ -439,8 +487,19 @@ async function loadPerks() {
   const { data, error } = await sb.rpc('perks_list');
   if (error) return;                                        // база ещё без update-7
   const next = new Map((data || []).map((r) => [r.user_id, r.kind]));
-  let changed = next.size !== state.perks.size || [...next].some(([k, v]) => state.perks.get(k) !== v);
+  const tiers = new Map((data || []).filter((r) => r.kind === 'partner').map((r) => [r.user_id, r.tier || 'bronze']));
+  let changed = next.size !== state.perks.size || [...next].some(([k, v]) => state.perks.get(k) !== v)
+    || tiers.size !== state.tiers.size || [...tiers].some(([k, v]) => state.tiers.get(k) !== v);
   state.perks = next;
+  state.tiers = tiers;
+  // донатеры и ссылка «Поддержать» (таблицы появятся с update-14; до этого просто пусто)
+  const [dn, st] = await Promise.all([sb.from('donors').select('user_id'), sb.from('app_settings').select('key, value')]);
+  if (!dn.error) {
+    const donors = new Set((dn.data || []).map((r) => r.user_id));
+    if (donors.size !== state.donors.size || [...donors].some((x) => !state.donors.has(x))) changed = true;
+    state.donors = donors;
+  }
+  if (!st.error) state.settings = Object.fromEntries((st.data || []).map((r) => [r.key, r.value]));
   const plus = hasPlus();
   if (plus !== prefs.plus) { prefs.plus = plus; savePrefs(); applyTheme(); }
   if (await refreshPeople().catch(() => false)) changed = true;
@@ -976,7 +1035,7 @@ function stopApp() {
   state.activeId = null;
   state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
   state.showArchive = false;
-  clearInterval(state.perksTimer); state.perks.clear(); state.seen.clear(); state.savedId = null;
+  clearInterval(state.perksTimer); state.perks.clear(); state.tiers.clear(); state.donors.clear(); state.settings = {}; state.seen.clear(); state.savedId = null;
   stopPresence(); state.lastSeen.clear(); state.reactions.clear(); state.shown.clear();
   stopCalls();
   setCompose(null);
@@ -1234,11 +1293,11 @@ function photoControls(msg, redraw) {
   if (!PROFILE_COLUMNS.includes('avatar_path')) return null;   // база ещё без update-8
   const input = h('input', { type: 'file', accept: 'image/*', hidden: true });
   const wrap = h('div', { class: 'inline photo-controls' });
-  const draw = () => wrap.replaceChildren(input,
+  const draw = () => wrap.replaceChildren(...[input,
     h('button', { class: 'btn', type: 'button', onclick: () => input.click() }, icon('camera'), photoOf(state.me.id) ? 'Сменить фото' : 'Поставить фото'),
     photoOf(state.me.id) ? h('button', { class: 'btn', type: 'button', text: 'Убрать', onclick: async () => {
       try { await setAvatarPhoto(null); redraw(); draw(); say(msg, 'Фото убрано', 'ok'); } catch (e) { say(msg, humanError(e)); }
-    } }) : null);
+    } }) : null].filter(Boolean));
   input.onchange = async () => {
     const f = input.files[0]; input.value = '';
     if (!f) return;
@@ -4222,6 +4281,7 @@ function openSettings() {
       say(msg, 'Профиль сохранён', 'ok');
     } })),
     perksSection(msg),
+    donateSection(msg),
     section('Оформление',
       segmented([['classic', 'Обычный'], ['dot', 'Dot']], prefs.style, (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })),
       segmented([['light', 'Светлая'], ['dark', 'Тёмная'], ['auto', 'Авто']], prefs.mode, (v) => { prefs.mode = v; savePrefs(); applyTheme(); })),
@@ -4236,6 +4296,7 @@ function openSettings() {
       isDesktop() ? h('p', { class: 'muted', text: 'Горячие клавиши: Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+E (код), Ctrl+Shift+X (зачеркнуть), Ctrl+Shift+P (спойлер).' }) : null),
     section('Приложение', appBlock),
     teamSection,
+    roleOf(state.me.id) === 'creator' ? donateAdmin(msg) : null,
     section('Шифрование',
       h('div', { class: 'row-text' }, h('small', { text: 'Ключ этого устройства' }),
         h('span', { class: 'fp', text: (keys.fp || '').slice(0, 24).replace(/(.{4})/g, '$1 ').trim() })),
@@ -4276,8 +4337,9 @@ function perksSection(msg) {
   const kind = perkOf(me);
   const body = h('div', { style: { display: 'grid', gap: '12px' } });
 
+  const tier = tierOf(me);
   const status = kind === 'partner'
-    ? h('div', { class: 'perk-card on' }, h('b', { text: 'Вы партнёр сети' }), h('small', { text: 'Ваш узел в сети — все награды включены. Спасибо!' }))
+    ? h('div', { class: 'perk-card on' }, h('b', {}, 'Вы партнёр сети ', badgeEl(tier)), h('small', { text: 'Ваш узел в сети — все награды включены. Спасибо!' }))
     : kind === 'plus'
       ? h('div', { class: 'perk-card on' }, h('b', { text: 'У вас Плюс' }), h('small', { text: 'Подарок от партнёра. Действует, пока его узел в сети.' }))
       : h('div', { class: 'perk-card' }, h('b', { text: 'Обычный аккаунт' }),
@@ -4324,9 +4386,140 @@ function perksSection(msg) {
         (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })));
   }
 
+  body.append(tierLadder(msg));
   if (kind === 'partner') body.append(giftsBlock(msg));
   body.append(topBlock());
   return section('Партнёрство', body);
+}
+
+/* ---------- Уровни партнёра и TURN для звонков ---------- */
+const TURN_STATE = { active: 'работает', failing: 'не отвечает', pending: 'проверяется', disabled: 'отключён создателем' };
+function tierLadder(msg) {
+  const me = state.me.id;
+  const wrap = h('div', { class: 'tier-ladder' });
+  const draw = async () => {
+    const [{ data: ps }, { data: turns, error: turnErr }] = await Promise.all([
+      sb.from('partner_state').select('active, turn_active, silver_since, tier').eq('user_id', me).maybeSingle(),
+      sb.from('turn_providers').select('id, urls, status, last_ok, last_error, created_at').eq('owner', me).order('created_at', { ascending: true }),
+    ]);
+    const node = ps ? !!ps.active : perkOf(me) === 'partner', turn = !!ps?.turn_active;   // до update-14 колонок нет — берём из значков
+    const days = ps?.silver_since ? Math.floor((Date.now() - ts(ps.silver_since)) / 86400000) : 0;
+    const step = (kind, done, title, sub, extra) => h('div', { class: 'tier-step' + (done ? ' done' : '') },
+      badgeEl(kind, true), h('div', { class: 'row-text' }, h('b', { text: title }), h('small', { text: sub })),
+      h('span', { class: 'tier-mark', text: done ? '✓' : '' }), extra || null);
+    const goldPct = Math.min(100, Math.round((days / 30) * 100));
+    wrap.replaceChildren(
+      h('b', { text: 'Уровни партнёра' }),
+      step('bronze', node, 'Бронза', node ? 'Ваш узел в сети' : 'Подключите узел сети'),
+      step('silver', node && turn, 'Серебро', turn ? (node ? 'Узел и TURN работают' : 'TURN работает — нужен ещё узел') : 'Узел + свой TURN для звонков'),
+      step('gold', ps?.tier === 'gold', 'Золото',
+        ps?.tier === 'gold' ? 'Серебро больше 30 дней — вы опора сети' : node && turn ? `Серебро ${days} из 30 дней` : 'Серебро 30 дней подряд',
+        node && turn && ps?.tier !== 'gold' ? h('div', { class: 'tier-progress' }, h('span', { style: { width: goldPct + '%' } })) : null),
+      turnErr ? null : turnBlock(turns || [], msg, draw));
+  };
+  draw();
+  return wrap;
+}
+
+function turnBlock(list, msg, redraw) {
+  const urls = h('input', { placeholder: 'turn:relay1.expressturn.com:3478', autocapitalize: 'off', spellcheck: 'false' });
+  const user = h('input', { placeholder: 'Логин (Username)', autocapitalize: 'off', spellcheck: 'false', autocomplete: 'off' });
+  const pass = h('input', { placeholder: 'Пароль (Password)', type: 'password', autocomplete: 'new-password' });
+  const add = h('button', { class: 'btn btn-primary', type: 'button', text: 'Добавить и проверить' });
+  const rows = list.map((t) => h('div', { class: 'turn-row' },
+    h('div', { class: 'row-text' }, h('b', { text: t.urls[0].replace(/^turns?:/, '').replace(/\?transport=.*$/, '') + (t.urls.length > 1 ? ` +${t.urls.length - 1}` : '') }),
+      h('small', { text: t.status === 'active' && t.last_ok ? 'Проверен ' + shortTime(t.last_ok) : t.last_error || 'Ждёт проверки' })),
+    h('span', { class: 'turn-state ' + t.status, text: TURN_STATE[t.status] || t.status }),
+    h('div', { class: 'inline', style: { gridColumn: '1 / -1' } },
+      h('button', { class: 'btn', type: 'button', text: 'Проверить', onclick: (e) => checkTurnNow(t.id, msg, redraw, e.currentTarget) }),
+      h('button', { class: 'btn btn-danger', type: 'button', text: 'Удалить', onclick: async () => {
+        if (!confirm('Удалить этот TURN-сервер?')) return;
+        const { error } = await sb.rpc('delete_turn', { p_id: t.id });
+        if (error) return say(msg, humanError(error));
+        redraw();
+      } }))));
+  add.onclick = async () => {
+    const list = urls.value.split(/[\s,]+/).map((u) => u.trim()).filter(Boolean)
+      .map((u) => (/^turns?:/i.test(u) ? u : 'turn:' + u));
+    if (!list.length || !user.value.trim() || !pass.value) return say(msg, 'Заполните адрес, логин и пароль');
+    add.disabled = true;
+    const { data: id, error } = await sb.rpc('register_turn', { p_urls: list, p_username: user.value.trim(), p_credential: pass.value });
+    add.disabled = false;
+    if (error) return say(msg, humanError(error));
+    urls.value = user.value = pass.value = '';
+    await checkTurnNow(id, msg, redraw);
+  };
+  return h('div', { class: 'turn-form' },
+    h('div', { class: 'row-text' }, h('b', {}, icon('relay'), ' TURN для звонков'),
+      h('small', { text: 'Когда телефоны не видят друг друга напрямую (часто на мобильном интернете), звонок идёт через TURN. Добавьте свой — и станьте серебряным партнёром.' })),
+    ...rows,
+    list.length < 2 ? h('div', { class: 'turn-form' }, urls, user, pass, add,
+      h('small', { class: 'muted', text: 'Бесплатно: expressturn.com (1 ТБ в месяц). Звук и видео идут зашифрованными — TURN их не слышит и не видит, но знает IP-адреса собеседников. Пароль хранится на сервере и никому не показывается.' })) : null);
+}
+
+async function checkTurnNow(id, msg, redraw, btn) {
+  if (btn) btn.disabled = true;
+  say(msg, 'Проверяем TURN-сервер…', 'ok');
+  const { data, error } = await sb.functions.invoke('turn-check', { body: { id } }).catch((e) => ({ error: e }));
+  if (btn) btn.disabled = false;
+  const r = data?.results?.[0];
+  if (error || !data) say(msg, 'Проверка сейчас недоступна — сервер проверит сам в течение 6 часов');
+  else if (!r) say(msg, 'Проверяли только что — подождите 20 секунд');
+  else say(msg, r.ok ? 'TURN работает ✓ Уровень обновится в течение пары минут' : 'TURN не отвечает: ' + (r.error || 'ошибка'), r.ok ? 'ok' : 'err');
+  await loadPerks().catch(() => {});
+  document.querySelectorAll('.profile-head .name-line').forEach((el) => el.replaceWith(h('div', { class: 'name-line' }, roleBadge(state.me.id))));
+  redraw();
+}
+
+/* ---------- Поддержать проект ---------- */
+function donateSection(msg) {
+  const url = state.settings.donate_url;
+  const text = state.settings.donate_text || 'Мессенджер бесплатный и без рекламы. Если он вам нравится — поддержите проект: деньги идут на серверы и развитие.';
+  const body = h('div', { class: 'donate-card' },
+    h('b', {}, icon('heart'), ' Поддержать проект'),
+    h('small', { text: text }),
+    url ? h('a', { class: 'btn btn-primary btn-block', href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Поддержать' })
+      : h('small', { class: 'muted', text: 'Ссылка для поддержки скоро появится.' }),
+    h('small', { class: 'muted' }, 'Тем, кто поддержал, создатель выдаёт значок ', badgeEl('donor'), '. Напишите @deltaofishal после доната.'));
+  return section('Поддержать проект', body);
+}
+/** Для создателя: ссылка на донаты и значки донатерам */
+function donateAdmin(msg) {
+  const link = h('input', { placeholder: 'https://… (DonationAlerts, Boosty, ЮMoney)', value: state.settings.donate_url || '', autocapitalize: 'off', spellcheck: 'false' });
+  const note = h('textarea', { placeholder: 'Текст рядом с кнопкой (необязательно)', rows: 2, value: state.settings.donate_text || '' });
+  const nick = h('input', { placeholder: 'Ник донатера', autocapitalize: 'off', spellcheck: 'false' });
+  const list = h('div', { style: { display: 'grid', gap: '8px' } });
+  const drawDonors = async () => {
+    const ids = [...state.donors];
+    await loadPeople(ids);
+    list.replaceChildren(...(ids.length ? ids.map((uid) => h('div', { class: 'member' }, userAvatar(uid, 'xs'),
+      h('div', { class: 'row-text', style: { flex: '1' } }, h('b', { text: nameOf(uid) }), h('small', { text: nickOf(uid) })),
+      h('button', { class: 'btn', type: 'button', text: 'Убрать', onclick: async () => {
+        const { error } = await sb.rpc('set_donor', { p_username: state.people.get(uid)?.username, p_on: false });
+        if (error) return say(msg, humanError(error));
+        await loadPerks(); drawDonors();
+      } }))) : [h('small', { class: 'muted', text: 'Донатеров пока нет.' })]));
+  };
+  drawDonors();
+  return section('Донаты (видно только вам)',
+    h('div', { class: 'row-text' }, h('b', { text: 'Ссылка «Поддержать»' }), h('small', { text: 'Её увидят все в настройках' })),
+    link, note,
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Сохранить ссылку', onclick: async () => {
+      const a = await sb.rpc('set_app_setting', { p_key: 'donate_url', p_value: link.value.trim() });
+      const b = a.error ? a : await sb.rpc('set_app_setting', { p_key: 'donate_text', p_value: note.value.trim() });
+      if (b.error) return say(msg, /bad donate url/.test(b.error.message) ? 'Ссылка должна начинаться с https://' : humanError(b.error));
+      await loadPerks(); say(msg, 'Ссылка сохранена', 'ok');
+    } }),
+    h('div', { class: 'row-text' }, h('b', { text: 'Значок «Донатер»' })),
+    list,
+    h('div', { class: 'inline' }, nick, h('button', { class: 'btn', type: 'button', text: 'Выдать', onclick: async () => {
+      const u = nick.value.trim().replace(/^@/, '').toLowerCase();
+      if (!u) return;
+      const { error } = await sb.rpc('set_donor', { p_username: u, p_on: true });
+      if (error) return say(msg, /not found/i.test(error.message) ? `Не нашли @${u}` : humanError(error));
+      nick.value = ''; say(msg, `@${u} получил значок «Донатер»`, 'ok');
+      await loadPerks(); drawDonors(); renderChats();
+    } })));
 }
 
 function giftsBlock(msg) {

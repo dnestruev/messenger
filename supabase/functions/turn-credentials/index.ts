@@ -37,6 +37,32 @@ Deno.serve(async (req) => {
     return reply({ error: 'Сервер авторизации недоступен' }, 503);
   }
 
+  const main = await mainServers(userId);
+  const partners = await partnerServers();
+  const iceServers = [...main.servers, ...partners];
+  if (!iceServers.length) return reply({ error: main.error || 'TURN не настроен на сервере' }, 503);
+  return reply({ iceServers, ttlSeconds: 3600, partners: partners.length });
+});
+
+/** Серверы партнёров (проверены функцией turn-check за последние 2 суток): до 3 случайных */
+async function partnerServers() {
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SECRET_KEY') || '';
+  const url = Deno.env.get('SUPABASE_URL');
+  if (!key || !url) return [];
+  try {
+    const since = new Date(Date.now() - 2 * 86400_000).toISOString();
+    const r = await fetch(`${url}/rest/v1/turn_providers?status=eq.active&last_ok=gt.${since}&select=urls,username,credential`, {
+      headers: { apikey: key, ...(key.startsWith('sb_') ? {} : { Authorization: `Bearer ${key}` }) },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!r.ok) return [];
+    const list: { urls: string[]; username: string; credential: string }[] = await r.json();
+    return list.sort(() => Math.random() - 0.5).slice(0, 3).map((p) => ({ urls: p.urls, username: p.username, credential: p.credential }));
+  } catch { return []; }
+}
+
+/** Основной TURN владельца: Cloudflare, постоянные логин/пароль или свой coturn — что настроено в секретах */
+async function mainServers(userId: string): Promise<{ servers: { urls: string[]; username?: string; credential?: string }[]; error?: string }> {
   // Вариант 1: Cloudflare Realtime TURN (бесплатно до 1000 ГБ в месяц).
   // Секреты: CF_TURN_KEY_ID и CF_TURN_API_TOKEN (Cloudflare → Realtime → TURN Server → Create).
   const cfKey = Deno.env.get('CF_TURN_KEY_ID');
@@ -49,16 +75,16 @@ Deno.serve(async (req) => {
         body: JSON.stringify({ ttl: 3600, customIdentifier: userId.slice(0, 36) }),
         signal: AbortSignal.timeout(5000),
       });
-      if (!r.ok) return reply({ error: 'Cloudflare TURN: ' + r.status }, 502);
+      if (!r.ok) return { servers: [], error: 'Cloudflare TURN: ' + r.status };
       const data = await r.json();
       const list = Array.isArray(data.iceServers) ? data.iceServers : data.iceServers ? [data.iceServers] : [];
       // порт 53 браузеры часто блокируют — такие адреса только тормозят сбор
       const iceServers = list.map((s: { urls: string | string[]; username?: string; credential?: string }) => ({
         ...s, urls: (Array.isArray(s.urls) ? s.urls : [s.urls]).filter((u) => !/:53(\?|$)/.test(u)),
       })).filter((s: { urls: string[] }) => s.urls.length);
-      return reply({ iceServers, ttlSeconds: 3600 });
+      return { servers: iceServers };
     } catch {
-      return reply({ error: 'Cloudflare TURN недоступен' }, 502);
+      return { servers: [], error: 'Cloudflare TURN недоступен' };
     }
   }
 
@@ -72,12 +98,12 @@ Deno.serve(async (req) => {
   const staticUser = Deno.env.get('TURN_USERNAME');
   const staticPass = Deno.env.get('TURN_PASSWORD');
   if (staticUser && staticPass && urls.length) {
-    return reply({ iceServers: [{ urls, username: staticUser, credential: staticPass }], ttlSeconds: 3600 });
+    return { servers: [{ urls, username: staticUser, credential: staticPass }] };
   }
 
   // Вариант 3: свой coturn (use-auth-secret). Секреты: TURN_SHARED_SECRET и TURN_URLS.
   const sharedSecret = Deno.env.get('TURN_SHARED_SECRET');
-  if (!sharedSecret || !urls.length) return reply({ error: 'TURN не настроен на сервере' }, 503);
+  if (!sharedSecret || !urls.length) return { servers: [] };
 
   // TURN REST API (coturn use-auth-secret): имя = unix-expiry:user-id,
   // пароль = base64(HMAC-SHA1(secret, имя)).
@@ -88,8 +114,5 @@ Deno.serve(async (req) => {
     'raw', new TextEncoder().encode(sharedSecret), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
   const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(username));
   const credential = btoa(String.fromCharCode(...new Uint8Array(signature)));
-  return reply({
-    iceServers: [{ urls, username, credential }],
-    ttlSeconds,
-  });
-});
+  return { servers: [{ urls, username, credential }] };
+}

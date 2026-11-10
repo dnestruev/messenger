@@ -472,13 +472,19 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 
 /* ---------- Значки команды ---------- */
 .role {
-  display: inline-flex; align-items: center; flex-shrink: 0;
-  padding: 1px 7px; border-radius: 999px;
-  font-size: 10.5px; font-weight: 600; line-height: 1.5; letter-spacing: .01em;
-  vertical-align: middle;
+  display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;
+  padding: 1px 7px 1px 5px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 650; line-height: 1.5; letter-spacing: .01em;
+  vertical-align: middle; white-space: nowrap;
 }
-.role.creator { background: var(--accent); color: var(--accent-text); }
-.role.tester { background: var(--surface-3); color: var(--text); }
+.role > .i { width: 12px; height: 12px; stroke-width: 2.2; }
+/* Значки статусов: у каждого свой цвет и иконка — подделать «на вид» нельзя, нажатие проверяет статус на сервере */
+.role.creator { background: linear-gradient(135deg, #7c4dff, #e0457b); color: #fff; box-shadow: 0 1px 4px rgba(124, 77, 255, .35); }
+.role.tester { background: linear-gradient(135deg, #2f80ed, #26c6da); color: #fff; }
+.role.donor { background: linear-gradient(135deg, #ff5f8f, #ff9a6b); color: #fff; }
+.role.partner.tier-bronze { background: linear-gradient(135deg, #e3a473, #a8612f 60%, #c98450); color: #2b1405; }
+.role.partner.tier-silver { background: linear-gradient(135deg, #f2f5f8, #a9b3bd 55%, #dfe5ea); color: #1d262e; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); }
+.role.partner.tier-gold { background: linear-gradient(110deg, #f5c542, #e08a1e 55%, #f0b23a); color: #2a1a00; }
 [data-style="dot"] .role { font-family: var(--font-mono); font-weight: 500; font-size: 9.5px; text-transform: uppercase; letter-spacing: .1em; border-radius: 6px; }
 [data-style="dot"] .role.tester { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); }
 .avatar.creator { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
@@ -676,7 +682,6 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 
 /* ---------- Награды партнёрам ---------- */
 .muted { color: var(--muted); }
-.role.partner { background: linear-gradient(135deg, #f5c542, #e08a1e); color: #2a1a00; }
 .role.plus { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .name-line .role + .role { margin-left: 4px; }
 .perk-card { display: grid; gap: 2px; padding: 12px 14px; border-radius: var(--radius); background: var(--surface-2); }
@@ -805,19 +810,17 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 #text { transition: border-color .2s, box-shadow .2s, background .2s; }
 #text:focus { box-shadow: 0 0 0 4px var(--accent-soft); }
 
-/* значок партнёра переливается */
-.role.partner {
-  background: linear-gradient(110deg, #f5c542, #e08a1e 55%, #f0b23a);
-  position: relative; overflow: hidden; isolation: isolate;
-}
+/* золотой партнёр переливается; бронза и серебро — спокойные */
+.role.partner.tier-gold { position: relative; overflow: hidden; isolation: isolate; }
 /* блик бежит поверх значка через transform — дёшево; раньше двигался фон и значок перекрашивался каждый кадр */
-.role.partner::after {
+.role.partner.tier-gold::after {
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background: linear-gradient(110deg, transparent 30%, rgba(255, 240, 190, .95) 50%, transparent 70%);
   transform: translateX(-120%); animation: shimmer 3.5s linear infinite;
 }
 @keyframes shimmer { 0% { transform: translateX(-120%); } 45%, 100% { transform: translateX(120%); } }
-.role.mini { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; font-size: 12px; line-height: 1; border-radius: 999px; letter-spacing: 0; }
+.role.mini { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; font-size: 12px; line-height: 1; border-radius: 999px; letter-spacing: 0; }
+.role.mini > .i { width: 11px; height: 11px; }
 [data-style="dot"] .role.mini { font-size: 12px; font-family: var(--font); letter-spacing: 0; border-radius: 999px; }
 
 /* аватарка в профиле слегка «дышит» при наведении */
@@ -1124,7 +1127,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 
 /* на телефонах размытие фона под окном дорогое (старые iPhone подтормаживают) — просто затемняем */
 @media (max-width: 720px) { .overlay { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(10, 10, 16, .55); } }
-@media (prefers-reduced-motion: reduce) { .role.partner::after, .unread-dot::after, .md-spoiler:not(.open) { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .role.partner.tier-gold::after, .unread-dot::after, .md-spoiler:not(.open) { animation: none; } }
 
 /* Opt-in call tools; safe at 320px and in landscape. */
 .call-quality { font-size: 11px; color: #c9d6e9; max-width: min(80vw, 400px); }
@@ -1154,3 +1157,22 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .status-check.unverified { color: var(--danger); }
 .status-benefits { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 13px; }
 .status-info-note { font-size: 12px !important; }
+
+/* ---------- Уровни партнёра, TURN, донаты ---------- */
+.tier-ladder { display: grid; gap: 8px; }
+.tier-step { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+.tier-step.done { box-shadow: inset 0 0 0 1px var(--ok); }
+.tier-step .row-text small { color: var(--muted); }
+.tier-mark { font-size: 13px; font-weight: 700; color: var(--muted); }
+.tier-step.done .tier-mark { color: var(--ok); }
+.tier-progress { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; grid-column: 1 / -1; }
+.tier-progress > span { display: block; height: 100%; background: linear-gradient(90deg, #f5c542, #e08a1e); border-radius: inherit; transition: width .6s ease; }
+.turn-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; align-items: start; padding: 10px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.turn-row b { overflow-wrap: anywhere; font-size: 14px; }
+.turn-row .btn { min-height: 34px; padding: 6px 12px; }
+.turn-row small { color: var(--muted); overflow-wrap: anywhere; }
+.turn-state { font-size: 12px; font-weight: 600; white-space: nowrap; padding-top: 2px; }
+.turn-state.active { color: var(--ok); } .turn-state.failing { color: var(--danger); } .turn-state.pending { color: var(--muted); }
+.turn-form { display: grid; gap: 8px; }
+.donate-card { display: grid; gap: 8px; padding: 14px; border-radius: var(--radius); background: linear-gradient(135deg, rgba(255, 95, 143, .14), rgba(255, 154, 107, .14)); }
+.donate-card .btn-primary { background: linear-gradient(135deg, #ff5f8f, #ff9a6b); color: #fff; border: 0; }

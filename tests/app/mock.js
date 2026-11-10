@@ -99,7 +99,11 @@ export function createClient() {
     channel: (topic, opts) => [...allChannels].find((c) => c.topic === topic) || (() => { const c = new Channel(topic, opts); allChannels.add(c); return c; })(),
     getChannels: () => [...allChannels],
     // Edge Functions: как в рабочем проекте — функции turn-credentials нет (404)
-    functions: { async invoke(name) { await new Promise((r) => setTimeout(r, 150)); return { data: null, error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code' } }; } },
+    functions: { async invoke(name, o = {}) {
+      await new Promise((r) => setTimeout(r, 150));
+      if (name === 'turn-check') { const r = await api('fn/turn-check', o.body || {}); return { data: r.data, error: null }; }
+      return { data: null, error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code' } };   // turn-credentials: TURN не настроен
+    } },
     // Разбор канала занимает время (ответ сервера), до этого sb.channel(то же имя) вернёт этот же канал
     async removeChannel(ch) {
       ch.joinState = 'leaving';
