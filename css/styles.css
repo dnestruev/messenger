@@ -1140,3 +1140,17 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   .call-controls { gap: 8px; }
   .call-screen.remote-video .call-peer { grid-auto-flow: row; gap: 3px; border-radius: 14px; }
 }
+
+/* ---------- Проверка значков ролей и партнёрства ---------- */
+.role.status-clickable { cursor: pointer; user-select: none; touch-action: manipulation; }
+.role.status-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.role.status-clickable:active { transform: scale(.94); }
+.status-info-overlay { z-index: 35; }
+.status-info-card { max-width: 410px; }
+.status-info-heading { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.status-info-heading small { color: var(--muted); }
+.status-check { padding: 10px 12px; background: var(--surface-2); border-radius: 10px; font-size: 13px; }
+.status-check.verified { color: var(--ok); }
+.status-check.unverified { color: var(--danger); }
+.status-benefits { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 13px; }
+.status-info-note { font-size: 12px !important; }
