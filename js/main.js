@@ -1,13 +1,14 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110151400';
-import * as CONFIG from '../config.js?v=20261110151400';
-import * as E2E from './crypto.js?v=20261110151400';
-import { createNet } from './net.js?v=20261110151400';
-import { qrSvg } from './qr.js?v=20261110151400';
-import { findEmbed } from './embeds.js?v=20261110151400';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110151400';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110151400';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110151400';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110163000';
+import * as CONFIG from '../config.js?v=20261110163000';
+import * as E2E from './crypto.js?v=20261110163000';
+import { createNet } from './net.js?v=20261110163000';
+import { qrSvg } from './qr.js?v=20261110163000';
+import { findEmbed } from './embeds.js?v=20261110163000';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110163000';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110163000';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110163000';
+import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110163000';
 
 /* =====================================================================
    Утилиты
@@ -2592,7 +2593,24 @@ $('stickerBtn').onclick = () => ($('stickerPanel').hidden ? openStickers() : clo
    шифруются самим WebRTC (DTLS-SRTP). Сигналы для соединения шифруются
    ключом личного чата — подделать звонок или подсмотреть их посторонний не может.
    ===================================================================== */
-const ICE_SERVERS = CONFIG.ICE_SERVERS || [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+const ICE_SERVERS = CONFIG.ICE_SERVERS || DEFAULT_ICE_SERVERS;
+
+/** Настраиваем свежие TURN credentials перед SDP. При отсутствии функции остаётся STUN. */
+async function configureCallIce(cur) {
+  try {
+    const config = await loadIceConfiguration(sb, ICE_SERVERS);
+    if (call !== cur || cur.pc.signalingState === 'closed') return;
+    cur.turnAvailable = config.turnConfigured;
+    cur.turnError = config.turnError;
+    cur.pc.setConfiguration({ ...cur.pc.getConfiguration(), iceServers: config.iceServers });
+  } catch (e) {
+    if (call === cur) {
+      cur.turnAvailable = hasTurn(ICE_SERVERS);
+      cur.turnError = String(e?.message || e);
+      console.warn('Настройка TURN недоступна, пробуем STUN', e);
+    }
+  }
+}
 const RING_TIMEOUT = 45000;
 /** Камера в HD: при слабом интернете браузер сам снизит качество, не обрывая звонок */
 const camConstraints = (facing = 'user') => ({ facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } });
@@ -2699,8 +2717,38 @@ async function onSignal(env) {
   if (msg.t === 'ice') {
     const cur = call;
     if (msg.candidate && (!cur.remoteDev || cur.remoteDev === msg.dev)) {
-      (cur.pendingIce ||= []).push({ dev: msg.dev, candidate: msg.candidate });
+      (cur.remoteIceSeen ||= []).push(msg.candidate);
+      if (cur.remoteIceSeen.length > 300) cur.remoteIceSeen.shift();
+      (cur.pendingIce ||= []).push({ dev: msg.dev, candidate: msg.candidate, gen: msg.gen || 0 });
       await flushIce(cur);
+    }
+    return;
+  }
+  if (msg.t === 'restart-request') {
+    if (call.dir === 'out' && (!call.remoteDev || call.remoteDev === msg.dev)) {
+      recoverIce(call).catch((e) => console.warn('Ошибка восстановления ICE', e));
+    }
+    return;
+  }
+  if (msg.t === 'restart-offer') {
+    if (call.dir === 'in' && call.remoteDev === msg.dev) {
+      await applyRestartOffer(call, msg);
+    }
+    return;
+  }
+  if (msg.t === 'restart-answer') {
+    const cur = call;
+    if (cur.dir !== 'out' || cur.remoteDev !== msg.dev || msg.gen !== cur.iceGeneration) return;
+    if (cur.pc.signalingState !== 'have-local-offer') return;
+    try {
+      await cur.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+      cur.remoteIceGeneration = msg.gen;
+      clearInterval(cur.restartResend);
+      cur.restartResend = null;
+      await flushIce(cur);
+      cur.callStep = 'Проверяем новый ICE-маршрут';
+    } catch (e) {
+      cur.callError = (e?.name || 'Error') + ': ' + (e?.message || e);
     }
     return;
   }
@@ -2713,6 +2761,7 @@ async function onSignal(env) {
     const cur = call;
     cur.answered = true;
     cur.remoteDev = msg.dev;
+    cur.remoteIceGeneration = 0;
     cur.callStep = 'Ответ получен, согласование соединения';
     clearInterval(cur.resend); stopTone();
     setCallStatus('Соединяю…');
@@ -2735,16 +2784,29 @@ async function flushIce(cur) {
     while (call === cur && cur.pendingIce?.length) {
       const item = cur.pendingIce.shift();
       if (item.dev !== cur.remoteDev) continue;
+      const generation = cur.remoteIceGeneration || 0;
+      if ((item.gen || 0) > generation) {
+        // Кандидат следующего ICE-restart пришёл раньше SDP: ждём новый offer/answer.
+        cur.pendingIce.unshift(item);
+        break;
+      }
+      if ((item.gen || 0) < generation) continue;
       const key = JSON.stringify(item.candidate);
       if ((cur.seenIce ||= new Set()).has(key)) continue;
-      await cur.pc.addIceCandidate(item.candidate);
-      cur.seenIce.add(key);
+      try {
+        await cur.pc.addIceCandidate(item.candidate);
+        cur.seenIce.add(key);
+      } catch (e) {
+        // В мобильных сетях кандидаты могут устаревать; не валим весь звонок.
+        cur.lastCandidateError = (e?.name || 'Error') + ': ' + (e?.message || e);
+        console.warn('ICE-кандидат отклонён', e);
+      }
     }
   } finally { cur.flushingIce = false; }
 }
 function replayIce(cur) {
   for (const candidate of cur.localIce || []) {
-    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, candidate }).catch(() => {});
+    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, candidate, gen: cur.iceGeneration || 0 }).catch(() => {});
   }
 }
 function connectionDeadline(cur) {
@@ -2754,11 +2816,112 @@ function connectionDeadline(cur) {
     if (call !== cur || cur.connectedAt) return;
     const elapsed = Date.now() - cur.connectStartedAt;
     setCallStatus('Соединяю… ' + fmtDur(elapsed / 1000));
-    if (elapsed >= 30000) finishCall('failed');
+    if (elapsed >= 30000) recoverIce(cur).catch((e) => console.warn('ICE restart не удался', e));
   }, 1000);
   cur.connectTimer = setTimeout(() => {
-    if (call === cur && !cur.connectedAt) finishCall('failed');
+    if (call === cur && cur.pc.connectionState !== 'connected') recoverIce(cur).catch((e) => console.warn('ICE restart не удался', e));
   }, 30000);
+}
+
+/** При проблемах сети только вызывающий инициирует новую ICE-сессию.
+ * Это исключает одновременные offer (glare) на двух устройствах.
+ * Если TURN не настроен, восстановление не сможет обойти блокировку NAT.
+ */
+async function recoverIce(cur) {
+  if (call !== cur || cur.pc.signalingState === 'closed') return;
+  if (cur.iceRecovering) return;
+  if (!cur.answered) { finishCall('failed'); return; }
+  cur.iceRecovering = true;
+  cur.callStep = 'Повторное согласование ICE';
+  setCallStatus('Восстанавливаю связь…');
+  clearTimeout(cur.connectTimer);
+  clearInterval(cur.connectClock);
+  clearTimeout(cur.lostTimer);
+  cur.connectTimer = null;
+  cur.connectClock = null;
+  cur.lostTimer = null;
+  // Одна попытка восстановления на одну потерю связи.
+  cur.recoveryTimeout = setTimeout(() => {
+    if (call === cur && cur.pc.connectionState !== 'connected') {
+      cur.callError ||= 'ICE: не удалось найти сетевой маршрут даже после повторной попытки';
+      finishCall('failed');
+    }
+  }, 22000);
+  if (cur.dir === 'out') {
+    await startIceRestart(cur);
+  } else {
+    const ask = () => {
+      if (call !== cur || cur.pc.connectionState === 'connected' || cur.restartOfferReceived) return;
+      sendSignal(cur.conv, cur.peer, { t: 'restart-request', id: cur.id }).catch((e) => {
+        cur.lastSignalError = (e?.name || 'Error') + ': ' + (e?.message || e);
+      });
+    };
+    ask();
+    cur.restartRequestTimer = setInterval(ask, 4000);
+  }
+}
+
+async function startIceRestart(cur) {
+  if (call !== cur || cur.pc.signalingState === 'closed') return;
+  if (cur.pc.signalingState !== 'stable') return;
+  try {
+    cur.iceGeneration = (cur.iceGeneration || 0) + 1;
+    cur.localIce = [];
+    cur.seenIce = new Set();
+    cur.pc.restartIce?.();
+    await cur.pc.setLocalDescription(await cur.pc.createOffer({ iceRestart: true }));
+    if (call !== cur) return;
+    cur.restartOfferSdp = cur.pc.localDescription.sdp;
+    const send = () => {
+      if (call !== cur || cur.pc.signalingState !== 'have-local-offer') return;
+      sendSignal(cur.conv, cur.peer, {
+        t: 'restart-offer', id: cur.id, gen: cur.iceGeneration, sdp: cur.restartOfferSdp,
+      }).catch((e) => { cur.lastSignalError = (e?.name || 'Error') + ': ' + (e?.message || e); });
+    };
+    send();
+    clearInterval(cur.restartResend);
+    cur.restartResend = setInterval(send, 4000);
+  } catch (e) {
+    if (call === cur) {
+      cur.callError = 'ICE restart: ' + (e?.message || String(e));
+      finishCall('failed');
+    }
+  }
+}
+
+async function applyRestartOffer(cur, msg) {
+  if (call !== cur || !cur.answered || !Number.isSafeInteger(msg.gen) || msg.gen < 1) return;
+  if (cur.restartAnswerGen === msg.gen && cur.restartAnswerSdp) {
+    sendSignal(cur.conv, cur.peer, {
+      t: 'restart-answer', id: cur.id, gen: msg.gen, sdp: cur.restartAnswerSdp,
+    }).catch(() => {});
+    return;
+  }
+  if (cur.pc.signalingState !== 'stable') return;
+  try {
+    cur.restartOfferReceived = true;
+    clearInterval(cur.restartRequestTimer);
+    cur.restartRequestTimer = null;
+    cur.callStep = 'Применяем новый сетевой маршрут';
+    await cur.pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+    if (call !== cur) return;
+    cur.remoteIceGeneration = msg.gen;
+    cur.iceGeneration = msg.gen;
+    cur.localIce = [];
+    cur.seenIce = new Set();
+    await cur.pc.setLocalDescription(await cur.pc.createAnswer());
+    if (call !== cur) return;
+    cur.restartAnswerGen = msg.gen;
+    cur.restartAnswerSdp = cur.pc.localDescription.sdp;
+    await flushIce(cur);
+    await sendSignal(cur.conv, cur.peer, {
+      t: 'restart-answer', id: cur.id, gen: msg.gen, sdp: cur.restartAnswerSdp,
+    });
+    cur.callStep = 'Проверяем новый ICE-маршрут';
+  } catch (e) {
+    cur.callError = 'Повторное согласование: ' + (e?.message || String(e));
+    console.warn('ICE restart answer не удался', e);
+  }
 }
 
 /** Подсказка в SDP: разрешаем видео до VIDEO_BITRATE (некоторые браузеры иначе держат ~600 кбит/с) */
@@ -2814,7 +2977,7 @@ function makePeer() {
     if (!candidate || !cur || cur.pc !== pc) return;
     const data = candidate.toJSON();
     (cur.localIce ||= []).push(data);
-    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, candidate: data }).catch(() => {});
+    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, candidate: data, gen: cur.iceGeneration || 0 }).catch(() => {});
   };
   pc.ontrack = (e) => {
     for (const tr of (e.streams[0]?.getTracks() || [e.track])) if (!remote.getTracks().includes(tr)) remote.addTrack(tr);
@@ -2825,12 +2988,30 @@ function makePeer() {
     if (!call || call.pc !== pc) return;
     const st = pc.connectionState;
     if (st === 'connected') {
-      clearTimeout(call.lostTimer); clearTimeout(call.connectTimer); clearInterval(call.connectClock);
-      if (!call.connectedAt) { call.connectedAt = Date.now(); stopTone(); call.clock = setInterval(updateCallUi, 1000); if (call.extras) call.extras.start(); else tuneSenders(pc); }
+      const cur = call;
+      clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer); clearInterval(cur.connectClock);
+      clearTimeout(cur.recoveryTimeout); clearInterval(cur.restartResend); clearInterval(cur.restartRequestTimer);
+      cur.lostTimer = null; cur.connectTimer = null; cur.connectClock = null;
+      cur.recoveryTimeout = null; cur.restartResend = null; cur.restartRequestTimer = null;
+      cur.iceRecovering = false;
+      cur.callStep = 'Соединение установлено';
+      if (!cur.connectedAt) { cur.connectedAt = Date.now(); stopTone(); cur.clock = setInterval(updateCallUi, 1000); if (cur.extras) cur.extras.start(); else tuneSenders(pc); }
       updateCallUi();
     }
-    if (st === 'disconnected') { const cur = call; clearTimeout(cur.lostTimer); setCallStatus('Связь пропала…'); cur.lostTimer = setTimeout(() => { if (call === cur) finishCall(cur.connectedAt ? 'ok' : 'failed'); }, 10000); }
-    if (st === 'failed') finishCall('failed');
+    if (st === 'disconnected') {
+      const cur = call;
+      clearTimeout(cur.lostTimer);
+      setCallStatus('Связь пропала. Восстанавливаю…');
+      cur.lostTimer = setTimeout(() => {
+        if (call === cur && cur.pc.connectionState !== 'connected') recoverIce(cur).catch((e) => console.warn('ICE recovery', e));
+      }, 4000);
+    }
+    if (st === 'failed') recoverIce(call).catch((e) => console.warn('ICE recovery', e));
+  };
+  pc.oniceconnectionstatechange = () => {
+    if (call?.pc === pc && pc.iceConnectionState === 'failed') {
+      recoverIce(call).catch((e) => console.warn('ICE recovery', e));
+    }
   };
   return { pc, remote };
 }
@@ -2850,14 +3031,17 @@ async function startCall(video) {
   const id = uuid();
   const { pc, remote } = makePeer();
   call = { id, conv: c.id, peer, video, dir: 'out', pc, local, remote, startedAt: Date.now() };
+  call.turnReady = configureCallIce(call);
   local.getTracks().forEach((t) => pc.addTrack(t, local));
   showCallUi();
   setCallStatus('Звоню…');
   startTone('out');
   try {
+    await call.turnReady;
+    if (!call || call.id !== id) return;
     if (CALL_BETA) prepareVideo(pc, true);
     await pc.setLocalDescription(await pc.createOffer());
-    await gathered(pc);
+    // Trickle ICE: offer отправляем сразу, кандидаты следуют отдельными сигналами.
     if (!call || call.id !== id) return;
     const sdp = withBitrate(pc.localDescription.sdp);
     // запись о звонке в чате: заодно отправит push «новое сообщение», если приложение у собеседника закрыто
@@ -2908,6 +3092,7 @@ async function incomingOffer(conv, from, msg) {
   if (state.blocked.has(from)) return;
   const { pc, remote } = makePeer();
   call = { id: msg.id, conv, peer: from, video: !!msg.video, dir: 'in', pc, remote, offer: msg.sdp, remoteDev: msg.dev, startedAt: Date.now() };
+  call.turnReady = configureCallIce(call);
   sendSignal(conv, from, { t: 'ring', id: msg.id }).catch(() => {});
   showCallUi();
   setCallStatus(msg.video ? 'Входящий видеозвонок' : 'Входящий звонок');
@@ -2941,6 +3126,9 @@ async function acceptCall(withVideo) {
     cur.local = local;
     cur.callStep = 'Добавление аудио/видео';
     local.getTracks().forEach((t) => cur.pc.addTrack(t, local));
+    cur.callStep = 'Настройка STUN/TURN';
+    await cur.turnReady;
+    if (call !== cur) return;
     cur.callStep = 'Обработка предложения (setRemoteDescription)';
     await cur.pc.setRemoteDescription({ type: 'offer', sdp: cur.offer });
     if (call !== cur) return;
@@ -2949,8 +3137,7 @@ async function acceptCall(withVideo) {
 
     cur.callStep = 'Формирование ответа (createAnswer)';
     await cur.pc.setLocalDescription(await cur.pc.createAnswer());
-    cur.callStep = 'Сбор ICE-кандидатов';
-    await gathered(cur.pc);
+    // Trickle ICE: не ждём 2,5 секунды перед передачей ответа.
     if (call !== cur) return;
 
     cur.callStep = 'Отправка ответа (sendSignal)';
@@ -2991,7 +3178,7 @@ function hangUp(why = 'hangup') {
 function callDiagnostics(cur) {
   const hasTurn = ICE_SERVERS.some(s => (Array.isArray(s.urls) ? s.urls : [s.urls]).some(u => /^turns?:/i.test(u || '')));
   return [
-    'Тест: звонки 2',
+    'Тест: звонки 3',
     'Направление: ' + (cur.dir === 'in' ? 'входящий' : 'исходящий'),
     'Ответ: ' + (cur.answered ? 'да' : 'нет'),
     'Локальное описание: ' + (cur.pc.localDescription?.type || 'нет'),
@@ -3000,7 +3187,11 @@ function callDiagnostics(cur) {
     'ICE: ' + cur.pc.iceConnectionState,
     'Сбор адресов: ' + cur.pc.iceGatheringState,
     'Адреса: свои ' + (cur.localIce?.length || 0) + ', принятые отдельно ' + (cur.seenIce?.size || 0),
-    'TURN: ' + (hasTurn ? 'настроен' : 'не настроен (нужен не для всех сетей)'),
+    'Свои типы: ' + describeCandidates(cur.localIce || []),
+    'Чужие типы: ' + describeCandidates(cur.remoteIceSeen || []),
+    'TURN: ' + (cur.turnAvailable ? 'подключён в браузере' : 'не настроен'),
+    'Проверка TURN: ' + (cur.turnError || 'нет ошибок загрузки'),
+    'ICE restart: ' + (cur.iceGeneration || 0),
     'Этап: ' + (cur.callStep || 'не определён'),
     'Ошибка: ' + (cur.callError || cur.iceError || cur.lastSignalError || 'нет кода'),
     'Приглашение: попыток ' + (cur.offerAttempts || 0) +
@@ -3013,11 +3204,14 @@ function callDiagnostics(cur) {
 function finishCall(status, { remote = false, silent = false } = {}) {
   const cur = call;
   if (!cur) return;
-  const diagnostics = status === 'failed' ? callDiagnostics(cur) : null;
+  const diagnostics = status === 'failed'
+    ? selectedRoute(cur.pc).then((route) => callDiagnostics(cur) + '\nМаршрут: ' + route)
+    : null;
   call = null;
   endedCalls.add(cur.id);
   clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer);
-  clearInterval(cur.connectClock);
+  clearInterval(cur.connectClock); clearTimeout(cur.recoveryTimeout);
+  clearInterval(cur.restartResend); clearInterval(cur.restartRequestTimer);
   const dur = cur.connectedAt ? Math.round((Date.now() - cur.connectedAt) / 1000) : 0;
   const text = { ok: 'Звонок завершён · ' + fmtDur(dur), missed: cur.dir === 'out' ? 'Нет ответа' : 'Пропущенный звонок', declined: cur.dir === 'out' ? 'Звонок отклонён' : 'Вы отклонили звонок',
     busy: 'Собеседник занят', failed: 'Не удалось соединиться', cancel: 'Звонок отменён' }[status] || 'Звонок завершён';
@@ -3039,11 +3233,13 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   if (!remote && status === 'failed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'failed' }).catch(() => {});
   if (!remote && !cur.answered && cur.dir === 'out' && status === 'missed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'timeout' }).catch(() => {});
   if (!silent && status === 'failed') {
-    setTimeout(() => {
+    setTimeout(async () => {
+      if (call) return;
+      const report = await diagnostics;
       if (call) return;
       openModal({ title: 'Звонок не соединился' },
         h('p', { text: 'Эти данные помогут найти причину. Можно отправить скриншот этого окна.' }),
-        h('pre', { text: diagnostics, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '12px' } }));
+        h('pre', { text: report, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '12px' } }));
     }, 950);
   }
   // итог звонка записывает тот, кто звонил
