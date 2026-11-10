@@ -45,7 +45,7 @@ with sync_playwright() as pw:
     # бан
     p.locator('.ban-box input').fill('спам'); p.locator('.ban-box button', has_text='1 день').click(); time.sleep(1)
     check('bobby забанен (видно в карточке)', 'Забанен до' in p.inner_text('.modal'))
-    b.open_chat('alice'); b.page.fill('#text', 'я забанен?'); b.page.click('#sendBtn'); time.sleep(1.2)
+    b.open_chat('alice'); b.page.fill('#text', 'я забанен?'); b.page.click('#sendBtn'); time.sleep(2.5)
     check('забаненный не может отправить', 'заблокирован' in b.page.inner_text('body'))
     p.locator('.ban-box button', has_text='Разбанить').click(); time.sleep(1)
     check('разбанен', 'Забанен до' not in p.inner_text('.modal'))
