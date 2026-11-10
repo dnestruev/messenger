@@ -24,6 +24,7 @@ python3 tests/app/t_window.py  # окно из 80 сообщений, «Пока
 python3 tests/app/t_calls3.py  # звонок с TURN от сервера (одинаковые адреса у разных логинов)
 python3 tests/app/t_send.py      # отправка без ожидания сервера
 python3 tests/app/t_pins_news.py # закреплённые чаты и новости
+python3 tests/app/t_admin.py     # админка, бан, смена ника
 python3 tests/app/t_partner.py # уровни партнёров, TURN партнёра, донаты, значки
 python3 tests/app/t_layout.py  # скриншоты 320×568, 375×667, 667×375, 1440×900 → /home/claude/test/shots
 ```

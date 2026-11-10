@@ -14,7 +14,7 @@ const slow = { ms: 0, fail: false };
 const db = {
   users: [], profiles: [], user_keys: [], key_backups: [], conversations: [], conversation_members: [],
   conversation_keys: [], conversation_key_claims: [], messages: [], reactions: [], blocks: [], nodes: [],
-  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], news: [], news_reactions: [], app_settings: [], turn_providers: [],
+  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], bans: [], username_aliases: [], news: [], news_reactions: [], app_settings: [], turn_providers: [],
 };
 const files = new Map();        // bucket/path -> { bytes, owner, type }
 let msgSeq = 1;
@@ -150,6 +150,7 @@ function beforeWrite(uid, table, r, old) {
   }
   if (table === 'messages') {
     const c = conv(r.conversation_id);
+    if (!old && db.bans.some((b) => b.user_id === uid)) return fail('new row violates row-level security policy "messages: not banned" for table "messages"');
     if (!old) {
       if (r.sender_id !== uid || !isMember(uid, r.conversation_id) || !c || (r.key_version || 1) !== c.key_version) return fail('new row violates row-level security policy for table "messages"');
       if (c.is_official && !prof(uid)?.role) return fail('new row violates row-level security policy for table "messages"');
@@ -203,7 +204,43 @@ function addMember(convId, uid) {
 const blockedBetween = (a, b) => db.blocks.some((x) => (x.blocker === a && x.blocked === b) || (x.blocker === b && x.blocked === a));
 const newConv = (o) => { const c = { id: uuid(), is_group: false, title: null, is_official: false, key_version: 1, key_checks: {}, last_message_at: now(), created_at: now(), ...o }; db.conversations.push(c); return c; };
 const RPC = {
-  username_available: (uid, { name }) => !db.profiles.some((p) => p.username === name.toLowerCase()),
+  username_available: (uid, { name }) => !db.profiles.some((p) => p.username === name.toLowerCase()) && !db.username_aliases.some((a) => a.alias === name.toLowerCase()),
+  set_role: (uid, { p_username, p_role }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators can change roles');
+    const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase());
+    if (!p || p.role === 'creator') return fail('user not found or is a creator');
+    p.role = p_role; return null;
+  },
+  admin_users: (uid, { p_q }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    return db.profiles.filter((p) => !p_q || p.username.includes(p_q)).map((p) => {
+      const b = db.bans.find((x) => x.user_id === p.id);
+      return { id: p.id, username: p.username, display_name: p.display_name || null, role: p.role || null, created_at: p.created_at || now(), seen_at: now(),
+        banned: !!b, ban_until: b?.until || null, ban_reason: b?.reason || null, badges: db.badge_grants.filter((g) => g.user_id === p.id).map((g) => g.kind),
+        nodes: 0, turns: db.turn_providers.filter((t) => t.owner === p.id).length, msgs: db.messages.filter((m) => m.sender_id === p.id).length, tier: null };
+    });
+  },
+  admin_stats: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators') : ({ users: db.profiles.length, new_week: db.profiles.length, active_day: 1, active_week: 2,
+    messages: db.messages.length, messages_day: db.messages.length, chats: db.conversations.length, groups: db.conversations.filter((c) => c.is_group).length,
+    db_bytes: 12345678, storage_bytes: 2345678, nodes_active: 0, nodes_total: 0, turn_active: 0, turn_total: db.turn_providers.length, calls_day: 0, calls_ok_day: 0, banned: db.bans.length }),
+  ban_user: (uid, { p_username, p_days, p_reason }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators can ban');
+    const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase());
+    if (!p) return fail('user not found');
+    if (p.role === 'creator') return fail('cannot ban a creator');
+    db.bans = db.bans.filter((b) => b.user_id !== p.id).concat({ user_id: p.id, reason: p_reason, until: p_days ? new Date(Date.now() + p_days * 864e5).toISOString() : null });
+    return null;
+  },
+  unban_user: (uid, { p_username }) => { const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase()); db.bans = db.bans.filter((b) => b.user_id !== p?.id); return null; },
+  change_username: (uid, { p_new }) => {
+    const u = String(p_new).toLowerCase(), me = prof(uid);
+    if (!/^[a-z0-9_]{3,24}$/.test(u)) return fail('bad username');
+    if (me.username_changed_at && Date.now() - Date.parse(me.username_changed_at) < 30 * 864e5) return fail('username change too soon: 10.12.2026');
+    if (db.profiles.some((p) => p.username === u) || db.username_aliases.some((a) => a.alias === u && a.user_id !== uid)) return fail('username taken');
+    db.username_aliases = db.username_aliases.filter((a) => a.alias !== u).concat({ alias: me.username, user_id: uid, until: new Date(Date.now() + 30 * 864e5).toISOString() });
+    me.username = u; me.username_changed_at = now();
+    return u;
+  },
   my_chats: (uid) => db.conversation_members.filter((m) => m.user_id === uid).map((m) => {
     const c = conv(m.conversation_id);
     const lm = db.messages.filter((x) => x.conversation_id === c.id).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
@@ -285,7 +322,6 @@ const RPC = {
     if (!['donor', 'tester', 'bronze', 'silver', 'gold', 'plus', 'relay'].includes(p_kind)) return fail('bad badge');
     const p = db.profiles.find((x) => x.username === String(p_username).replace(/^@/, '').toLowerCase());
     if (!p) return fail('user not found');
-    if (p_kind !== 'donor' && p.id !== uid) return fail('only own badges');
     db.badge_grants = db.badge_grants.filter((d) => !(d.user_id === p.id && d.kind === p_kind));
     if (p_on) db.badge_grants.push({ user_id: p.id, kind: p_kind, since: now() });
     return null;
@@ -333,6 +369,7 @@ http.createServer(async (req, res) => {
     case '/api/login': {
       const u = db.users.find((x) => x.email === j.email && x.password === j.password);
       if (!u) return send(res, 200, fail('Invalid login credentials'));
+      if (db.bans.some((b) => b.user_id === u.id)) return send(res, 200, fail('User is banned'));
       return send(res, 200, { data: { id: u.id, email: u.email, user_metadata: { username: prof(u.id).username } } });
     }
     case '/api/password': { const u = db.users.find((x) => x.id === uid); if (u) u.password = j.password; return send(res, 200, { data: {} }); }

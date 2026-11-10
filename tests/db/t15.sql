@@ -32,3 +32,35 @@ select 'чужой реакцией нельзя' as t; insert into public.news_
 select 'реакций 3' as t, count(*) from public.news_reactions;
 delete from public.news_reactions where emoji = '🔥';
 select 'после снятия 2' as t, count(*) from public.news_reactions;
+-- ---------- админка, бан, смена ника ----------
+reset role;
+insert into auth.users (id, raw_user_meta_data) values ('33333333-3333-3333-3333-333333333333', '{"username":"carol"}');
+set role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
+select 'не создатель: админка — ошибка' as t; select count(*) from public.admin_users();
+select 'не создатель: бан — ошибка' as t; select public.ban_user('carol', 1, 'x');
+select set_config('request.jwt.claim.sub', '22222222-2222-2222-2222-222222222222', false);
+select 'админка: 3 человека' as t, count(*) from public.admin_users();
+select 'поиск car' as t, username from public.admin_users('car');
+select 'статистика' as t, (public.admin_stats()->>'users')::int as users;
+select public.set_badge('carol', 'gold', true);
+select 'значок другому' as t, badges from public.admin_users('carol');
+select public.ban_user('carol', 7, 'спам');
+select 'забанен' as t, banned, ban_reason, ban_until > now() + interval '6 days' as week from public.admin_users('carol');
+reset role; select 'вход закрыт' as t, banned_until is not null as ok from auth.users where id = '33333333-3333-3333-3333-333333333333'; set role authenticated;
+select set_config('request.jwt.claim.sub', '33333333-3333-3333-3333-333333333333', false);
+select 'забаненный не ставит реакции на новости — ошибка' as t; insert into public.news_reactions (news_id, emoji) select id, '👍' from public.news limit 1;
+select set_config('request.jwt.claim.sub', '22222222-2222-2222-2222-222222222222', false);
+select 'создателя не забанить — ошибка' as t; select public.ban_user('bobby', 0, 'x');
+select public.unban_user('carol');
+select 'разбанен' as t, banned from public.admin_users('carol');
+-- смена ника
+select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
+select 'плохой ник — ошибка' as t; select public.change_username('A!');
+select 'занятый — ошибка' as t; select public.change_username('carol');
+select public.change_username('alice_new');
+select 'старый ник ведёт на Алису' as t, user_id = '11111111-1111-1111-1111-111111111111' as ok from public.username_aliases where alias = 'alice';
+select 'старый ник занят для других' as t, public.username_available('alice') as available;
+select 'второй раз сразу — ошибка' as t; select public.change_username('alice_two');
+select set_config('request.jwt.claim.sub', '33333333-3333-3333-3333-333333333333', false);
+select 'чужой старый ник не взять — ошибка' as t; select public.change_username('alice');

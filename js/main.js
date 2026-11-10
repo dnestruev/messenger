@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110153905';
-import * as CONFIG from '../config.js?v=20261110153905';
-import * as E2E from './crypto.js?v=20261110153905';
-import { createNet } from './net.js?v=20261110153905';
-import { qrSvg } from './qr.js?v=20261110153905';
-import { findEmbed } from './embeds.js?v=20261110153905';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110153905';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110153905';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110153905';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110154933';
+import * as CONFIG from '../config.js?v=20261110154933';
+import * as E2E from './crypto.js?v=20261110154933';
+import { createNet } from './net.js?v=20261110154933';
+import { qrSvg } from './qr.js?v=20261110154933';
+import { findEmbed } from './embeds.js?v=20261110154933';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110154933';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110154933';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110154933';
 
 /* =====================================================================
    Утилиты
@@ -119,8 +119,12 @@ function humanError(err) {
     [/bad turn urls/i, 'Адрес TURN должен выглядеть так: turn:сервер:порт'],
     [/too many turn servers/i, 'Можно добавить не больше 2 TURN-серверов'],
     [/empty turn login/i, 'Укажите логин и пароль TURN'],
+    [/user is banned|banned/i, 'Аккаунт заблокирован создателем'],
+    [/username taken/i, 'Этот ник занят'],
+    [/bad username/i, 'Ник: латиница, цифры и _, от 3 до 24 символов'],
+    [/username change too soon: ([\d.]+)/i, 'Ник можно менять раз в 30 дней — следующий раз с $1'],
   ];
-  for (const [re, text] of rules) if (re.test(m)) return text;
+  for (const [re, text] of rules) if (re.test(m)) return m.replace(new RegExp('^.*?' + re.source + '.*$', re.flags.replace('g', '') + 's'), text);
   if (/(user_keys|key_backups|conversation_keys|messages_e2ee|last_ct|my_chats|conversation)/i.test(m)
       && /(not find|does not exist|schema cache)/i.test(m)) return 'База не обновлена: запустите SQL-обновления в Supabase';
   return m;
@@ -1691,8 +1695,12 @@ async function openDirectByNick(raw) {
     $('findInput').value = ''; say('findMsg', '');
     return state.savedId ? openChat(state.savedId) : say('findMsg', 'Это же вы');
   }
-  const { data, error } = await selectProfiles((x) => x.eq('username', q).maybeSingle());
+  let { data, error } = await selectProfiles((x) => x.eq('username', q).maybeSingle());
   if (error) return say('findMsg', humanError(error));
+  if (!data) {                                             // человек недавно сменил ник — старый ещё 30 дней ведёт на него
+    const { data: al } = await sb.from('username_aliases').select('user_id').eq('alias', q).maybeSingle();
+    if (al?.user_id) ({ data } = await selectProfiles((x) => x.eq('id', al.user_id).maybeSingle()));
+  }
   if (!data) return say('findMsg', `Не нашли @${q} — проверьте ник`);
   state.people.set(data.id, data);
   const { data: chatId, error: e2 } = await sb.rpc('get_or_create_dm', { other: data.id });
@@ -2467,6 +2475,7 @@ $('composer').onsubmit = async (e) => {
 
 function sendError(err) {
   const m = String(err?.message || err);
+  if (/not banned/i.test(m)) return 'Не отправилось: аккаунт заблокирован создателем';
   if (/row-level security/i.test(m)) return 'Не отправилось: вы не можете писать в этот чат';
   return 'Не отправилось: ' + humanError(err);
 }
@@ -4322,7 +4331,7 @@ function openSettings() {
 
   openModal({ title: 'Настройки' },
     h('div', { class: 'profile-head' }, avatarSlot, h('div', { class: 'name-line' }, roleBadge(state.me.id)), h('div', { class: 'profile-nick', text: '@' + p.username })),
-    section('Профиль', name, swatches, photoControls(msg, drawAvatar), h('button', { class: 'btn btn-primary btn-block', text: 'Сохранить', onclick: async () => {
+    section('Профиль', name, nickRow(msg), swatches, photoControls(msg, drawAvatar), h('button', { class: 'btn btn-primary btn-block', text: 'Сохранить', onclick: async () => {
       const display_name = name.value.trim() || null;
       const { error } = await sb.from('profiles').update({ display_name, avatar_hue: hue }).eq('id', state.me.id);
       if (error) return say(msg, humanError(error));
@@ -4348,6 +4357,7 @@ function openSettings() {
       isDesktop() ? h('p', { class: 'muted', text: 'Горячие клавиши: Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+E (код), Ctrl+Shift+X (зачеркнуть), Ctrl+Shift+P (спойлер).' }) : null),
     section('Приложение', appBlock),
     teamSection,
+    roleOf(state.me.id) === 'creator' ? adminSection() : null,
     roleOf(state.me.id) === 'creator' ? donateAdmin(msg) : null,
     roleOf(state.me.id) === 'creator' ? ownBadgesAdmin(msg) : null,
     section('Шифрование',
@@ -4605,6 +4615,149 @@ function donateAdmin(msg) {
       nick.value = ''; say(msg, `@${u} получил значок «Донатер»`, 'ok');
       await loadPerks(); drawDonors(); renderChats();
     } })));
+}
+
+/** Ник: менять раз в 30 дней, старый ещё 30 дней ведёт сюда */
+function nickRow(msg) {
+  const p = state.people.get(state.me.id);
+  return h('div', { class: 'row' },
+    h('div', { class: 'row-text' }, h('b', { text: '@' + p.username }), h('small', { text: 'Ник можно менять раз в 30 дней' })),
+    h('button', { class: 'btn', type: 'button', text: 'Сменить', onclick: () => changeNickDialog() }));
+}
+function changeNickDialog() {
+  const p = state.people.get(state.me.id);
+  const input = h('input', { value: p.username, maxLength: 24, autocapitalize: 'off', spellcheck: 'false', placeholder: 'новый_ник' });
+  const msg = note();
+  const save = async () => {
+    const want = input.value.trim().toLowerCase().replace(/^@/, '');
+    if (!/^[a-z0-9_]{3,24}$/.test(want)) return say(msg, 'Ник: латиница, цифры и _, от 3 до 24 символов');
+    if (want === p.username) return closeModal();
+    if (!confirm(`Сменить ник на @${want}? Следующий раз — через 30 дней.`)) return;
+    const { data, error } = await sb.rpc('change_username', { p_new: want });
+    if (error) return say(msg, /change_username|function/i.test(error.message || '') && !/too soon|taken|bad username/i.test(error.message) ? 'Смена ника заработает после обновления сервера' : humanError(error));
+    p.username = data || want;
+    renderMe(); renderChats();
+    toast('Теперь вы @' + p.username + '. Старый ник ещё 30 дней ведёт к вам');
+    openSettings();
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  openModal({ title: 'Сменить ник' },
+    h('p', { text: 'Латиница, цифры и _. Менять можно раз в 30 дней. Старый ник ещё 30 дней будет вести к вам — друзья не потеряют.' }),
+    input, msg,
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Сохранить', onclick: save }),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: () => openSettings() }));
+  setTimeout(() => input.focus(), 50);
+}
+
+/* ---------- Админка (только создатель): люди, роли, значки, бан, статистика ---------- */
+function adminSection() {
+  return section('Админка (видно только вам)',
+    h('div', { class: 'row' },
+      h('div', { class: 'row-text' }, h('b', { text: 'Пользователи и статистика' }), h('small', { text: 'Роли, значки, бан, сколько людей и места' })),
+      h('button', { class: 'btn btn-primary', type: 'button', text: 'Открыть', onclick: () => openAdmin() })));
+}
+const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + ' ГБ' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' МБ' : Math.round(n / 1e3) + ' КБ';
+const fmtDate = (iso) => iso ? FMT_DAY.format(new Date(iso)) : '—';
+function openAdmin(tab = 'stats') {
+  const body = h('div', { class: 'admin' });
+  const tabs = segmented([['stats', 'Статистика'], ['users', 'Люди']], tab, (v) => draw(v));
+  const draw = async (v) => {
+    tab = v;
+    body.replaceChildren(h('p', { class: 'muted', text: 'Загружаю…' }));
+    if (v === 'stats') {
+      const { data: st, error } = await sb.rpc('admin_stats');
+      if (error) return body.replaceChildren(h('p', { class: 'muted', text: /admin_stats|function/i.test(error.message || '') ? 'Админка заработает после обновления сервера (update-15)' : humanError(error) }));
+      const tile = (label, value, sub) => h('div', { class: 'stat-tile' }, h('small', { text: label }), h('b', { text: String(value) }), sub ? h('small', { class: 'muted', text: sub }) : null);
+      const dbPct = Math.round((st.db_bytes / 500e6) * 100), stPct = Math.round((st.storage_bytes / 1e9) * 100);
+      body.replaceChildren(h('div', { class: 'stat-grid' },
+        tile('Людей', st.users, `+${st.new_week} за неделю`),
+        tile('Активны за сутки', st.active_day, `за неделю ${st.active_week}`),
+        tile('Сообщений', st.messages, `за сутки ${st.messages_day}`),
+        tile('Чатов', st.chats, `групп ${st.groups}`),
+        tile('База', fmtBytes(st.db_bytes), `${dbPct}% из 500 МБ`),
+        tile('Файлы в центре', fmtBytes(st.storage_bytes), `${stPct}% из 1 ГБ`),
+        tile('Узлы', `${st.nodes_active} / ${st.nodes_total}`, 'работают / всего'),
+        tile('TURN', `${st.turn_active} / ${st.turn_total}`, 'работают / всего'),
+        tile('Звонков за сутки', st.calls_day, `соединились ${st.calls_ok_day}`),
+        tile('Забанено', st.banned)));
+    } else {
+      const q = h('input', { placeholder: 'Ник или имя', autocapitalize: 'off', spellcheck: 'false' });
+      const list = h('div', { class: 'admin-list' });
+      let timer = null;
+      const load = async () => {
+        const { data, error } = await sb.rpc('admin_users', { p_q: q.value.trim().replace(/^@/, ''), p_limit: 100, p_offset: 0 });
+        if (error) return list.replaceChildren(h('p', { class: 'muted', text: /admin_users|function/i.test(error.message || '') ? 'Админка заработает после обновления сервера (update-15)' : humanError(error) }));
+        for (const u of data || []) if (!state.people.has(u.id)) state.people.set(u.id, { id: u.id, username: u.username, display_name: u.display_name, role: u.role });
+        list.replaceChildren(...(data || []).map((u) => h('button', { class: 'admin-user' + (u.banned ? ' banned' : ''), type: 'button', onclick: () => openAdminUser(u) },
+          userAvatar(u.id, 'sm'),
+          h('span', { class: 'row-text' },
+            h('span', { class: 'name-line' }, h('b', { text: u.display_name || u.username }), roleBadge(u.id, true)),
+            h('small', { text: '@' + u.username + ' · ' + (u.seen_at ? 'был(а) ' + shortTime(u.seen_at) : 'не заходил(а)') + ' · ' + u.msgs + ' сообщ.' + (u.banned ? ' · ЗАБАНЕН' : '') }))))
+          .concat(data?.length ? [] : [h('p', { class: 'muted', text: 'Никого не нашли' })]));
+      };
+      q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); });
+      body.replaceChildren(q, list);
+      load();
+    }
+  };
+  openModal({ title: 'Админка' }, tabs, body,
+    h('button', { class: 'btn btn-block', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
+  draw(tab);
+}
+function openAdminUser(u) {
+  const msg = note();
+  const isMe = u.id === state.me.id;
+  const refresh = async () => {
+    const { data } = await sb.rpc('admin_users', { p_q: u.username, p_limit: 5, p_offset: 0 });
+    const fresh = (data || []).find((x) => x.id === u.id);
+    if (fresh) Object.assign(u, fresh);
+    await loadPerks().catch(() => {});
+    renderChats();
+    openAdminUser(u);
+  };
+  const run = async (fn, ok) => {
+    const { error } = await fn();
+    if (error) return say(msg, humanError(error));
+    toast(ok); refresh();
+  };
+  const KINDS = ['donor', 'tester', 'bronze', 'silver', 'gold', 'plus', 'relay'];
+  const granted = new Set(u.badges || []);
+  const badgeRows = KINDS.map((kind) => h('div', { class: 'row' },
+    h('div', { class: 'row-text' }, h('span', { class: 'name-line' }, badgeEl(kind)), h('small', { text: STATUS_INFO[kind]?.label || BADGE[kind].label })),
+    toggle(granted.has(kind), (e) => run(() => sb.rpc('set_badge', { p_username: u.username, p_kind: kind, p_on: e.target.checked }),
+      (e.target.checked ? 'Выдан значок ' : 'Убран значок ') + BADGE[kind].label))));
+  const roleRow = u.role === 'creator' ? h('p', { class: 'muted', text: 'Создатель' }) : h('div', { class: 'row' },
+    h('div', { class: 'row-text' }, h('b', { text: 'Роль «Тестер»' }), h('small', { text: 'Видят все у ника; даёт доступ к тестовым функциям' })),
+    toggle(u.role === 'tester', (e) => run(() => sb.rpc('set_role', { p_username: u.username, p_role: e.target.checked ? 'tester' : null }),
+      e.target.checked ? 'Теперь тестер' : 'Роль снята')));
+  const reason = h('input', { placeholder: 'Причина (видно только вам)', maxLength: 200 });
+  const ban = (days) => {
+    if (!confirm(`Забанить @${u.username} ${days ? 'на ' + days + ' дн.' : 'навсегда'}? Он не сможет войти и писать.`)) return;
+    run(() => sb.rpc('ban_user', { p_username: u.username, p_days: days, p_reason: reason.value.trim() || null }), 'Забанен');
+  };
+  const banBlock = isMe || u.role === 'creator' ? null : u.banned
+    ? h('div', { class: 'ban-box' }, h('b', { text: 'Забанен ' + (u.ban_until ? 'до ' + fmtDate(u.ban_until) : 'навсегда') }),
+        u.ban_reason ? h('small', { text: 'Причина: ' + u.ban_reason }) : null,
+        h('button', { class: 'btn btn-block', type: 'button', text: 'Разбанить', onclick: () => run(() => sb.rpc('unban_user', { p_username: u.username }), 'Разбанен') }))
+    : h('div', { class: 'ban-box' }, reason,
+        h('div', { class: 'inline' },
+          h('button', { class: 'btn', type: 'button', text: '1 день', onclick: () => ban(1) }),
+          h('button', { class: 'btn', type: 'button', text: '7 дней', onclick: () => ban(7) }),
+          h('button', { class: 'btn btn-danger', type: 'button', text: 'Навсегда', onclick: () => ban(0) })));
+  openModal({ title: '@' + u.username },
+    h('div', { class: 'profile-head' }, userAvatar(u.id, 'lg'),
+      h('div', { class: 'name-line' }, roleBadge(u.id)),
+      h('div', { class: 'profile-name', text: u.display_name || u.username })),
+    h('div', { class: 'stat-grid small' },
+      h('div', { class: 'stat-tile' }, h('small', { text: 'С нами с' }), h('b', { text: fmtDate(u.created_at) })),
+      h('div', { class: 'stat-tile' }, h('small', { text: 'Был(а)' }), h('b', { text: u.seen_at ? shortTime(u.seen_at) : '—' })),
+      h('div', { class: 'stat-tile' }, h('small', { text: 'Сообщений' }), h('b', { text: String(u.msgs) })),
+      h('div', { class: 'stat-tile' }, h('small', { text: 'Узлы / TURN' }), h('b', { text: `${u.nodes} / ${u.turns}` }))),
+    section('Роль', roleRow),
+    section('Значки (выдать вручную)', ...badgeRows),
+    banBlock ? section('Бан', banBlock) : null,
+    msg,
+    h('button', { class: 'btn btn-block', type: 'button', text: '← К списку', onclick: () => openAdmin('users') }));
 }
 
 /** Для создателя: поставить себе любые значки (сервер разрешает только себе, донатера — кому угодно) */
