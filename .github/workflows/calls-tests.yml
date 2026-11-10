@@ -1,0 +1,27 @@
+name: Проверка звонков
+on:
+  push:
+    paths:
+      - 'js/main.js'
+      - 'js/calls.js'
+      - 'tests/calls-ice.test.mjs'
+      - '.github/workflows/calls-tests.yml'
+  pull_request:
+    paths:
+      - 'js/main.js'
+      - 'js/calls.js'
+      - 'tests/calls-ice.test.mjs'
+jobs:
+  check-calls:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Проверка синтаксиса
+        run: |
+          node --check js/main.js
+          node --check js/calls.js
+      - name: Тесты ICE
+        run: node --test tests/calls-ice.test.mjs
