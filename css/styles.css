@@ -528,6 +528,9 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .msg.photo .msg-meta { padding: 0 8px; }
 .msg-meta .ticks { letter-spacing: -.25em; margin-right: .2em; }
 .msg-meta .ticks.read { color: inherit; opacity: 1; }
+.msg-meta .ticks.pending { letter-spacing: 0; display: inline-flex; }
+.msg-meta .ticks.pending .i { width: 12px; height: 12px; }
+.msg.pending { opacity: .78; }
 [data-style="dot"] .msg-meta .time { font-family: var(--font-display); font-weight: 800; font-size: 12px; }
 .msg.flash { animation: flash 1s ease; }
 @keyframes flash { 30% { box-shadow: 0 0 0 3px var(--accent); } }
@@ -1189,3 +1192,48 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .calls-help { display: grid; gap: 12px; }
 .howto { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; }
 .howto a { color: var(--accent); }
+
+/* ---------- Закреплённые чаты ---------- */
+.chat-item { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.chat-item.pinned { transition: transform .18s ease; }
+.chat-item.lifted { transform: scale(.98); background: var(--surface-2); }
+.chat-item.dragging { transition: none; z-index: 2; position: relative; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); border-radius: var(--radius); }
+.pin-mark { display: inline-flex; color: var(--muted); }
+.pin-mark .i { width: 14px; height: 14px; transform: rotate(35deg); }
+
+/* ---------- Канал «Новости» ---------- */
+.news-avatar { display: grid; place-items: center; background: linear-gradient(135deg, var(--accent), #ff5f8f); color: #fff; }
+.news-avatar .i { width: 22px; height: 22px; }
+.avatar.sm.news-avatar .i { width: 18px; height: 18px; }
+.news-screen {
+  position: fixed; top: 0; left: 0; right: 0; height: 100%; height: var(--app-h, 100%); z-index: 9;
+  display: flex; flex-direction: column; background: var(--bg);
+  animation: news-in .26s var(--spring);
+}
+.news-screen.closing { animation: news-out .2s ease forwards; }
+@keyframes news-in { from { transform: translateY(16px); opacity: 0; } }
+@keyframes news-out { to { transform: translateY(16px); opacity: 0; } }
+@media (min-width: 721px) {
+  .news-screen { inset: 24px auto 24px 50%; left: 50%; width: min(680px, calc(100vw - 48px)); height: auto; transform: translateX(-50%);
+    border-radius: var(--radius-lg); box-shadow: 0 24px 80px rgba(0, 0, 0, .3), 0 0 0 100vmax rgba(10, 10, 16, .45); background: var(--surface); overflow: hidden; animation: fade .18s ease; }
+  .news-screen.closing { animation: none; opacity: 0; transition: opacity .18s; }
+}
+.news-top { display: flex; align-items: center; gap: 10px; padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line); background: var(--surface); }
+.news-top .row-text { display: grid; min-width: 0; }
+.news-top small { color: var(--muted); font-size: 12px; }
+.news-feed { flex: 1; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 14px 12px; display: grid; gap: 12px; align-content: start; }
+.news-post { padding: 14px 16px; border-radius: var(--radius-lg); background: var(--surface-2); max-width: 640px; width: 100%; margin: 0 auto; animation: rise .3s var(--spring); }
+.news-body { font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+.news-body > :first-child { margin-top: 0; } .news-body > :last-child { margin-bottom: 0; }
+.news-meta { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.news-reacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.news-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 3px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: 15px; transition: transform .15s var(--spring); }
+.news-chip small { font-size: 12px; color: var(--muted); }
+.news-chip.on { border-color: var(--accent); background: var(--accent-soft); }
+.news-chip.on small { color: var(--accent); }
+.news-chip.add { color: var(--muted); padding: 3px 8px; }
+.news-chip.add .i { width: 16px; height: 16px; }
+.news-chip:active { transform: scale(.92); }
+.news-compose { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--surface); }
+.news-compose textarea { flex: 1; resize: none; min-height: 40px; max-height: 160px; padding: 10px 14px; border-radius: 20px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font: inherit; font-size: 16px; }
+.news-readonly { padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); text-align: center; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); }

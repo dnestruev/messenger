@@ -30,6 +30,7 @@ class Query {
   gt(c, v) { this.q.filters.push(['gt', c, v]); return this; }
   order(col, o = {}) { this.q.order = { col, asc: o.ascending !== false }; return this; }
   limit(n) { this.q.limit = n; return this; }
+  match(obj) { for (const [c, v] of Object.entries(obj)) this.eq(c, v); return this; }
   single() { this.q.single = true; return this; }
   maybeSingle() { this.q.single = true; this.q.maybe = true; return this; }
   then(ok, bad) { return api('q', this.q).then((r) => ({ data: r.data ?? null, error: r.error || null })).then(ok, bad); }

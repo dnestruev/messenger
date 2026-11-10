@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110150852';
-import * as CONFIG from '../config.js?v=20261110150852';
-import * as E2E from './crypto.js?v=20261110150852';
-import { createNet } from './net.js?v=20261110150852';
-import { qrSvg } from './qr.js?v=20261110150852';
-import { findEmbed } from './embeds.js?v=20261110150852';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110150852';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110150852';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110150852';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110153905';
+import * as CONFIG from '../config.js?v=20261110153905';
+import * as E2E from './crypto.js?v=20261110153905';
+import { createNet } from './net.js?v=20261110153905';
+import { qrSvg } from './qr.js?v=20261110153905';
+import { findEmbed } from './embeds.js?v=20261110153905';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110153905';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110153905';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110153905';
 
 /* =====================================================================
    Утилиты
@@ -805,12 +805,15 @@ async function checkSignature(m) {
 }
 
 /** Подготовить строку сообщения: шифр, хеш, подпись; содержимое — на узлы (если они есть) */
+const INLINE_MAX = 4096;   // байт шифра: меньше — только в центре
 async function sealMessage(chatId, payload, cid = uuid()) {
   const v = currentVersion(chatId);
   const { ct, iv } = await E2E.sealJson(chatKey(chatId, v), payload, aadMsg(chatId, state.me.id));
   const bytes = E2E.b64.dec(ct);
   const ct_hash = await E2E.sha256hex(bytes);
-  const nodes = await net.put(`${chatId}/${ct_hash}`, bytes).catch(() => []);
+  // Короткие сообщения (почти весь текст) кладём сразу в центр: поход на узлы партнёров перед отправкой
+  // занимал 1–7 с (узлы просыпаются), и ещё столько же у получателя. Узлы — для длинного и вложений.
+  const nodes = bytes.length > INLINE_MAX ? await net.put(`${chatId}/${ct_hash}`, bytes).catch(() => []) : [];
   // Если сохранилась только одна копия на узле, сохраняем второй экземпляр в центре.
   const row = { cid, iv, ct_hash, ct: nodes.length >= 2 ? null : ct, nodes: nodes.length ? nodes : null, sig: null, key_version: v };
   if (keys.sign) row.sig = await E2E.signText(keys.sign, sigText({ conversation_id: chatId, sender_id: state.me.id, ...row }));
@@ -937,6 +940,7 @@ async function startApp(user) {
   await loadChats();
   await ensureSaved();
   if (!alive()) return;
+  startNews();
   scheduleCleanup();
   setTimeout(() => $('chatList').classList.remove('list-enter'), 600);
   clearInterval(state.perksTimer);
@@ -1058,6 +1062,7 @@ function stopApp() {
   clearInterval(state.perksTimer); state.perks.clear(); state.tiers.clear(); state.badges.clear(); state.settings = {}; state.seen.clear(); state.savedId = null;
   stopPresence(); state.lastSeen.clear(); state.reactions.clear(); state.shown.clear();
   stopCalls();
+  stopNews();
   setCompose(null);
   leaveTyping();
   for (const url of state.images.values()) URL.revokeObjectURL(url);
@@ -1153,7 +1158,7 @@ function previewOf(c) {
 
 function renderChats() {
   const all = [...state.chats.values()].sort((a, b) =>
-    (b.is_official - a.is_official) || (isSaved(b) - isSaved(a)) || ts(b.last_message_at) - ts(a.last_message_at));
+    (b.is_official - a.is_official) || (isSaved(b) - isSaved(a)) || pinRank(a) - pinRank(b) || ts(b.last_message_at) - ts(a.last_message_at));
   const archived = all.filter((c) => c.archived);
   if (state.showArchive && !archived.length) state.showArchive = false;
   const q = normSearch($('findInput').value.replace(/^@/, ''));
@@ -1174,15 +1179,18 @@ function renderChats() {
       h('span', { class: 'avatar sm' }, icon('archive')), 'Архив',
       h('span', { class: 'count', text: archivedUnread ? `${archived.length} · ${archivedUnread} новых` : String(archived.length) })));
   }
+  if (!state.showArchive && !q) { const nr = newsRow(); if (nr) head.push(nr); }
   if (!items.length) {
     $('chatList').replaceChildren(...head, h('div', { class: 'list-empty', text: 'Чатов пока нет. Найдите друга по нику или создайте группу.' }));
     return;
   }
   $('chatList').replaceChildren(...head, ...items.map((c) => {
     const un = isUnread(c) && c.id !== state.activeId;
-    return h('button', {
-      class: 'chat-item' + (c.id === state.activeId ? ' active' : '') + (un ? ' unread' : ''),
-      onclick: () => openChat(c.id),
+    const pinned = !!c.pin_order && !c.archived;
+    const el = h('button', {
+      class: 'chat-item' + (c.id === state.activeId ? ' active' : '') + (un ? ' unread' : '') + (pinned ? ' pinned' : ''),
+      dataset: { id: c.id },
+      onclick: () => { if (!chatGesture.suppress) openChat(c.id); },
     },
       chatAvatar(c),
       h('span', { class: 'chat-item-body' },
@@ -1191,9 +1199,315 @@ function renderChats() {
           h('span', { class: 'chat-item-time', text: c.last_sender ? shortTime(c.last_message_at) : '' })),
         h('span', { class: 'chat-item-row' },
           h('span', { class: 'chat-item-last', text: previewOf(c) }),
-          un ? h('span', { class: 'unread-dot' }) : null)));
+          un ? h('span', { class: 'unread-dot' }) : pinned ? h('span', { class: 'pin-mark', title: 'Закреплён' }, icon('pin')) : null)));
+    chatGestures(el, c);
+    return el;
   }));
 }
+
+/* =====================================================================
+   Канал «Новости»: пишет создатель, читают все, реакции. Не шифруется — это общие объявления.
+   ===================================================================== */
+const NEWS_MAX = 4000;
+const news = { list: [], reacts: new Map(), off: true, ch: null, ui: null };
+const newsSeenKey = () => 'news-seen-' + (state.me?.id || '');
+const newsSeen = () => { try { return Number(localStorage.getItem(newsSeenKey()) || 0); } catch { return 0; } };
+const lastNews = () => news.list[news.list.length - 1];
+async function startNews() {
+  const me = state.me?.id;
+  const { data, error } = await sb.from('news').select('id, author, body, created_at, edited_at').order('created_at', { ascending: false }).limit(60);
+  if (error || state.me?.id !== me) { news.off = true; return; }   // до update-15 таблицы нет — канал не показываем
+  news.off = false;
+  news.list = (data || []).reverse();
+  await loadNewsReactions(news.list.map((n) => n.id));
+  await loadPeople([...new Set(news.list.map((n) => n.author))]);
+  renderChats();
+  const ch = await freshChannel('news-' + me);
+  if (state.me?.id !== me) { dropChannel(ch); return; }
+  news.ch = ch;
+  ch.on('postgres_changes', { event: '*', schema: 'public', table: 'news' }, (p) => onNewsChange(p))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'news_reactions' }, (p) => onNewsReaction(p))
+    .subscribe();
+}
+function stopNews() {
+  if (news.ch) dropChannel(news.ch);
+  news.ch = null; news.list = []; news.reacts.clear(); news.off = true;
+  news.ui?.root.remove(); news.ui = null;
+}
+async function loadNewsReactions(ids) {
+  if (!ids.length) return;
+  const { data } = await sb.from('news_reactions').select('news_id, user_id, emoji').in('news_id', ids);
+  for (const r of data || []) addNewsReact(r);
+}
+function addNewsReact(r) {
+  if (!news.reacts.has(r.news_id)) news.reacts.set(r.news_id, new Map());
+  const m = news.reacts.get(r.news_id);
+  if (!m.has(r.emoji)) m.set(r.emoji, new Set());
+  m.get(r.emoji).add(r.user_id);
+}
+function dropNewsReact(r) {
+  const m = news.reacts.get(r.news_id), set = m?.get(r.emoji);
+  if (!set) return;
+  set.delete(r.user_id);
+  if (!set.size) m.delete(r.emoji);
+}
+async function onNewsChange(p) {
+  if (p.eventType === 'DELETE') news.list = news.list.filter((n) => n.id !== p.old?.id);
+  else if (p.new) {
+    const i = news.list.findIndex((n) => n.id === p.new.id);
+    if (i === -1) {
+      news.list.push(p.new); news.list.sort((a, b) => a.id - b.id);
+      if (!news.ui && p.new.author !== state.me?.id && prefs.sound) ding();
+    } else news.list[i] = p.new;
+    await loadPeople([p.new.author]);
+  }
+  renderChats();
+  if (news.ui) { drawNews(p.eventType === 'INSERT'); markNewsSeen(); }
+}
+function onNewsReaction(p) {
+  if (p.eventType === 'DELETE') dropNewsReact(p.old || {}); else if (p.new) addNewsReact(p.new);
+  const id = (p.new || p.old)?.news_id;
+  if (news.ui && id) patchNewsReacts(id);
+}
+function markNewsSeen() {
+  const last = lastNews();
+  if (last) try { localStorage.setItem(newsSeenKey(), String(last.id)); } catch {}
+  renderChats();
+}
+function newsRow() {
+  if (news.off) return null;
+  const last = lastNews();
+  const un = !!last && last.id > newsSeen() && last.author !== state.me?.id;
+  return h('button', { class: 'chat-item news-item' + (un ? ' unread' : '') + (news.ui ? ' active' : ''), onclick: () => openNews() },
+    h('span', { class: 'avatar news-avatar' }, icon('megaphone')),
+    h('span', { class: 'chat-item-body' },
+      h('span', { class: 'chat-item-row' },
+        h('span', { class: 'chat-item-name' }, nameLine('Новости', verifiedIcon())),
+        h('span', { class: 'chat-item-time', text: last ? shortTime(last.created_at) : '' })),
+      h('span', { class: 'chat-item-row' },
+        h('span', { class: 'chat-item-last', text: last ? stripMarkdown(last.body).slice(0, 120) : 'Здесь будут новости мессенджера' }),
+        un ? h('span', { class: 'unread-dot' }) : null)));
+}
+function openNews() {
+  if (news.ui) return;
+  const feed = h('div', { class: 'news-feed' });
+  const canWrite = roleOf(state.me.id) === 'creator';
+  const input = canWrite ? h('textarea', { id: 'newsText', rows: 1, maxlength: NEWS_MAX, placeholder: 'Новость для всех… (работает **markdown**)' }) : null;
+  const send = canWrite ? h('button', { class: 'icon-btn icon-btn-accent', type: 'button', title: 'Опубликовать', onclick: () => postNews() }, icon('send')) : null;
+  if (input) {
+    const fit = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; };
+    input.addEventListener('input', fit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && isDesktop()) { e.preventDefault(); postNews(); } });
+  }
+  const root = h('div', { class: 'news-screen', role: 'dialog', 'aria-label': 'Новости' },
+    h('div', { class: 'news-top' },
+      h('button', { class: 'icon-btn', type: 'button', title: 'Назад', onclick: () => closeNews() }, icon('back')),
+      h('span', { class: 'avatar sm news-avatar' }, icon('megaphone')),
+      h('div', { class: 'row-text' }, h('b', { text: 'Новости' }), h('small', { text: canWrite ? 'Канал для всех · пишете только вы' : 'Официальный канал мессенджера' }))),
+    feed,
+    canWrite ? h('div', { class: 'news-compose' }, input, send) : h('div', { class: 'news-readonly', text: 'Ставьте реакции — так мы поймём, что вам нравится' }));
+  news.ui = { root, feed, input, editing: null };
+  document.body.append(root);
+  drawNews(true);
+  markNewsSeen();
+  history.pushState?.({ news: 1 }, '');
+}
+function closeNews() {
+  if (!news.ui) return;
+  const { root } = news.ui;
+  news.ui = null;
+  root.classList.add('closing');
+  setTimeout(() => root.remove(), 220);
+  renderChats();
+}
+addEventListener('popstate', () => { if (news.ui) closeNews(); });
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && news.ui && !document.querySelector('.overlay')) closeNews(); });
+function newsPost(n) {
+  const el = h('article', { class: 'news-post', dataset: { id: n.id } },
+    h('div', { class: 'news-body' }, renderMarkdown(n.body)),
+    h('div', { class: 'news-meta' },
+      n.edited_at ? h('span', { text: 'изменено' }) : null,
+      h('span', { text: dayOf(n.created_at) + ', ' + timeOf(n.created_at) })),
+    newsReacts(n.id));
+  if (roleOf(state.me.id) === 'creator') {
+    el.addEventListener('contextmenu', (e) => { e.preventDefault(); newsMenu(n, e.clientX, e.clientY); });
+    let t = null;
+    el.addEventListener('touchstart', (e) => { const p = e.touches[0]; t = setTimeout(() => { navigator.vibrate?.(10); newsMenu(n, p.clientX, p.clientY); }, 450); }, { passive: true });
+    for (const ev of ['touchend', 'touchmove']) el.addEventListener(ev, () => clearTimeout(t), { passive: true });
+  }
+  return el;
+}
+function newsReacts(id) {
+  const m = news.reacts.get(id) || new Map(), me = state.me.id;
+  const chips = [...m].map(([emoji, set]) => h('button', { class: 'news-chip' + (set.has(me) ? ' on' : ''), type: 'button', onclick: () => toggleNewsReact(id, emoji) },
+    h('span', { text: emoji }), h('small', { text: String(set.size) })));
+  const add = h('button', { class: 'news-chip add', type: 'button', title: 'Реакция', onclick: (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    closeMenu();
+    const menu = h('div', { class: 'menu' }, h('div', { class: 'menu-react' }, ...QUICK_REACTIONS.map((emo) =>
+      h('button', { type: 'button', text: emo, onclick: () => { closeMenu(); toggleNewsReact(id, emo); } }))));
+    document.body.append(menu);
+    const mr = menu.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(r.left, innerWidth - mr.width - 8)) + 'px';
+    menu.style.top = Math.max(8, r.top - mr.height - 6) + 'px';
+  } }, icon('smile'));
+  return h('div', { class: 'news-reacts' }, ...chips, add);
+}
+function patchNewsReacts(id) {
+  const el = news.ui?.feed.querySelector(`.news-post[data-id="${id}"] .news-reacts`);
+  el?.replaceWith(newsReacts(id));
+}
+async function toggleNewsReact(id, emoji) {
+  const me = state.me.id;
+  const has = news.reacts.get(id)?.get(emoji)?.has(me);
+  if (!has && [...(news.reacts.get(id) || new Map()).values()].filter((s) => s.has(me)).length >= 3) return toast('Не больше трёх реакций на новость');
+  const r = { news_id: id, user_id: me, emoji };
+  has ? dropNewsReact(r) : addNewsReact(r);
+  patchNewsReacts(id);
+  const { error } = has ? await sb.from('news_reactions').delete().match(r) : await sb.from('news_reactions').insert({ news_id: id, emoji });
+  if (error && !/duplicate/i.test(error.message || '')) { has ? addNewsReact(r) : dropNewsReact(r); patchNewsReacts(id); toast('Не получилось: ' + humanError(error)); }
+}
+function drawNews(toBottom) {
+  const ui = news.ui;
+  if (!ui) return;
+  const { feed } = ui;
+  const near = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120;
+  const top = feed.scrollTop;
+  feed.replaceChildren(...(news.list.length ? news.list.map(newsPost)
+    : [h('div', { class: 'empty-chat' }, h('b', { text: 'Новостей пока нет' }), h('small', { text: 'Здесь будут обновления и анонсы' }))]));
+  feed.scrollTop = toBottom || near ? feed.scrollHeight : top;
+}
+function newsMenu(n, x, y) {
+  popMenu([
+    ['edit', 'Изменить', () => { const ui = news.ui; if (!ui?.input) return; ui.editing = n; ui.input.value = n.body; ui.input.focus(); ui.input.dispatchEvent(new Event('input')); }],
+    ['copy', 'Копировать', () => navigator.clipboard?.writeText(n.body)],
+    ['trash', 'Удалить', async () => {
+      if (!confirm('Удалить новость у всех?')) return;
+      const { error } = await sb.from('news').delete().eq('id', n.id);
+      if (error) toast('Не получилось: ' + humanError(error));
+    }, 'danger'],
+  ], x, y);
+}
+async function postNews() {
+  const ui = news.ui;
+  if (!ui?.input) return;
+  const body = ui.input.value.trim();
+  if (!body) return;
+  ui.input.value = ''; ui.input.dispatchEvent(new Event('input'));
+  const editing = ui.editing; ui.editing = null;
+  const q = editing ? sb.from('news').update({ body }).eq('id', editing.id) : sb.from('news').insert({ body });
+  const { data, error } = await q.select('id, author, body, created_at, edited_at').single();
+  if (error) { if (news.ui) { news.ui.input.value = body; news.ui.editing = editing; } return toast('Не опубликовалось: ' + humanError(error)); }
+  onNewsChange({ eventType: editing ? 'UPDATE' : 'INSERT', new: data });   // не ждём Realtime
+}
+
+/* ---------- Закреплённые чаты: меню (долгое нажатие / правая кнопка) и перетаскивание ---------- */
+const PIN_MAX = 10;
+const pinRank = (c) => (c.pin_order && !c.archived ? c.pin_order : 1000);
+const pinnedIds = () => [...state.chats.values()].filter((c) => c.pin_order && !c.archived).sort((a, b) => a.pin_order - b.pin_order).map((c) => c.id);
+async function savePins(ids) {
+  const before = new Map([...state.chats.values()].map((c) => [c.id, c.pin_order || null]));
+  for (const c of state.chats.values()) { const i = ids.indexOf(c.id); c.pin_order = i === -1 ? null : i + 1; }
+  renderChats();
+  const { error } = await sb.rpc('set_pins', { p_ids: ids });
+  if (error) {
+    for (const c of state.chats.values()) c.pin_order = before.get(c.id) || null;
+    renderChats();
+    toast(/set_pins|function/i.test(error.message || '') ? 'Закрепление заработает после обновления сервера' : 'Не получилось: ' + humanError(error));
+  }
+}
+function togglePin(c) {
+  const ids = pinnedIds();
+  if (ids.includes(c.id)) return savePins(ids.filter((x) => x !== c.id));
+  if (ids.length >= PIN_MAX) return toast(`Закрепить можно до ${PIN_MAX} чатов`);
+  return savePins([...ids, c.id]);
+}
+/** Небольшое всплывающее меню: items = [[иконка, подпись, действие, класс?]] */
+function popMenu(items, x, y) {
+  closeMenu();
+  const menu = h('div', { class: 'menu', role: 'menu' }, ...items.map(([ic, label, fn, cls]) =>
+    h('button', { class: cls || '', role: 'menuitem', onclick: () => { closeMenu(); fn(); } }, icon(ic), label)));
+  document.body.append(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+  menu.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+}
+function chatMenu(c, x, y) {
+  const pinned = !!c.pin_order && !c.archived;
+  const items = [];
+  if (!c.archived) items.push(['pin', pinned ? 'Открепить' : 'Закрепить', () => togglePin(c)]);
+  if (pinned) items.push(['users', 'Порядок: зажмите и тяните', () => toast('Зажмите закреплённый чат и тяните вверх или вниз')]);
+  items.push(['archive', c.archived ? 'Вернуть из архива' : 'В архив', () => setArchived(c.id, !c.archived)]);
+  popMenu(items, x, y);
+}
+/**
+ * Жесты на строке чата. Мышь: правая кнопка — меню; закреплённый чат тянется зажатой левой.
+ * Палец: держать 0,4 с — «поднять»; отпустить не двигая — меню; повести — перетаскивание (только закреплённые).
+ */
+const chatGesture = { suppress: false };
+function chatGestures(el, c) {
+  el.addEventListener('contextmenu', (e) => { e.preventDefault(); if (chatGesture.active && chatGesture.touch) return; chatMenu(c, e.clientX, e.clientY); });   // на Android долгое нажатие — наше
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || chatGesture.active) return;
+    const g = chatGesture;
+    Object.assign(g, { active: true, el, c, x0: e.clientX, y0: e.clientY, armed: false, dragging: false, suppress: false, pid: e.pointerId, touch: e.pointerType !== 'mouse' });
+    clearTimeout(g.timer);
+    g.timer = setTimeout(() => {
+      if (g.el !== el || !g.active) return;
+      g.armed = true; g.suppress = true;
+      navigator.vibrate?.(12);
+      el.classList.add('lifted');
+    }, g.touch ? 400 : 250);
+  });
+}
+function endChatGesture(commit) {
+  const g = chatGesture;
+  clearTimeout(g.timer);
+  if (!g.active) return;
+  const { el, c } = g;
+  el?.classList.remove('lifted', 'dragging');
+  if (g.dragging) {
+    for (const it of $('chatList').querySelectorAll('.chat-item.pinned')) it.style.transform = '';
+    if (commit && g.order) savePins(g.order);
+  } else if (g.armed && commit && g.touch) {
+    const r = el.getBoundingClientRect();
+    chatMenu(c, r.left + 24, r.top + r.height / 2);
+  }
+  g.active = false; g.dragging = false; g.armed = false; g.order = null;
+  setTimeout(() => { g.suppress = false; }, 50);
+}
+addEventListener('pointermove', (e) => {
+  const g = chatGesture;
+  if (!g.active || e.pointerId !== g.pid) return;
+  const dy = e.clientY - g.y0, moved = Math.abs(dy) > 6 || Math.abs(e.clientX - g.x0) > 6;
+  if (!g.armed) { if (moved) { clearTimeout(g.timer); if (g.touch) { g.active = false; return; } } if (!moved) return; }
+  if (!g.c.pin_order || g.c.archived) { if (moved && !g.armed) g.active = false; return; }
+  if (!g.dragging) {
+    if (!moved) return;
+    if (!g.armed && !g.touch) { g.armed = true; g.suppress = true; }   // мышью — тянем сразу
+    g.dragging = true; g.el.classList.add('dragging');
+    g.items = [...$('chatList').querySelectorAll('.chat-item.pinned')];
+    g.h = g.el.getBoundingClientRect().height;
+    g.from = g.items.indexOf(g.el);
+  }
+  e.preventDefault?.();
+  const max = g.items.length - 1;
+  const lim = Math.max(-g.from * g.h, Math.min((max - g.from) * g.h, dy));
+  g.el.style.transform = `translateY(${lim}px)`;
+  const to = Math.max(0, Math.min(max, g.from + Math.round(lim / g.h)));
+  g.items.forEach((it, i) => {
+    if (it === g.el) return;
+    const shift = g.from < to && i > g.from && i <= to ? -g.h : g.from > to && i < g.from && i >= to ? g.h : 0;
+    it.style.transform = shift ? `translateY(${shift}px)` : '';
+  });
+  const ids = g.items.map((it) => it.dataset.id);
+  const [moving] = ids.splice(g.from, 1); ids.splice(to, 0, moving);
+  g.order = ids;
+}, { passive: false });
+addEventListener('pointerup', () => endChatGesture(true));
+addEventListener('pointercancel', () => endChatGesture(false));
+// пока тянем пальцем — список не прокручивается
+document.addEventListener('touchmove', (e) => { if (chatGesture.active && (chatGesture.armed || chatGesture.dragging)) e.preventDefault(); }, { passive: false });
 
 /* ---------- Аватарка-фото ---------- */
 const AVATAR_SIZE = 640;
@@ -1733,11 +2047,11 @@ function appendBubble(m, toBottom = false) {
   updateJumpDown();
 }
 /** Заменить один пузырь (правка, итог звонка, автоочистка) — без перерисовки всей ленты */
-function replaceBubble(m) {
+function replaceBubble(m, oldId = m.id) {
   const box = $('messages');
   const list = state.history.get(state.activeId) || [];
   const i = list.findIndex((x) => x.id === m.id);
-  const old = msgEl(m.id);
+  const old = msgEl(oldId);
   if (i === -1 || !old) return renderMessages();
   const top = box.scrollTop;                                 // до переноса фото (см. renderMessages)
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 150;
@@ -1809,12 +2123,14 @@ function bubble(m, { showName, continued, fresh }) {
   const meta = h('span', { class: 'msg-meta' });
   if (m.edited_at && !p?.call && !p?.img?.gone && !p?.v?.gone) meta.append(h('span', { text: 'изменено' }));
   meta.append(h('span', { class: 'time', text: timeOf(m.created_at) }));
-  if (mine) {
+  if (mine && m.pending) meta.append(h('span', { class: 'ticks pending', title: 'Отправляется' }, icon('clock')));
+  else if (mine) {
     const read = isReadByOthers(m);
     meta.append(h('span', { class: 'ticks' + (read ? ' read' : ''), title: read ? 'Прочитано' : 'Отправлено', text: read ? '✓✓' : '✓' }));
   }
   el.append(meta);
-  attachMenu(el, m);
+  if (m.pending) el.classList.add('pending');
+  else attachMenu(el, m);
   return el;
 }
 
@@ -2069,14 +2385,14 @@ async function refreshKeyVersion(chatId) {
 }
 const isRlsError = (e) => /row-level security|stale key/i.test(String(e?.message || e));
 
-async function insertMessage(chatId, payload, retried = false) {
-  const row = await sealMessage(chatId, payload);
+async function insertMessage(chatId, payload, retried = false, cid = uuid()) {
+  const row = await sealMessage(chatId, payload, cid);
   const { data, error } = await sb.from('messages')
     .insert({ conversation_id: chatId, sender_id: state.me.id, ...row })
     .select(MSG_COLUMNS).single();
   if (error) {
     if (row.nodes) net.del(row.nodes, `${chatId}/${row.ct_hash}`);   // шифр уже лёг на узлы — убираем, раз сообщения не будет
-    if (!retried && isRlsError(error) && (await refreshKeyVersion(chatId))) return insertMessage(chatId, payload, true);
+    if (!retried && isRlsError(error) && (await refreshKeyVersion(chatId))) return insertMessage(chatId, payload, true, cid);
     throw error;
   }
   data.p = payload;
@@ -2129,10 +2445,21 @@ $('composer').onsubmit = async (e) => {
   };
   if (compose?.mode === 'edit' && compose.msg.p?.t === content) return;   // текст не поменялся — нечего сохранять
   if (!(await canSend(chatId))) return restore();
+  if (compose?.mode === 'edit') {
+    try { await editMessage(compose.msg, content); } catch (err) { restore(); inlineError(sendError(err)); }
+    return;
+  }
+  // Сразу показываем сообщение с часиками — не ждём сервер (на мобильном это 0,5–2 с)
+  const cid = uuid();
+  const temp = { id: 'tmp-' + cid, cid, conversation_id: chatId, sender_id: state.me.id, p: payload, created_at: new Date().toISOString(), pending: true, key_version: currentVersion(chatId) };
+  const hist = state.history.get(chatId);
+  if (hist) { hist.push(temp); if (state.activeId === chatId) appendBubble(temp, true); }
   try {
-    if (compose?.mode === 'edit') await editMessage(compose.msg, content);
-    else addMessage(await insertMessage(chatId, payload));
+    await addMessage(await insertMessage(chatId, payload, false, cid));
   } catch (err) {
+    const h2 = state.history.get(chatId), k = h2 ? h2.indexOf(temp) : -1;
+    if (k !== -1) h2.splice(k, 1);
+    msgEl(temp.id)?.remove();
     restore();
     inlineError(sendError(err));
   }
@@ -3519,7 +3846,9 @@ async function subscribe() {
         state.reads.set(r.user_id, r.last_read_at); patchTicks();
       }
       const c = state.chats.get(r.conversation_id);
-      if (r.user_id === me && c && c.archived !== r.archived) { c.archived = r.archived; renderChats(); }
+      if (r.user_id === me && c && (c.archived !== r.archived || ('pin_order' in r && (c.pin_order || null) !== (r.pin_order ?? null)))) {
+        c.archived = r.archived; if ('pin_order' in r) c.pin_order = r.pin_order ?? null; renderChats();
+      }
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversation_members' }, async (p) => {
       const r = p.new;
@@ -3594,6 +3923,16 @@ async function addMessage(m, fromServer = false) {
   if ((m.key_version || 1) > (c.key_version || 1)) c.key_version = m.key_version;   // ключ группы сменился
 
   const hist = state.history.get(c.id);
+  const pi = hist && m.cid ? hist.findIndex((x) => x.pending && x.cid === m.cid) : -1;
+  if (pi !== -1) {                                         // пришёл настоящий вместо «отправляется…»
+    const tmpId = hist[pi].id;
+    if (hist.some((x) => x.id === m.id)) hist.splice(pi, 1); else hist[pi] = m;
+    hist.sort(byTime);
+    c.last_message_at = m.created_at; setLast(c, m); c.last_read_at = m.created_at;
+    if (c.id === state.activeId) { if (msgEl(tmpId)) replaceBubble(m, tmpId); }
+    renderChats();
+    return;
+  }
   const isNew = !hist || !hist.some((x) => x.id === m.id);
   if (hist && isNew) { hist.push(m); hist.sort(byTime); }
 

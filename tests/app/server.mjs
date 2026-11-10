@@ -10,10 +10,11 @@ const JITTER = +(process.env.JITTER ?? 400);   // мс случайной зад
 const now = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
 
+const slow = { ms: 0, fail: false };
 const db = {
   users: [], profiles: [], user_keys: [], key_backups: [], conversations: [], conversation_members: [],
   conversation_keys: [], conversation_key_claims: [], messages: [], reactions: [], blocks: [], nodes: [],
-  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], app_settings: [], turn_providers: [],
+  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], news: [], news_reactions: [], app_settings: [], turn_providers: [],
 };
 const files = new Map();        // bucket/path -> { bytes, owner, type }
 let msgSeq = 1;
@@ -126,10 +127,27 @@ function writable(uid, table, r) {
     case 'conversation_keys': return r.user_id === uid || isMember(uid, r.conversation_id);
     case 'reactions': case 'user_keys': case 'key_backups': case 'push_subscriptions': return r.user_id === uid;
     case 'blocks': return r.blocker === uid;
+    case 'news': return prof(uid)?.role === 'creator';
+    case 'news_reactions': return r.user_id === uid;
     default: return false;
   }
 }
+let newsSeq = 0;
 function beforeWrite(uid, table, r, old) {
+  if (table === 'news') {
+    if (prof(uid)?.role !== 'creator') return fail('new row violates row-level security policy for table "news"');
+    if (!old) { r.id = ++newsSeq; r.author = uid; r.created_at = now(); r.edited_at = null; }
+    else if (r.body !== old.body) r.edited_at = now();
+    return null;
+  }
+  if (table === 'news_reactions') {
+    if (!old) {
+      r.user_id = uid;
+      if (db.news_reactions.filter((x) => x.news_id === r.news_id && x.user_id === uid).length >= 3) return fail('new row violates row-level security policy for table "news_reactions"');
+      if (db.news_reactions.some((x) => x.news_id === r.news_id && x.user_id === uid && x.emoji === r.emoji)) return fail('duplicate key value');
+    }
+    return null;
+  }
   if (table === 'messages') {
     const c = conv(r.conversation_id);
     if (!old) {
@@ -153,6 +171,7 @@ function beforeWrite(uid, table, r, old) {
 }
 function afterWrite(table, ev, row, old) {
   const r = row || old;
+  if (table === 'news' || table === 'news_reactions') return change(table, ev, row, old, () => true);
   if (table === 'messages') {
     if (ev === 'INSERT') {
       const c = conv(row.conversation_id); c.last_message_at = row.created_at;
@@ -191,8 +210,16 @@ const RPC = {
     return { id: c.id, is_group: c.is_group, title: c.title, is_official: c.is_official, archived: m.archived, key_version: c.key_version, key_checks: c.key_checks,
       last_message_at: c.last_message_at, last_read_at: m.last_read_at, last_ct: lm?.ct ?? null, last_iv: lm?.iv ?? null, last_sender: lm?.sender_id ?? null,
       last_hash: lm?.ct_hash ?? null, last_nodes: lm?.nodes ?? null, last_cid: lm?.cid ?? null, last_sig: lm?.sig ?? null, last_key_version: lm?.key_version ?? null,
-      member_ids: db.conversation_members.filter((x) => x.conversation_id === c.id).map((x) => x.user_id) };
+      member_ids: db.conversation_members.filter((x) => x.conversation_id === c.id).map((x) => x.user_id), pin_order: m.pin_order ?? null };
   }),
+  set_pins: (uid, { p_ids }) => {
+    if ((p_ids || []).length > 10) return fail('too many pins');
+    for (const m of db.conversation_members.filter((x) => x.user_id === uid)) {
+      const i = (p_ids || []).indexOf(m.conversation_id), next = i === -1 ? null : i + 1;
+      if ((m.pin_order ?? null) !== next) { const o = { ...m }; m.pin_order = next; afterWrite('conversation_members', 'UPDATE', m, o); }
+    }
+    return null;
+  },
   get_or_create_dm: (uid, { other }) => {
     if (other === uid) return fail('cannot chat with yourself');
     if (blockedBetween(uid, other)) return fail('blocked');
@@ -309,7 +336,13 @@ http.createServer(async (req, res) => {
       return send(res, 200, { data: { id: u.id, email: u.email, user_metadata: { username: prof(u.id).username } } });
     }
     case '/api/password': { const u = db.users.find((x) => x.id === uid); if (u) u.password = j.password; return send(res, 200, { data: {} }); }
-    case '/api/q': return send(res, 200, query(uid, j));
+    case '/api/q': {
+      // тест: медленный/падающий сервер для вставки сообщений
+      if (j.table === 'messages' && j.op === 'insert' && slow.ms) await new Promise((r) => setTimeout(r, slow.ms));
+      if (j.table === 'messages' && j.op === 'insert' && slow.fail) return send(res, 200, { data: null, error: { message: 'Failed to fetch' } });
+      return send(res, 200, query(uid, j));
+    }
+    case '/api/slow': slow.ms = j.ms || 0; slow.fail = !!j.fail; return send(res, 200, { ok: true });
     case '/api/rpc': {
       const f = RPC[j.fn];
       if (!f) return send(res, 200, fail(`Could not find the function public.${j.fn}`));
