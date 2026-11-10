@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110123500';
-import * as CONFIG from '../config.js?v=20261110123500';
-import * as E2E from './crypto.js?v=20261110123500';
-import { createNet } from './net.js?v=20261110123500';
-import { qrSvg } from './qr.js?v=20261110123500';
-import { findEmbed } from './embeds.js?v=20261110123500';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110123500';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110123500';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110123500';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110141030';
+import * as CONFIG from '../config.js?v=20261110141030';
+import * as E2E from './crypto.js?v=20261110141030';
+import { createNet } from './net.js?v=20261110141030';
+import { qrSvg } from './qr.js?v=20261110141030';
+import { findEmbed } from './embeds.js?v=20261110141030';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110141030';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110141030';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110141030';
 
 /* =====================================================================
    Утилиты
@@ -4212,13 +4212,20 @@ function openCallsHelp() {
 }
 
 /* ---------- Поддержать проект ---------- */
+/** «через DonationAlerts» и т.п. — чтобы было видно, куда ведёт кнопка */
+function donateVia(url) {
+  let host = '';
+  try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
+  const known = { 'donationalerts.com': 'DonationAlerts', 'boosty.to': 'Boosty', 'yoomoney.ru': 'ЮMoney', 'tips.yandex.ru': 'Яндекс Чаевые', 'cloudtips.ru': 'CloudTips' };
+  return known[host] ? ' через ' + known[host] : '';
+}
 function donateSection(msg) {
   const url = state.settings.donate_url;
   const text = state.settings.donate_text || 'Мессенджер бесплатный и без рекламы. Если он вам нравится — поддержите проект: деньги идут на серверы и развитие.';
   const body = h('div', { class: 'donate-card' },
     h('b', {}, icon('heart'), ' Поддержать проект'),
     h('small', { text: text }),
-    url ? h('a', { class: 'btn btn-primary btn-block', href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Поддержать' })
+    url ? h('a', { class: 'btn btn-primary btn-block', href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Поддержать' + donateVia(url) })
       : h('small', { class: 'muted', text: 'Ссылка для поддержки скоро появится.' }),
     h('small', { class: 'muted' }, 'Тем, кто поддержал, создатель выдаёт значок ', badgeEl('donor'), '. Напишите @deltaofishal после доната.'));
   return section('Поддержать проект', body);
