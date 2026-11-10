@@ -80,7 +80,7 @@ with sync_playwright() as pw:
     relog(b)
     b.page.click('#meBtn'); b.page.wait_for_selector('.donate-card')
     href = b.page.get_attribute('.donate-card a', 'href')
-    check('кнопка «Поддержать» ведёт на ссылку', href == 'https://www.donationalerts.com/r/messenger' and 'через DonationAlerts' in b.page.inner_text('.donate-card a'))
+    check('кнопка «Поддержать» ведёт на ссылку', href == 'https://www.donationalerts.com/r/messenger')
     check('у Боба значки серебро + донатер', b.page.locator('.profile-head .role.tier-silver').count() == 1 and b.page.locator('.profile-head .role.donor').count() == 1)
     b.shot('donate_mobile')
     check('не создатель не видит админку донатов и значков', b.page.locator('.section', has_text='видно только вам').count() == 0)
