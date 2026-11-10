@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110070734';
-import * as CONFIG from '../config.js?v=20261110070734';
-import * as E2E from './crypto.js?v=20261110070734';
-import { createNet } from './net.js?v=20261110070734';
-import { qrSvg } from './qr.js?v=20261110070734';
-import { findEmbed } from './embeds.js?v=20261110070734';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110070734';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110070734';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110070734';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110104500';
+import * as CONFIG from '../config.js?v=20261110104500';
+import * as E2E from './crypto.js?v=20261110104500';
+import { createNet } from './net.js?v=20261110104500';
+import { qrSvg } from './qr.js?v=20261110104500';
+import { findEmbed } from './embeds.js?v=20261110104500';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110104500';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110104500';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110104500';
 
 /* =====================================================================
    Утилиты
@@ -636,7 +636,8 @@ async function sealMessage(chatId, payload, cid = uuid()) {
   const bytes = E2E.b64.dec(ct);
   const ct_hash = await E2E.sha256hex(bytes);
   const nodes = await net.put(`${chatId}/${ct_hash}`, bytes).catch(() => []);
-  const row = { cid, iv, ct_hash, ct: nodes.length ? null : ct, nodes: nodes.length ? nodes : null, sig: null, key_version: v };
+  // Если сохранилась только одна копия на узле, сохраняем второй экземпляр в центре.
+  const row = { cid, iv, ct_hash, ct: nodes.length >= 2 ? null : ct, nodes: nodes.length ? nodes : null, sig: null, key_version: v };
   if (keys.sign) row.sig = await E2E.signText(keys.sign, sigText({ conversation_id: chatId, sender_id: state.me.id, ...row }));
   return row;
 }
@@ -920,9 +921,14 @@ async function loadChatsOnce() {
     c.keyWarn = previous.get(c.id)?.keyWarn;
     const prevLast = previous.get(c.id);
     // если последнее сообщение не изменилось — не скачиваем его с узлов заново
-    c.last_p = prevLast && prevLast.last_cid === c.last_cid && prevLast.last_hash === c.last_hash && prevLast.last_p && !prevLast.last_p.missing
-      ? prevLast.last_p
-      : c.last_sender ? (await decryptMessage(lastMessageOf(c))).p : null;
+    try {
+      c.last_p = prevLast && prevLast.last_cid === c.last_cid && prevLast.last_hash === c.last_hash && prevLast.last_p && !prevLast.last_p.missing
+        ? prevLast.last_p
+        : c.last_sender ? (await decryptMessage(lastMessageOf(c))).p : null;
+    } catch (err) {
+      console.warn('Ошибка предпросмотра чата', c.id, err);
+      c.last_p = { missing: true };
+    }
   }));
   if (state.me?.id !== me) return;
   await loadPeople(data.flatMap((c) => c.member_ids || []));
@@ -2667,15 +2673,39 @@ const gathered = (pc, ms = 2500) => new Promise((res) => {
 });
 
 async function getMedia(video) {
+  const media = navigator.mediaDevices;
+  if (!media?.getUserMedia) {
+    const err = new Error('Браузер не поддерживает микрофон. Откройте мессенджер через HTTPS в Safari или Chrome.');
+    err.name = 'NotSupportedError';
+    throw err;
+  }
+  let failure;
   try {
-    return await navigator.mediaDevices.getUserMedia({
+    return await media.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(CALL_BETA ? { channelCount: { ideal: 1 } } : {}) },
       video: video ? camConstraints('user') : false,
     });
-  } catch (e) {
-    if (video) { toast('Камера недоступна — звоню без видео'); return getMedia(false); }
-    throw new Error('Нет доступа к микрофону. Разрешите его в настройках браузера.');
+  } catch (e) { failure = e; }
+  if (video) {
+    toast('Камера недоступна — пробую без видео');
+    return getMedia(false);
   }
+  // Safari иногда отклоняет расширенные ограничения. Проверяем стандартный запрос.
+  if (['OverconstrainedError', 'NotReadableError', 'AbortError', 'TypeError'].includes(failure?.name)) {
+    try { return await media.getUserMedia({ audio: true, video: false }); }
+    catch (e) { failure = e; }
+  }
+  const reasons = {
+    NotAllowedError: 'Микрофон запрещён. Разрешите его в настройках браузера и iPhone.',
+    PermissionDeniedError: 'Микрофон запрещён в настройках браузера.',
+    NotReadableError: 'Микрофон занят другим приложением или недоступен.',
+    NotFoundError: 'Микрофон не найден.',
+    SecurityError: 'Для микрофона требуется защищённое HTTPS-соединение.',
+  };
+  const error = new Error(reasons[failure?.name] || ('Микрофон недоступен: ' + (failure?.message || failure?.name || 'неизвестная ошибка')));
+  error.name = failure?.name || 'MediaError';
+  error.cause = failure;
+  throw error;
 }
 
 function makePeer() {
@@ -2764,29 +2794,49 @@ async function incomingOffer(conv, from, msg) {
 }
 
 async function acceptCall(withVideo) {
-  if (!call || call.dir !== 'in' || call.answered) return;
+  if (!call || call.dir !== 'in' || call.answered || call.accepting) return;
   const cur = call;
-  cur.answered = true;
+  cur.accepting = true;
+  cur.callStep = 'Принятие звонка';
   connectionDeadline(cur);
   stopTone();
   stopTitle();
   setCallStatus('Соединяю…');
-  tellMyDevices(cur.conv, cur.id).catch(() => {});
-  connectionDeadline(cur);
   try {
-    cur.local = await getMedia(withVideo && cur.video);
-    if (call !== cur) { cur.local.getTracks().forEach((t) => t.stop()); return; }
-    cur.local.getTracks().forEach((t) => cur.pc.addTrack(t, cur.local));
+    // Сперва проверяем предложение собеседника, затем запрашиваем микрофон.
+    cur.callStep = 'Обработка предложения (setRemoteDescription)';
     await cur.pc.setRemoteDescription({ type: 'offer', sdp: cur.offer });
+    if (call !== cur) return;
+
+    cur.callStep = 'Разрешение микрофона (getUserMedia)';
+    const local = await getMedia(withVideo && cur.video);
+    if (call !== cur) { local.getTracks().forEach((t) => t.stop()); return; }
+    cur.local = local;
+    cur.callStep = 'Добавление аудио/видео';
+    local.getTracks().forEach((t) => cur.pc.addTrack(t, local));
     if (CALL_BETA) prepareVideo(cur.pc);
     await flushIce(cur);
+
+    cur.callStep = 'Формирование ответа (createAnswer)';
     await cur.pc.setLocalDescription(await cur.pc.createAnswer());
+    cur.callStep = 'Сбор ICE-кандидатов';
     await gathered(cur.pc);
     if (call !== cur) return;
-    connectionDeadline(cur);
+
+    cur.callStep = 'Отправка ответа (sendSignal)';
     await sendSignal(cur.conv, cur.peer, { t: 'answer', id: cur.id, sdp: withBitrate(cur.pc.localDescription.sdp) });
+    if (call !== cur) return;
+    cur.answered = true;
+    cur.callStep = 'Ожидание соединения';
+    tellMyDevices(cur.conv, cur.id).catch(() => {});
     updateCallUi();
-  } catch (e) { if (call === cur) { cur.callError = e.name || 'MediaError'; toast(e.message || 'Не получилось ответить'); finishCall('failed'); } }
+  } catch (e) {
+    if (call === cur) {
+      cur.callError = (e?.name || 'Error') + ': ' + String(e?.message || e).slice(0, 260);
+      toast('Не удалось принять звонок: ' + (e?.message || 'неизвестная ошибка'));
+      finishCall('failed');
+    }
+  } finally { cur.accepting = false; }
 }
 
 function hangUp(why = 'hangup') {
@@ -2808,7 +2858,8 @@ function callDiagnostics(cur) {
     'ICE: ' + cur.pc.iceConnectionState,
     'Сбор адресов: ' + cur.pc.iceGatheringState,
     'Адреса: свои ' + (cur.localIce?.length || 0) + ', принятые отдельно ' + (cur.seenIce?.size || 0),
-    'TURN: ' + (hasTurn ? 'настроен' : 'не настроен'),
+    'TURN: ' + (hasTurn ? 'настроен' : 'не настроен (нужен не для всех сетей)'),
+    'Этап: ' + (cur.callStep || 'не определён'),
     'Ошибка: ' + (cur.callError || cur.iceError || 'нет кода'),
   ].join('\n');
 }
@@ -3230,6 +3281,7 @@ $('recSend').onclick = () => stopVoice(true);
 function subscribe() {
   if (state.channel) sb.removeChannel(state.channel);
   const me = state.me.id;
+  let subscribedOnce = false;
   state.channel = sb.channel('inbox-' + me)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (p) => addMessage(p.new, true))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (p) => onReactionChange(p))
@@ -3281,7 +3333,13 @@ function subscribe() {
       await loadPubKeys([uid], true);
       for (const c of state.chats.values()) if ((c.member_ids || []).includes(uid)) shareChatKey(c.id).catch(() => {});
     })
-    .subscribe();
+    .subscribe((status) => {
+      if (status !== 'SUBSCRIBED' || state.me?.id !== me) return;
+      if (subscribedOnce) {
+        loadChats().catch((err) => console.warn('Ошибка обновления чатов после восстановления связи', err));
+      }
+      subscribedOnce = true;
+    });
 }
 
 async function onChatKeysArrived() {
