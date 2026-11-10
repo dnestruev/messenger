@@ -80,3 +80,31 @@ test('connection timeout finishes stuck calls but cannot end a replacement call'
   assert.equal(ctx.getCall(), replacement);
   assert.equal(ctx.finished, null);
 });
+
+test('repeated setup cannot extend the connection deadline', () => {
+  const { ctx, timers } = setup();
+  ctx.setCall({});
+  vm.runInContext('connectionDeadline(call); connectionDeadline(call)', ctx);
+  assert.equal(timers.size, 1);
+});
+
+test('call screen closes and media stops even if sound and title cleanup throw', () => {
+  const { ctx, timers } = setup();
+  vm.runInContext(source.slice(source.indexOf('function finishCall('), source.indexOf('/* ---------- Экран звонка')), ctx);
+  let ending = false, removed = false, stopped = false, closed = false;
+  ctx.fmtDur = () => '0:00';
+  ctx.navigator = {};
+  ctx.swReg = null;
+  vm.runInContext("stopTone = () => { throw Error('audio'); }; stopTitle = () => { throw Error('title'); };", ctx);
+  const status = {};
+  ctx.setCall({ id: 'c', dir: 'in', pc: { close() { closed = true; } },
+    local: { getTracks: () => [{ stop() { stopped = true; } }] },
+    ui: { root: { classList: { add() { ending = true; } }, remove() { removed = true; } },
+      status, controls: { replaceChildren() {} } } });
+  vm.runInContext("finishCall('failed', { remote: true, silent: true })", ctx);
+  assert.equal(ctx.getCall(), null);
+  assert.ok(ending && stopped && closed);
+  assert.equal(status.textContent, 'Не удалось соединиться');
+  [...timers.values()].find(t => t.ms === 900).f();
+  assert.ok(removed);
+});

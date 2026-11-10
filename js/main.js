@@ -1,12 +1,12 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110062405';
-import * as CONFIG from '../config.js?v=20261110062405';
-import * as E2E from './crypto.js?v=20261110062405';
-import { createNet } from './net.js?v=20261110062405';
-import { qrSvg } from './qr.js?v=20261110062405';
-import { findEmbed } from './embeds.js?v=20261110062405';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110062405';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110062405';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110063102';
+import * as CONFIG from '../config.js?v=20261110063102';
+import * as E2E from './crypto.js?v=20261110063102';
+import { createNet } from './net.js?v=20261110063102';
+import { qrSvg } from './qr.js?v=20261110063102';
+import { findEmbed } from './embeds.js?v=20261110063102';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110063102';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110063102';
 
 /* =====================================================================
    Утилиты
@@ -2637,7 +2637,14 @@ function replayIce(cur) {
   }
 }
 function connectionDeadline(cur) {
-  clearTimeout(cur.connectTimer);
+  if (cur.connectTimer || cur.connectedAt) return;
+  cur.connectStartedAt = Date.now();
+  cur.connectClock = setInterval(() => {
+    if (call !== cur || cur.connectedAt) return;
+    const elapsed = Date.now() - cur.connectStartedAt;
+    setCallStatus('Соединяю… ' + fmtDur(elapsed / 1000));
+    if (elapsed >= 30000) finishCall('failed');
+  }, 1000);
   cur.connectTimer = setTimeout(() => {
     if (call === cur && !cur.connectedAt) finishCall('failed');
   }, 30000);
@@ -2681,7 +2688,7 @@ function makePeer() {
     if (!call || call.pc !== pc) return;
     const st = pc.connectionState;
     if (st === 'connected') {
-      clearTimeout(call.lostTimer); clearTimeout(call.connectTimer);
+      clearTimeout(call.lostTimer); clearTimeout(call.connectTimer); clearInterval(call.connectClock);
       if (!call.connectedAt) { call.connectedAt = Date.now(); stopTone(); call.clock = setInterval(updateCallUi, 1000); tuneSenders(pc); }
       updateCallUi();
     }
@@ -2749,6 +2756,7 @@ async function acceptCall(withVideo) {
   if (!call || call.dir !== 'in' || call.answered) return;
   const cur = call;
   cur.answered = true;
+  connectionDeadline(cur);
   stopTone();
   stopTitle();
   setCallStatus('Соединяю…');
@@ -2782,16 +2790,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   call = null;
   endedCalls.add(cur.id);
   clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer);
-  cur.unfit?.();
-  stopTone();
-  stopTitle();
-  if (cur.dir === 'in') (swReg ? Promise.resolve(swReg) : navigator.serviceWorker?.ready)?.then((r) => r?.getNotifications({ tag: 'call' }))
-    .then((list) => list?.forEach((n) => n.close())).catch(() => {});
-  navigator.vibrate?.(0);
-  cur.local?.getTracks().forEach((t) => t.stop());
-  try { cur.pc.close(); } catch {}
-  if (!remote && status === 'failed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'failed' }).catch(() => {});
-  if (!remote && !cur.answered && cur.dir === 'out' && status === 'missed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'timeout' }).catch(() => {});
+  clearInterval(cur.connectClock);
   const dur = cur.connectedAt ? Math.round((Date.now() - cur.connectedAt) / 1000) : 0;
   const text = { ok: 'Звонок завершён · ' + fmtDur(dur), missed: cur.dir === 'out' ? 'Нет ответа' : 'Пропущенный звонок', declined: cur.dir === 'out' ? 'Звонок отклонён' : 'Вы отклонили звонок',
     busy: 'Собеседник занят', failed: 'Не удалось соединиться', cancel: 'Звонок отменён' }[status] || 'Звонок завершён';
@@ -2801,6 +2800,16 @@ function finishCall(status, { remote = false, silent = false } = {}) {
     cur.ui.status.textContent = text;
     cur.ui.controls.replaceChildren();
   }
+  try { cur.unfit?.(); } catch {}
+  try { stopTone(); } catch {}
+  try { stopTitle(); } catch {}
+  try { if (cur.dir === 'in') (swReg ? Promise.resolve(swReg) : navigator.serviceWorker?.ready)?.then((r) => r?.getNotifications({ tag: 'call' }))
+    .then((list) => list?.forEach((n) => n.close())).catch(() => {}); } catch {}
+  try { navigator.vibrate?.(0); } catch {}
+  cur.local?.getTracks().forEach((t) => { try { t.stop(); } catch {} });
+  try { cur.pc.close(); } catch {}
+  if (!remote && status === 'failed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'failed' }).catch(() => {});
+  if (!remote && !cur.answered && cur.dir === 'out' && status === 'missed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'timeout' }).catch(() => {});
   if (!silent && status === 'failed') toast('Не удалось соединиться. В некоторых мобильных сетях звонки без сервера-посредника не проходят.');
   // итог звонка записывает тот, кто звонил
   if (cur.dir === 'out' && cur.logP) {
