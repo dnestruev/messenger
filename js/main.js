@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110132800';
-import * as CONFIG from '../config.js?v=20261110132800';
-import * as E2E from './crypto.js?v=20261110132800';
-import { createNet } from './net.js?v=20261110132800';
-import { qrSvg } from './qr.js?v=20261110132800';
-import { findEmbed } from './embeds.js?v=20261110132800';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110132800';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110132800';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110132800';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110151400';
+import * as CONFIG from '../config.js?v=20261110151400';
+import * as E2E from './crypto.js?v=20261110151400';
+import { createNet } from './net.js?v=20261110151400';
+import { qrSvg } from './qr.js?v=20261110151400';
+import { findEmbed } from './embeds.js?v=20261110151400';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110151400';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110151400';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110151400';
 
 /* =====================================================================
    Утилиты
@@ -2705,7 +2705,8 @@ async function onSignal(env) {
     return;
   }
   if (msg.t === 'ring' && call.dir === 'out' && !call.answered) {
-    call.ringing = true; setCallStatus('Звонит…');
+    call.ringing = true; call.callStep = 'Приглашение получено собеседником';
+    setCallStatus('Звонит…');
     replayIce(call);
   }
   if (msg.t === 'answer' && call.dir === 'out' && !call.answered) {
@@ -2861,7 +2862,21 @@ async function startCall(video) {
     const sdp = withBitrate(pc.localDescription.sdp);
     // запись о звонке в чате: заодно отправит push «новое сообщение», если приложение у собеседника закрыто
     call.logP = insertMessage(c.id, { call: { id, v: video, s: 'ring' } }).then((m) => { addMessage(m); return m; }).catch(() => null);
-    const offer = () => sendSignal(c.id, peer, { t: 'offer', id, video, sdp }).catch(() => {});
+    const cur = call;
+    cur.callStep = 'Отправка приглашения';
+    const offer = () => {
+      if (call !== cur || cur.answered) return;
+      cur.offerAttempts = (cur.offerAttempts || 0) + 1;
+      sendSignal(c.id, peer, { t: 'offer', id, video, sdp })
+        .then(() => { if (call === cur) { cur.offerDelivered = true; cur.lastSignalError = null; } })
+        .catch((e) => {
+          if (call !== cur) return;
+          cur.offerFailures = (cur.offerFailures || 0) + 1;
+          cur.lastSignalError = (e?.name || 'Error') + ': ' + String(e?.message || e);
+          cur.callStep = 'Ошибка отправки приглашения (повторяем)';
+          console.warn('Не удалось отправить приглашение звонка', e);
+        });
+    };
     offer();
     call.resend = setInterval(offer, 3000);                 // повторяем, пока собеседник не откроет приложение
     call.giveUp = setTimeout(() => { if (call?.id === id && !call.answered) finishCall('missed'); }, RING_TIMEOUT);
@@ -2918,17 +2933,17 @@ async function acceptCall(withVideo) {
   stopTitle();
   setCallStatus('Соединяю…');
   try {
-    // Сперва проверяем предложение собеседника, затем запрашиваем микрофон.
-    cur.callStep = 'Обработка предложения (setRemoteDescription)';
-    await cur.pc.setRemoteDescription({ type: 'offer', sdp: cur.offer });
-    if (call !== cur) return;
-
+    // Запрос микрофона должен запускаться непосредственно после нажатия кнопки:
+    // Safari может требовать пользовательский жест для доступа к устройствам.
     cur.callStep = 'Разрешение микрофона (getUserMedia)';
     const local = await getMedia(withVideo && cur.video);
     if (call !== cur) { local.getTracks().forEach((t) => t.stop()); return; }
     cur.local = local;
     cur.callStep = 'Добавление аудио/видео';
     local.getTracks().forEach((t) => cur.pc.addTrack(t, local));
+    cur.callStep = 'Обработка предложения (setRemoteDescription)';
+    await cur.pc.setRemoteDescription({ type: 'offer', sdp: cur.offer });
+    if (call !== cur) return;
     if (CALL_BETA) prepareVideo(cur.pc);
     await flushIce(cur);
 
@@ -2987,7 +3002,10 @@ function callDiagnostics(cur) {
     'Адреса: свои ' + (cur.localIce?.length || 0) + ', принятые отдельно ' + (cur.seenIce?.size || 0),
     'TURN: ' + (hasTurn ? 'настроен' : 'не настроен (нужен не для всех сетей)'),
     'Этап: ' + (cur.callStep || 'не определён'),
-    'Ошибка: ' + (cur.callError || cur.iceError || 'нет кода'),
+    'Ошибка: ' + (cur.callError || cur.iceError || cur.lastSignalError || 'нет кода'),
+    'Приглашение: попыток ' + (cur.offerAttempts || 0) +
+      ', ошибок ' + (cur.offerFailures || 0) + ', принято сервером ' + (cur.offerDelivered ? 'да' : 'нет'),
+    'Подтверждение получателя: ' + (cur.ringing ? 'да' : 'нет'),
     'Резервная отправка ответа: ' + (cur.answerSdp ? 'доступна' : 'пока нет'),
   ].join('\n');
 }
