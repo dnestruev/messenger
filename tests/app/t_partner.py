@@ -30,7 +30,7 @@ with sync_playwright() as pw:
     check('в шапке тоже бронза', a.page.locator('#chatTitle .role.tier-bronze, .chat-head .role.tier-bronze').count() >= 1)
     # карточка статуса
     a.page.locator('.chat-head .role.tier-bronze, #chatTitle .role.tier-bronze').first.click()
-    a.page.wait_for_selector('.status-check.verified', timeout=5000)
+    a.page.wait_for_selector('.status-check.is-ok', timeout=5000)
     print(a.page.inner_text('.status-info-card')[:300]); check('карточка: бронза подтверждена', 'Бронза' in a.page.inner_text('.status-info-card'))
     check('карточка: «Как получить»', 'Как получить' in a.page.inner_text('.status-info-card'))
     a.shot('status_card'); a.page.keyboard.press('Escape')
@@ -86,5 +86,26 @@ with sync_playwright() as pw:
         errs = [e for e in u.errors if 'ERR_' not in e]
         check(f'нет ошибок JS ({u.nick})', not errs)
         if errs: print('\n'.join(errs[:8]))
+    br.close()
+print('ИТОГ:', sum(1 for _, x in ok if x), '/', len(ok))
+
+# Узкий экран, стиль «Точка»: имя в шапке видно, карточка статуса не наезжает
+reset()
+with sync_playwright() as pw:
+    br = pw.chromium.launch(executable_path='/usr/bin/google-chrome', args=ARGS)
+    a = User(br, 'deltaofishal').signup()
+    b = User(br, 'bobby', 360, 740, True).signup()
+    api('role', {'username': 'deltaofishal', 'role': 'creator'}); api('partner', {'username': 'deltaofishal'})
+    a.open_dm('bobby'); a.send('привет')
+    relog(b)
+    b.page.evaluate("document.documentElement.dataset.style = 'dot'; document.documentElement.dataset.mode = 'dark'")
+    b.open_chat('deltaofishal'); time.sleep(0.5)
+    t = b.page.locator('#chatTitle .t').bounding_box()
+    check('узкий экран: имя в шапке видно', t and t['width'] > 40)
+    b.page.locator('#chatTitle .role').first.click()
+    b.page.wait_for_selector('.status-check.is-ok', timeout=5000)
+    box = b.page.locator('.status-check').bounding_box()
+    check('карточка: строка проверки во всю ширину', box['width'] > 250 and box['height'] < 80)
+    b.shot('status_card_dot')
     br.close()
 print('ИТОГ:', sum(1 for _, x in ok if x), '/', len(ok))

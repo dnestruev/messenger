@@ -1,14 +1,14 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110095302';
-import * as CONFIG from '../config.js?v=20261110095302';
-import * as E2E from './crypto.js?v=20261110095302';
-import { createNet } from './net.js?v=20261110095302';
-import { qrSvg } from './qr.js?v=20261110095302';
-import { findEmbed } from './embeds.js?v=20261110095302';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110095302';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110095302';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110095302';
-import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110095302';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110100032';
+import * as CONFIG from '../config.js?v=20261110100032';
+import * as E2E from './crypto.js?v=20261110100032';
+import { createNet } from './net.js?v=20261110100032';
+import { qrSvg } from './qr.js?v=20261110100032';
+import { findEmbed } from './embeds.js?v=20261110100032';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110100032';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110100032';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110100032';
+import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110100032';
 
 /* =====================================================================
    Утилиты
@@ -442,7 +442,7 @@ async function openStatusInfo(uid, kind) {
       confirmed = kind === 'plus' ? row?.kind === 'plus' : row?.kind === 'partner' && (row.tier || 'bronze') === kind;
     }
     if (!overlay.isConnected) return;
-    status.classList.add(confirmed ? 'verified' : 'unverified');
+    status.classList.add(confirmed ? 'is-ok' : 'is-bad');
     status.textContent = confirmed
       ? '✓ Подтверждено сервером: статус действителен'
       : 'Статус не подтверждён: он мог измениться. Обновите страницу.';
