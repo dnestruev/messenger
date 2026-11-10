@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110123500';
-import * as CONFIG from '../config.js?v=20261110123500';
-import * as E2E from './crypto.js?v=20261110123500';
-import { createNet } from './net.js?v=20261110123500';
-import { qrSvg } from './qr.js?v=20261110123500';
-import { findEmbed } from './embeds.js?v=20261110123500';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110123500';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110123500';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110123500';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110132800';
+import * as CONFIG from '../config.js?v=20261110132800';
+import * as E2E from './crypto.js?v=20261110132800';
+import { createNet } from './net.js?v=20261110132800';
+import { qrSvg } from './qr.js?v=20261110132800';
+import { findEmbed } from './embeds.js?v=20261110132800';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110132800';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110132800';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110132800';
 
 /* =====================================================================
    Утилиты
@@ -329,12 +329,107 @@ const perkOf = (id) => state.perks.get(id) || null;
 const hasPlus = (id = state.me?.id) => !!perkOf(id);
 const PERK_LABEL = { partner: 'Партнёр', plus: 'Плюс' };
 const PERK_TITLE = { partner: 'Держит узел сети: хранит зашифрованные сообщения для всех', plus: 'Плюс в подарок от партнёра сети' };
-/** compact — в списке чатов и шапке: награда маленьким значком, чтобы имя не обрезалось */
+/** Информация о подтверждённых статусах пользователя. Права определяет база, не значок. */
+const STATUS_INFO = {
+  creator: {
+    label: 'Создатель',
+    description: 'Создатель проекта и участник команды мессенджера.',
+    benefits: ['Управление тестерами', 'Управление партнёрскими узлами', 'Возможность создавать официальные чаты и писать в них'],
+  },
+  tester: {
+    label: 'Тестер',
+    description: 'Участник команды тестирования мессенджера.',
+    benefits: ['Значок тестера у имени', 'Возможность писать в официальных чатах', 'Участие в тестировании новых функций'],
+  },
+  partner: {
+    label: 'Партнёр',
+    description: 'Владелец активного партнёрского узла, который хранит зашифрованные данные сети.',
+    benefits: ['Значок партнёра', 'Фото высокого качества и альбомы до 10 фото', 'До 100 групп и 500 участников в группе', 'Дополнительные темы, рамки и цвет акцента', 'Возможность подарить Плюс друзьям'],
+  },
+  plus: {
+    label: 'Плюс',
+    description: 'Дополнительные возможности, полученные в подарок от активного партнёра сети.',
+    benefits: ['Значок Плюс', 'Фото высокого качества и альбомы до 10 фото', 'До 100 групп и 500 участников в группе', 'Дополнительные темы, рамки и цвет акцента'],
+  },
+};
+
+/** Проверка выполняется по свежим данным Supabase, а не по надписи в браузере. */
+async function openStatusInfo(uid, kind) {
+  const info = STATUS_INFO[kind];
+  if (!info || !state.me) return;
+  document.querySelector('.status-info-overlay')?.remove();
+  const status = h('div', { class: 'status-check', role: 'status', text: 'Проверяем статус на сервере…' });
+  const badge = h('span', { class: 'role ' + kind, text: info.label });
+  const bullets = h('ul', { class: 'status-benefits' }, ...info.benefits.map((t) => h('li', { text: t })));
+  let overlay;
+  const close = () => {
+    document.removeEventListener('keydown', onEscape, true);
+    overlay?.remove();
+  };
+  const onEscape = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); }
+  };
+  overlay = h('div', { class: 'overlay status-info-overlay' },
+    h('div', { class: 'modal status-info-card', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Информация о значке' },
+      h('div', { class: 'modal-head' }, h('h3', { text: 'Статус пользователя' }),
+        h('button', { class: 'icon-btn', type: 'button', title: 'Закрыть', onclick: close }, icon('close'))),
+      h('div', { class: 'status-info-heading' }, badge,
+        h('b', { text: nameOf(uid) }),
+        h('small', { text: nickOf(uid) })),
+      status,
+      h('p', { text: info.description }),
+      h('b', { text: 'Возможности и привилегии' }),
+      bullets,
+      h('p', { class: 'status-info-note', text: 'Статус проверяется по данным сервера Supabase. Оформление значка само по себе не предоставляет прав.' }),
+      h('button', { class: 'btn btn-block', type: 'button', text: 'Понятно', onclick: close })));
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.body.append(overlay);
+  document.addEventListener('keydown', onEscape, true);
+  try {
+    let confirmed = false;
+    if (kind === 'creator' || kind === 'tester') {
+      const { data, error } = await sb.from('profiles').select('role').eq('id', uid).maybeSingle();
+      if (error) throw error;
+      confirmed = data?.role === kind;
+    } else {
+      const { data, error } = await sb.rpc('perks_list');
+      if (error) throw error;
+      confirmed = (data || []).some((row) => row.user_id === uid && row.kind === kind);
+    }
+    if (!overlay.isConnected) return;
+    status.classList.add(confirmed ? 'verified' : 'unverified');
+    status.textContent = confirmed
+      ? '✓ Подтверждено сервером: статус действителен'
+      : 'Статус не подтверждён: он мог измениться. Обновите страницу.';
+  } catch (err) {
+    if (!overlay.isConnected) return;
+    status.textContent = 'Не удалось проверить статус. Проверьте соединение и повторите.';
+    console.warn('Ошибка проверки статуса', err);
+  }
+}
+
+function clickableBadge(id, kind, compact = false) {
+  const team = kind === 'creator' || kind === 'tester';
+  const label = (team ? ROLE_LABEL : PERK_LABEL)[kind];
+  const shown = !team && compact ? (kind === 'partner' ? '★' : '+') : label;
+  const open = (e) => { e.preventDefault(); e.stopPropagation(); openStatusInfo(id, kind); };
+  return h('span', {
+    class: 'role ' + kind + (!team && compact ? ' mini' : '') + ' status-clickable',
+    role: 'button', tabindex: 0,
+    title: 'Нажмите, чтобы проверить статус «' + label + '»',
+    'aria-label': 'Проверить статус «' + label + '»',
+    onclick: open,
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') open(e); },
+    text: shown,
+  });
+}
+
+/** compact — маленькая награда в списке чатов и шапке. */
 function roleBadge(id, compact = false) {
   const r = roleOf(id), k = perkOf(id);
   return [
-    r ? h('span', { class: 'role ' + r, title: r === 'creator' ? 'Создатель мессенджера' : 'Тестер мессенджера', text: ROLE_LABEL[r] }) : null,
-    k ? h('span', { class: 'role ' + k + (compact ? ' mini' : ''), title: PERK_TITLE[k] + ` (${PERK_LABEL[k]})`, text: compact ? (k === 'partner' ? '★' : '+') : PERK_LABEL[k] }) : null,
+    r && ROLE_LABEL[r] ? clickableBadge(id, r) : null,
+    k && PERK_LABEL[k] ? clickableBadge(id, k, compact) : null,
   ];
 }
 /** Рамка видна, только пока у человека есть Плюс */
