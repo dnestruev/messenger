@@ -44,6 +44,16 @@ Deno.serve(async (req) => {
   return reply({ iceServers, ttlSeconds: 3600, partners: partners.length });
 });
 
+/** turn:host:port → ещё и turn:host:port?transport=tcp (если такого нет). Только корректные адреса. */
+function withTcp(urls: string[]) {
+  const out = [...urls];
+  for (const u of urls) {
+    const m = /^turn:([^?\s]+)$/i.exec(u);
+    if (m && !out.includes(`turn:${m[1]}?transport=tcp`)) out.push(`turn:${m[1]}?transport=tcp`);
+  }
+  return out;
+}
+
 /** Серверы партнёров (проверены функцией turn-check за последние 2 суток): до 3 случайных */
 async function partnerServers() {
   const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SECRET_KEY') || '';
@@ -57,7 +67,8 @@ async function partnerServers() {
     });
     if (!r.ok) return [];
     const list: { urls: string[]; username: string; credential: string }[] = await r.json();
-    return list.sort(() => Math.random() - 0.5).slice(0, 3).map((p) => ({ urls: p.urls, username: p.username, credential: p.credential }));
+    // к каждому UDP-адресу добавляем тот же через TCP: VPN и мобильные сети часто режут UDP
+    return list.sort(() => Math.random() - 0.5).slice(0, 3).map((p) => ({ urls: withTcp(p.urls), username: p.username, credential: p.credential }));
   } catch { return []; }
 }
 
@@ -98,7 +109,7 @@ async function mainServers(userId: string): Promise<{ servers: { urls: string[];
   const staticUser = Deno.env.get('TURN_USERNAME');
   const staticPass = Deno.env.get('TURN_PASSWORD');
   if (staticUser && staticPass && urls.length) {
-    return { servers: [{ urls, username: staticUser, credential: staticPass }] };
+    return { servers: [{ urls: withTcp(urls), username: staticUser, credential: staticPass }] };
   }
 
   // Вариант 3: свой coturn (use-auth-secret). Секреты: TURN_SHARED_SECRET и TURN_URLS.

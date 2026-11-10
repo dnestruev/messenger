@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110141415';
-import * as CONFIG from '../config.js?v=20261110141415';
-import * as E2E from './crypto.js?v=20261110141415';
-import { createNet } from './net.js?v=20261110141415';
-import { qrSvg } from './qr.js?v=20261110141415';
-import { findEmbed } from './embeds.js?v=20261110141415';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110141415';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110141415';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110141415';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110150852';
+import * as CONFIG from '../config.js?v=20261110150852';
+import * as E2E from './crypto.js?v=20261110150852';
+import { createNet } from './net.js?v=20261110150852';
+import { qrSvg } from './qr.js?v=20261110150852';
+import { findEmbed } from './embeds.js?v=20261110150852';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110150852';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110150852';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110150852';
 
 /* =====================================================================
    Утилиты
@@ -2968,7 +2968,9 @@ function makePeer(cur) {
   return pc;
 }
 function armConnectTimeout(cur) {
-  clearTimeout(cur.connectTimer);
+  clearTimeout(cur.connectTimer); clearTimeout(cur.stuckTimer);
+  // промежуточный отчёт: если человек закроет приложение на «Соединяю…», итоговый может не дойти
+  cur.stuckTimer = setTimeout(() => { if (call === cur && !cur.connectedAt) sendCallReport(cur, 'stuck'); }, 15000);
   cur.connectTimer = setTimeout(() => { if (call === cur && !cur.connectedAt) finishCall('failed'); }, CONNECT_TIMEOUT);
 }
 const newCall = (fields) => ({ remote: new MediaStream(), remoteIce: [], remoteSeen: [], localSeen: [], iceQueue: [], startedAt: Date.now(), step: 'начало', ...fields });
@@ -3074,6 +3076,7 @@ function hangUp(why = 'hangup') {
   finishCall(why === 'declined' ? 'declined' : cur.connectedAt ? 'ok' : cur.dir === 'in' ? 'declined' : 'cancel');
 }
 
+const sdpCands = (sdp) => (sdp || '').split(/\r?\n/).filter((l) => l.startsWith('a=candidate:')).map((l) => l.slice(2));
 /** Короткий отчёт для создателя (без IP): чтобы понять, почему не соединилось */
 function sendCallReport(cur, status) {
   const pc = cur.pc;
@@ -3084,6 +3087,8 @@ function sendCallReport(cur, status) {
     'Серверы: ' + (cur.iceUsed || 'соединение не создано'),
     'Состояние: ' + (pc ? pc.connectionState + ' / ICE ' + pc.iceConnectionState + ' / сбор ' + pc.iceGatheringState : '—'),
     'Свои адреса: ' + describeCandidates(cur.localSeen),
+    'Адреса собеседника в SDP: ' + describeCandidates(sdpCands(pc?.remoteDescription?.sdp)),
+    'TCP-адреса: свои ' + cur.localSeen.filter((c) => /\btcp\b/i.test(c.candidate || '')).length,
     'Чужие отдельно: ' + describeCandidates(cur.remoteSeen),
     'Маршрут: ' + (cur.route || 'не выбран'),
     'Ошибка: ' + (cur.err || 'нет'),
@@ -3096,7 +3101,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   if (!cur) return;
   call = null;
   endedCalls.add(cur.id);
-  clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer); clearTimeout(cur.iceTimer);
+  clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer); clearTimeout(cur.stuckTimer); clearTimeout(cur.iceTimer);
   cur.unfit?.();
   stopTone(); stopTitle();
   if (cur.dir === 'in') (swReg ? Promise.resolve(swReg) : navigator.serviceWorker?.ready)?.then((r) => r?.getNotifications({ tag: 'call' }))
@@ -3265,6 +3270,7 @@ function callBubble(m) {
 $('callAudioBtn').onclick = () => startCall(false);
 $('callVideoBtn').onclick = () => startCall(true);
 addEventListener('beforeunload', () => { if (call) hangUp(); });
+addEventListener('pagehide', () => { if (call) hangUp(); });
 
 /* =====================================================================
    Голосовые сообщения
