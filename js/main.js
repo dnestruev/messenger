@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110162413';
-import * as CONFIG from '../config.js?v=20261110162413';
-import * as E2E from './crypto.js?v=20261110162413';
-import { createNet } from './net.js?v=20261110162413';
-import { qrSvg } from './qr.js?v=20261110162413';
-import { findEmbed } from './embeds.js?v=20261110162413';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110162413';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110162413';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110162413';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110171346';
+import * as CONFIG from '../config.js?v=20261110171346';
+import * as E2E from './crypto.js?v=20261110171346';
+import { createNet } from './net.js?v=20261110171346';
+import { qrSvg } from './qr.js?v=20261110171346';
+import { findEmbed } from './embeds.js?v=20261110171346';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110171346';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110171346';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110171346';
 
 /* =====================================================================
    Утилиты
@@ -2999,13 +2999,10 @@ async function uploadMySticker(st) {
   const bytes = new Uint8Array(sealed.data);
   const hash = await E2E.sha256hex(bytes);
   const img = { iv: sealed.iv, mime: st.blob.type || 'image/png', a: 2, hash, kv, st: 1 };
-  const nodes = await net.put(`${chatId}/${hash}`, bytes).catch(() => []);
-  if (nodes.length) img.nodes = nodes;
-  else {
-    img.path = `${chatId}/${uuid()}.bin`;
-    const { error } = await sb.storage.from(BUCKET).upload(img.path, new Blob([bytes], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream' });
-    if (error) throw error;
-  }
+  // стикеры маленькие — храним в центре: узлы партнёров засыпают, и стикер «пропадал», пока узел спит
+  img.path = `${chatId}/${uuid()}.bin`;
+  const { error } = await sb.storage.from(BUCKET).upload(img.path, new Blob([bytes], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream' });
+  if (error) throw error;
   const m = await insertMessage(chatId, { mst: { id: st.id, img } });
   const list = await myStickers();
   const mine = list.find((x) => x.id === st.id);
@@ -3031,19 +3028,26 @@ async function syncStickers() {
   if (!chatId || syncStickers.busy || !(await ensureChatKey(chatId).catch(() => false))) return;
   syncStickers.busy = true;
   try {
+    // Какие копии уже были выгружены ДО запроса: убирать можно только их (иначе стикер, выгруженный
+    // прямо во время сверки, считался «удалённым на другом устройстве» и пропадал)
+    const known = new Set((await myStickers()).filter((x) => x.mid).map((x) => x.id));
     const { data, error } = await sb.from('messages').select(MSG_COLUMNS).eq('conversation_id', chatId).order('created_at', { ascending: false }).limit(500);
     if (error) return;
-    await Promise.all(data.map(decryptMessage));
+    await Promise.all(data.map((m) => decryptMessage(m).catch(() => m)));
     const remote = new Map(data.filter((m) => m.p?.mst?.id).map((m) => [m.p.mst.id, m]));
-    let list = await myStickers();
-    const before = JSON.stringify(list.map((x) => x.id + (x.mid || '')));
-    const complete = data.length < 500;                     // видим все копии — можно убирать удалённые в другом месте
-    if (complete) list = list.filter((x) => !x.mid || remote.has(x.id));
+    // всё прочитали и всё расшифровалось — только тогда отсутствие копии значит «удалили»
+    const complete = data.length < 500 && data.every((m) => m.p && !m.p.bad && !m.p.missing);
+    const before = JSON.stringify((await myStickers()).map((x) => x.id + (x.mid || '')));
+    const got = [];
     for (const [id, m] of remote) {
-      const have = list.find((x) => x.id === id);
-      if (have) { if (!have.mid) { have.mid = m.id; have.img = m.p.mst.img; } continue; }
-      try { list.push({ id, blob: await downloadMySticker(chatId, m.p.mst.img), at: Date.parse(m.created_at) || Date.now(), mid: m.id, img: m.p.mst.img }); } catch {}
+      if ((await myStickers()).some((x) => x.id === id)) continue;
+      try { got.push({ id, blob: await downloadMySticker(chatId, m.p.mst.img), at: Date.parse(m.created_at) || Date.now(), mid: m.id, img: m.p.mst.img }); } catch {}
     }
+    // сливаем со СВЕЖИМ списком: пока шла сверка, стикер могли добавить или удалить
+    let list = await myStickers();
+    if (complete) list = list.filter((x) => !(known.has(x.id) && !remote.has(x.id)));
+    for (const x of list) { const m = remote.get(x.id); if (m && !x.mid) { x.mid = m.id; x.img = m.p.mst.img; } }
+    for (const g of got) if (!list.some((x) => x.id === g.id)) list.push(g);
     list.sort((a, b) => b.at - a.at);
     await saveMyStickers(list);
     for (const st of list.filter((x) => !x.mid).slice(0, 10)) await uploadMySticker(st).catch(() => {});   // старые, сохранённые до синхронизации

@@ -56,6 +56,25 @@ with sync_playwright() as pw:
     check('удалили на втором', a2.page.locator('.sticker-tile:not(.sticker-add) img').count() == 0)
     a.page.click('#stickerBtn'); time.sleep(0.3)
     check('пропал и на первом', my_count(a) == 0 or (time.sleep(2) or my_count(a) == 0))
+    # быстро добавить три стикера подряд, пока идёт сверка (было: сверка затирала только что добавленные)
+    a.page.keyboard.press('Escape'); a.open_chat('bobby')
+    a.page.click('#stickerBtn') if a.page.locator('#stickerPanel').is_hidden() else None
+    a.page.locator('.sticker-panel button', has_text='Мои').first.click()
+    for k, col in enumerate([(10, 200, 10, 255), (10, 10, 200, 255), (200, 200, 10, 255)]):
+        _I.new('RGBA', (64, 64), col).save(f'/tmp/st{k}.png')
+        a.page.set_input_files('.sticker-panel input[type=file]', f'/tmp/st{k}.png'); time.sleep(0.15)
+    time.sleep(4)
+    check('три быстрых стикера на месте', my_count(a) == 3)
+    a.page.reload(); a.page.wait_for_selector('.chat-item, .modal input[type=password]', timeout=20000)
+    if a.page.locator('.modal input[type=password]').count():
+        a.page.fill('.modal input[type=password]', 'секретный код 1'); a.page.click('.modal .btn-primary'); a.page.wait_for_selector('.modal', state='detached')
+    time.sleep(5)
+    check('после перезагрузки все три остались', my_count(a) == 3)
+    a2.page.reload(); a2.page.wait_for_selector('.chat-item, .modal input[type=password]', timeout=20000)
+    if a2.page.locator('.modal input[type=password]').count():
+        a2.page.fill('.modal input[type=password]', 'секретный код 1'); a2.page.click('.modal .btn-primary'); a2.page.wait_for_selector('.modal', state='detached')
+    time.sleep(5)
+    check('и на втором устройстве три', my_count(a2) == 3)
     for u in (a, a2, b):
         errs = [e for e in u.errors if 'ERR_' not in e]
         check(f'нет ошибок JS ({u.nick})', not errs)
