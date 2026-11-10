@@ -62,12 +62,21 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Вариант 2: свой coturn (use-auth-secret). Секреты: TURN_SHARED_SECRET и TURN_URLS.
-  const sharedSecret = Deno.env.get('TURN_SHARED_SECRET');
   const urls = (Deno.env.get('TURN_URLS') || '')
     .split(',')
     .map((url) => url.trim())
     .filter((url) => /^turns?:[^\s]+$/i.test(url));
+
+  // Вариант 2: постоянные логин/пароль (ExpressTURN, Metered и т.п.).
+  // Секреты: TURN_URLS (через запятую), TURN_USERNAME, TURN_PASSWORD. Выдаём только вошедшим.
+  const staticUser = Deno.env.get('TURN_USERNAME');
+  const staticPass = Deno.env.get('TURN_PASSWORD');
+  if (staticUser && staticPass && urls.length) {
+    return reply({ iceServers: [{ urls, username: staticUser, credential: staticPass }], ttlSeconds: 3600 });
+  }
+
+  // Вариант 3: свой coturn (use-auth-secret). Секреты: TURN_SHARED_SECRET и TURN_URLS.
+  const sharedSecret = Deno.env.get('TURN_SHARED_SECRET');
   if (!sharedSecret || !urls.length) return reply({ error: 'TURN не настроен на сервере' }, 503);
 
   // TURN REST API (coturn use-auth-secret): имя = unix-expiry:user-id,

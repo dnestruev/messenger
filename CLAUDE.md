@@ -25,7 +25,7 @@
 - Сайт: https://dnestruev.github.io/messenger/ (GitHub Pages из ветки `main` репозитория `dnestruev/messenger`).
 - Центр (база) — Supabase, проект **`jlyuqsqlvhytvsijpejr`**, организация `corbhettudwxncoqvoob`, тариф FREE, eu-central-1. Доступ через MCP-коннектор Supabase.
 - Тестовый узел-партнёр — Supabase-проект **`trvqgpqinbukddfuybms`** (`messenger-node-1`), владелец — создатель.
-- Функция **turn-credentials** (Edge Function, verify_jwt выключен, токен проверяет сама; код в `supabase/functions/turn-credentials`) — выдаёт временные данные TURN. Задеплоена, но TURN пока **не настроен**: нужны секреты `CF_TURN_KEY_ID` + `CF_TURN_API_TOKEN` (Cloudflare Realtime TURN, бесплатно) или `TURN_SHARED_SECRET` + `TURN_URLS` (свой coturn). Без них отвечает 503, звонки идут через STUN.
+- Функция **turn-credentials** (Edge Function, verify_jwt выключен, токен проверяет сама; код в `supabase/functions/turn-credentials`) — выдаёт временные данные TURN. Задеплоена, но TURN пока **не настроен**: нужны секреты: `TURN_URLS` + `TURN_USERNAME` + `TURN_PASSWORD` (постоянные данные, напр. ExpressTURN — 1 ТБ/мес бесплатно без карты; рекомендован), или `CF_TURN_KEY_ID` + `CF_TURN_API_TOKEN` (Cloudflare — у владельца просит подписку), или `TURN_SHARED_SECRET` + `TURN_URLS` (свой coturn). Без них отвечает 503, звонки идут через STUN.
 - Функция **push** (Edge Function, verify_jwt выключен) есть только в Supabase, в репозитории её нет — смотреть через `get_edge_function`. Вызывается триггером `on_message_push` → `public.notify_push()` (через pg_net) при новом сообщении. Секреты VAPID лежат в Supabase.
 - В базе по расписанию (pg_cron, каждые 10 мин) — `public.check_nodes()`: пингует узлы, пересчитывает статус партнёров.
 
