@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110070558';
-import * as CONFIG from '../config.js?v=20261110070558';
-import * as E2E from './crypto.js?v=20261110070558';
-import { createNet } from './net.js?v=20261110070558';
-import { qrSvg } from './qr.js?v=20261110070558';
-import { findEmbed } from './embeds.js?v=20261110070558';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110070558';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110070558';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110070558';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110070734';
+import * as CONFIG from '../config.js?v=20261110070734';
+import * as E2E from './crypto.js?v=20261110070734';
+import { createNet } from './net.js?v=20261110070734';
+import { qrSvg } from './qr.js?v=20261110070734';
+import { findEmbed } from './embeds.js?v=20261110070734';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110070734';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110070734';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110070734';
 
 /* =====================================================================
    Утилиты
@@ -2618,7 +2618,7 @@ async function onSignal(env) {
       await cur.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
       await flushIce(cur);
       replayIce(cur);
-    } catch { if (call === cur) finishCall('failed'); }
+    } catch (e) { if (call === cur) { cur.callError = e.name || 'SDPError'; finishCall('failed'); } }
   }
   if (msg.t === 'busy') finishCall('busy');
   if (msg.t === 'end') finishCall(msg.why === 'failed' ? 'failed' : msg.why === 'declined' ? 'declined' : call.connectedAt ? 'ok' : call.dir === 'in' ? 'missed' : 'cancel', { remote: true });
@@ -2681,6 +2681,7 @@ async function getMedia(video) {
 function makePeer() {
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   const remote = new MediaStream();
+  pc.onicecandidateerror = (e) => { if (call?.pc === pc) call.iceError = e.errorCode; };
   pc.onicecandidate = ({ candidate }) => {
     const cur = call;
     if (!candidate || !cur || cur.pc !== pc) return;
@@ -2785,7 +2786,7 @@ async function acceptCall(withVideo) {
     connectionDeadline(cur);
     await sendSignal(cur.conv, cur.peer, { t: 'answer', id: cur.id, sdp: withBitrate(cur.pc.localDescription.sdp) });
     updateCallUi();
-  } catch (e) { if (call === cur) { toast(e.message || 'Не получилось ответить'); finishCall('failed'); } }
+  } catch (e) { if (call === cur) { cur.callError = e.name || 'MediaError'; toast(e.message || 'Не получилось ответить'); finishCall('failed'); } }
 }
 
 function hangUp(why = 'hangup') {
@@ -2795,9 +2796,27 @@ function hangUp(why = 'hangup') {
   finishCall(why === 'declined' ? 'declined' : call.connectedAt ? 'ok' : call.dir === 'in' ? 'declined' : 'cancel');
 }
 
+function callDiagnostics(cur) {
+  const hasTurn = ICE_SERVERS.some(s => (Array.isArray(s.urls) ? s.urls : [s.urls]).some(u => /^turns?:/i.test(u || '')));
+  return [
+    'Тест: звонки 2',
+    'Направление: ' + (cur.dir === 'in' ? 'входящий' : 'исходящий'),
+    'Ответ: ' + (cur.answered ? 'да' : 'нет'),
+    'Локальное описание: ' + (cur.pc.localDescription?.type || 'нет'),
+    'Описание собеседника: ' + (cur.pc.remoteDescription?.type || 'нет'),
+    'Соединение: ' + cur.pc.connectionState,
+    'ICE: ' + cur.pc.iceConnectionState,
+    'Сбор адресов: ' + cur.pc.iceGatheringState,
+    'Адреса: свои ' + (cur.localIce?.length || 0) + ', принятые отдельно ' + (cur.seenIce?.size || 0),
+    'TURN: ' + (hasTurn ? 'настроен' : 'не настроен'),
+    'Ошибка: ' + (cur.callError || cur.iceError || 'нет кода'),
+  ].join('\n');
+}
+
 function finishCall(status, { remote = false, silent = false } = {}) {
   const cur = call;
   if (!cur) return;
+  const diagnostics = status === 'failed' ? callDiagnostics(cur) : null;
   call = null;
   endedCalls.add(cur.id);
   clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer);
@@ -2822,7 +2841,14 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   try { cur.pc.close(); } catch {}
   if (!remote && status === 'failed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'failed' }).catch(() => {});
   if (!remote && !cur.answered && cur.dir === 'out' && status === 'missed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'timeout' }).catch(() => {});
-  if (!silent && status === 'failed') toast('Не удалось соединиться. В некоторых мобильных сетях звонки без сервера-посредника не проходят.');
+  if (!silent && status === 'failed') {
+    setTimeout(() => {
+      if (call) return;
+      openModal({ title: 'Звонок не соединился' },
+        h('p', { text: 'Эти данные помогут найти причину. Можно отправить скриншот этого окна.' }),
+        h('pre', { text: diagnostics, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: '12px' } }));
+    }, 950);
+  }
   // итог звонка записывает тот, кто звонил
   if (cur.dir === 'out' && cur.logP) {
     // ждём, пока запишется «звоню…», и только потом меняем её на итог (иначе итог мог потеряться)
