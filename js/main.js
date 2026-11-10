@@ -1,14 +1,14 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110163000';
-import * as CONFIG from '../config.js?v=20261110163000';
-import * as E2E from './crypto.js?v=20261110163000';
-import { createNet } from './net.js?v=20261110163000';
-import { qrSvg } from './qr.js?v=20261110163000';
-import { findEmbed } from './embeds.js?v=20261110163000';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110163000';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110163000';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110163000';
-import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110163000';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110165000';
+import * as CONFIG from '../config.js?v=20261110165000';
+import * as E2E from './crypto.js?v=20261110165000';
+import { createNet } from './net.js?v=20261110165000';
+import { qrSvg } from './qr.js?v=20261110165000';
+import { findEmbed } from './embeds.js?v=20261110165000';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110165000';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110165000';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110165000';
+import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110165000';
 
 /* =====================================================================
    Утилиты
@@ -2598,7 +2598,7 @@ const ICE_SERVERS = CONFIG.ICE_SERVERS || DEFAULT_ICE_SERVERS;
 /** Настраиваем свежие TURN credentials перед SDP. При отсутствии функции остаётся STUN. */
 async function configureCallIce(cur) {
   try {
-    const config = await loadIceConfiguration(sb, ICE_SERVERS);
+    const config = await loadIceConfiguration(sb, ICE_SERVERS, state.me.id);
     if (call !== cur || cur.pc.signalingState === 'closed') return;
     cur.turnAvailable = config.turnConfigured;
     cur.turnError = config.turnError;
@@ -3176,7 +3176,6 @@ function hangUp(why = 'hangup') {
 }
 
 function callDiagnostics(cur) {
-  const hasTurn = ICE_SERVERS.some(s => (Array.isArray(s.urls) ? s.urls : [s.urls]).some(u => /^turns?:/i.test(u || '')));
   return [
     'Тест: звонки 3',
     'Направление: ' + (cur.dir === 'in' ? 'входящий' : 'исходящий'),
