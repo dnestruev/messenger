@@ -1,12 +1,12 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110005547';
-import * as CONFIG from '../config.js?v=20261110005547';
-import * as E2E from './crypto.js?v=20261110005547';
-import { createNet } from './net.js?v=20261110005547';
-import { qrSvg } from './qr.js?v=20261110005547';
-import { findEmbed } from './embeds.js?v=20261110005547';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110005547';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110005547';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110012431';
+import * as CONFIG from '../config.js?v=20261110012431';
+import * as E2E from './crypto.js?v=20261110012431';
+import { createNet } from './net.js?v=20261110012431';
+import { qrSvg } from './qr.js?v=20261110012431';
+import { findEmbed } from './embeds.js?v=20261110012431';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110012431';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110012431';
 
 /* =====================================================================
    Утилиты
@@ -80,14 +80,17 @@ function plural(n, one, few, many) {
   return many;
 }
 const fmtDur = (sec) => { sec = Math.max(0, Math.round(sec || 0)); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); };
-const timeOf = (iso) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+// Форматтеры создаём один раз: toLocale…String на каждый вызов заново собирает их и заметно тормозит длинную ленту
+const FMT_TIME = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
+const FMT_SHORT = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
+const FMT_DAY = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' });
+const timeOf = (iso) => FMT_TIME.format(new Date(iso));
+const shortDate = (iso) => FMT_SHORT.format(new Date(iso));
 function shortTime(iso) {
   const d = new Date(iso);
-  return d.toDateString() === new Date().toDateString()
-    ? timeOf(iso)
-    : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  return d.toDateString() === new Date().toDateString() ? timeOf(iso) : shortDate(iso);
 }
-const dayOf = (iso) => new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+const dayOf = (iso) => FMT_DAY.format(new Date(iso));
 const hueOf = (text = '') => { let h = 0; for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
 const parseNicks = (s) => s.split(/[\s,;]+/).map((x) => x.replace(/^@/, '').toLowerCase()).filter(Boolean);
 const isDesktop = () => matchMedia('(min-width: 721px)').matches;
@@ -149,6 +152,7 @@ const state = {
   lastSeen: new Map(),      // id -> { at: Date|null, recently }
   hideSeen: false,
   reactions: new Map(),     // id сообщения -> Map(id человека -> эмодзи)
+  shown: new Map(),         // id чата -> сколько последних сообщений нарисовано
 };
 const keys = {
   priv: null,               // мой секретный ключ (неизвлекаемый)
@@ -800,11 +804,14 @@ function startPresence() {
   const me = state.me.id;
   presence = sb.channel('online', { config: { presence: { key: me } } });
   presence.on('presence', { event: 'sync' }, () => {
+    // В канале — все, кто в сети. Перерисовываем, только если зашёл или вышел кто-то из МОИХ чатов:
+    // раньше любой вход/выход любого человека перерисовывал список у всех.
+    const mine = new Set([...state.chats.values()].flatMap((c) => c.member_ids || []));
     const next = new Set(Object.keys(presence.presenceState() || {}));
-    const changed = next.size !== state.online.size || [...next].some((id) => !state.online.has(id));
-    const left = [...state.online].some((id) => !next.has(id));
+    const came = [...next].some((id) => mine.has(id) && !state.online.has(id));
+    const left = [...state.online].some((id) => mine.has(id) && !next.has(id));
     state.online = next;
-    if (changed) { renderChats(); if (state.activeId) renderHeader(); }
+    if (came || left) { renderChats(); if (state.activeId) renderHeader(); }
     if (left) setTimeout(loadSeen, 1500);                  // кто-то вышел — узнаём, когда он был в последний раз
   });
   presence.subscribe((status) => { if (status === 'SUBSCRIBED' && !document.hidden) presence.track({ at: Date.now() }); });
@@ -844,7 +851,7 @@ function seenText(id) {
   const yest = new Date(Date.now() - 864e5).toDateString() === s.at.toDateString();
   if (today) return 'был(а) в ' + timeOf(s.at);
   if (yest) return 'был(а) вчера в ' + timeOf(s.at);
-  return 'был(а) ' + s.at.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  return 'был(а) ' + shortDate(s.at);
 }
 
 function stopApp() {
@@ -853,7 +860,7 @@ function stopApp() {
   state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
   state.showArchive = false;
   clearInterval(state.perksTimer); state.perks.clear(); state.seen.clear(); state.savedId = null;
-  stopPresence(); state.lastSeen.clear(); state.reactions.clear();
+  stopPresence(); state.lastSeen.clear(); state.reactions.clear(); state.shown.clear();
   stopCalls();
   setCompose(null);
   leaveTyping();
@@ -1312,6 +1319,7 @@ async function loadReads(chatId) {
 
 async function openChat(id) {
   state.seen.delete(id);                                  // при открытии — без анимации каждого пузыря
+  state.shown.delete(id);                                 // и снова только последние сообщения
   if (rec && rec.chat !== id) stopVoice(false);
   closeStickers();
   closeSearch();
@@ -1381,11 +1389,33 @@ async function loadOlder(chatId, button) {
   const merged = new Map([...data, ...list].map((m) => [m.id, m]));
   state.history.set(chatId, [...merged.values()].sort(byTime));
   state.more.set(chatId, data.length === PAGE);
+  state.shown.set(chatId, (state.shown.get(chatId) || RENDER_STEP) + data.length);
   if (state.activeId !== chatId) return;
   const box = $('messages');
   const fromBottom = box.scrollHeight - box.scrollTop;
   renderMessages({ keepScroll: true });
   box.scrollTop = box.scrollHeight - fromBottom;          // остаёмся на том же месте
+}
+
+const RENDER_STEP = 80;      // сколько сообщений рисуем сразу и добавляем по кнопке
+/** Показать ещё n уже загруженных сообщений сверху, не сдвигая то, что на экране */
+function showMore(chatId, n) {
+  if (state.activeId !== chatId) return;
+  state.shown.set(chatId, (state.shown.get(chatId) || RENDER_STEP) + n);
+  const box = $('messages');
+  const fromBottom = box.scrollHeight - box.scrollTop;
+  renderMessages({ keepScroll: true });
+  box.scrollTop = box.scrollHeight - fromBottom;
+}
+/** Сообщение есть в истории, но не нарисовано (выше окна) — расширить окно, чтобы оно появилось */
+function ensureRendered(id) {
+  if (msgEl(id)) return true;
+  const all = state.history.get(state.activeId) || [];
+  const i = all.findIndex((m) => String(m.id) === String(id));
+  if (i === -1) return false;
+  const need = all.length - i + 10;
+  if (need > (state.shown.get(state.activeId) || RENDER_STEP)) { state.shown.set(state.activeId, need); renderMessages({ keepScroll: true }); }
+  return !!msgEl(id);
 }
 
 const imgPool = new Map();   // ref -> уже загруженный <img> из прошлой отрисовки
@@ -1401,12 +1431,15 @@ function renderMessages({ keepScroll = false, toBottom = false } = {}) {
   for (const fr of box.querySelectorAll('.embed-open[data-mid]')) embedPool.set(fr.dataset.mid, fr);
   for (const im of box.querySelectorAll('img.msg-img[data-ref]')) if (im.src) imgPool.set(im.dataset.ref, im);
   const c = state.chats.get(state.activeId);
-  const list = state.history.get(state.activeId) || [];
+  const all = state.history.get(state.activeId) || [];
+  // Рисуем не всю историю, а последние сообщения (окно растёт по кнопке): длинная лента открывается быстро
+  const list = all.slice(-(state.shown.get(state.activeId) || RENDER_STEP));
+  const hiddenOlder = all.length > list.length;
   const nodes = [];
-  if (state.more.get(state.activeId)) {
+  if (hiddenOlder || state.more.get(state.activeId)) {
     const chatId = state.activeId;
     const more = h('button', { class: 'btn load-more', type: 'button', text: 'Показать более ранние' });
-    more.onclick = () => loadOlder(chatId, more);
+    more.onclick = () => (hiddenOlder ? showMore(chatId, RENDER_STEP) : loadOlder(chatId, more));
     nodes.push(more);
   }
 
@@ -1457,6 +1490,60 @@ function renderMessages({ keepScroll = false, toBottom = false } = {}) {
   // Иначе (читают, правят, пришла реакция, итог звонка) лента остаётся на месте.
   const stick = firstRender || toBottom || (!keepScroll && wasNearBottom);
   box.scrollTop = stick ? box.scrollHeight : prevTop;
+  updateJumpDown();
+}
+
+/* Точечные обновления ленты: полная перерисовка 150+ пузырей на каждое сообщение заметно тормозила
+   (на телефоне — до полсекунды на сообщение). Новое дорисовываем в конец, изменённое меняем на месте. */
+const bubbleOpts = (m, prev) => {
+  const c = state.chats.get(m.conversation_id);
+  const sameDay = !!prev && dayOf(prev.created_at) === dayOf(m.created_at);
+  const continued = sameDay && prev.sender_id === m.sender_id && ts(m.created_at) - ts(prev.created_at) < 5 * 60e3;
+  return { sameDay, continued, showName: !!c?.is_group && m.sender_id !== state.me.id && !continued };
+};
+const msgEl = (id) => $('messages').querySelector(`.msg[data-id="${CSS.escape(String(id))}"]`);
+/** Новое сообщение в конец ленты. Если оно не последнее или лента ещё не нарисована — рисуем целиком. */
+function appendBubble(m, toBottom = false) {
+  const box = $('messages');
+  const list = state.history.get(state.activeId) || [];
+  const i = list.indexOf(m), prev = list[i - 1];
+  const seen = state.seen.get(state.activeId);
+  const rendered = [...box.querySelectorAll('.msg[data-id]')].pop();
+  if (i === -1 || i !== list.length - 1 || !seen || (prev ? rendered?.dataset.id !== String(prev.id) : !!rendered)) {
+    return renderMessages({ toBottom });
+  }
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 150;
+  box.querySelector(':scope > .empty-chat')?.remove();
+  const o = bubbleOpts(m, prev);
+  if (!o.sameDay) box.append(h('div', { class: 'day', text: dayOf(m.created_at) }));
+  const key = m.cid || m.id;
+  const fresh = !seen.has(key);
+  seen.add(key);
+  state.shown.set(state.activeId, (state.shown.get(state.activeId) || RENDER_STEP) + 1);   // окно не «съезжает»
+  const el = bubble(m, { showName: o.showName, continued: o.continued, fresh });
+  box.append(el);
+  resolveImages(el);
+  if (toBottom || nearBottom) box.scrollTop = box.scrollHeight;
+  updateJumpDown();
+}
+/** Заменить один пузырь (правка, итог звонка, автоочистка) — без перерисовки всей ленты */
+function replaceBubble(m) {
+  const box = $('messages');
+  const list = state.history.get(state.activeId) || [];
+  const i = list.findIndex((x) => x.id === m.id);
+  const old = msgEl(m.id);
+  if (i === -1 || !old) return renderMessages();
+  const top = box.scrollTop;                                 // до переноса фото (см. renderMessages)
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 150;
+  imgPool.clear(); embedPool.clear();
+  for (const im of old.querySelectorAll('img.msg-img[data-ref]')) if (im.src) imgPool.set(im.dataset.ref, im);
+  for (const fr of old.querySelectorAll('.embed-open[data-mid]')) embedPool.set(fr.dataset.mid, fr);
+  const o = bubbleOpts(m, list[i - 1]);
+  const el = bubble(m, { showName: o.showName, continued: o.continued, fresh: false });
+  imgPool.clear(); embedPool.clear();
+  old.replaceWith(el);
+  resolveImages(el);
+  box.scrollTop = nearBottom ? box.scrollHeight : top;
   updateJumpDown();
 }
 
@@ -1558,7 +1645,8 @@ function updateJumpDown() {
   btn.classList.toggle('show', !box.hidden && box.scrollHeight - box.scrollTop - box.clientHeight > 400);
 }
 function jumpTo(id) {
-  const el = $('messages').querySelector(`[data-id="${id}"]`);
+  if (!ensureRendered(id)) return;
+  const el = msgEl(id);
   if (!el) return;
   el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
@@ -2075,6 +2163,7 @@ function runSearch(keepIndex = false) {
   showHit();
 }
 function showHit() {
+  if (search.hits[search.i] != null) ensureRendered(search.hits[search.i]);
   const n = search.hits.length;
   $('searchCount').replaceChildren(`${search.i + 1} из ${n}`,
     state.more.get(state.activeId) ? h('button', { type: 'button', class: 'link-btn', text: ' · ещё', title: 'Искать в старых сообщениях', onclick: searchDeeper }) : '');
@@ -3083,7 +3172,7 @@ function upsertMessage(m) {
   if (i !== -1) list[i] = m;
   const c = state.chats.get(m.conversation_id);
   if (c && list && list[list.length - 1]?.id === m.id) setLast(c, m);
-  if (m.conversation_id === state.activeId) renderMessages();
+  if (m.conversation_id === state.activeId && i !== -1) replaceBubble(m);
   renderChats();
 }
 
@@ -3110,7 +3199,7 @@ async function addMessage(m, fromServer = false) {
 
   const visible = c.id === state.activeId && !document.hidden;
   if (c.id === state.activeId) {
-    if (hist) renderMessages({ toBottom: isNew && m.sender_id === state.me.id });
+    if (hist && isNew) appendBubble(m, m.sender_id === state.me.id);   // повтор своего же с сервера — ничего не меняем
     if (m.sender_id !== state.me.id) markRead(c.id);
   }
   if (fromServer && isNew && m.sender_id !== state.me.id && !visible && prefs.sound && !state.blocked.has(m.sender_id)) ding();

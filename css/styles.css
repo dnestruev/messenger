@@ -773,8 +773,10 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .chat-list.list-enter > .chat-item:nth-child(4) { animation-delay: .06s; }
 .chat-list.list-enter > .chat-item:nth-child(5) { animation-delay: .08s; }
 .chat-list.list-enter > .chat-item:nth-child(n+6) { animation-delay: .1s; }
-.unread-dot { animation: pulse 2s ease-in-out infinite; }
-@keyframes pulse { 50% { box-shadow: 0 0 0 4px transparent; transform: scale(1.15); } 0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); } }
+/* пульс непрочитанного: только transform/opacity — их рисует видеокарта, без перекраски каждый кадр */
+.unread-dot { position: relative; }
+.unread-dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--accent); animation: pulse 2s ease-out infinite; }
+@keyframes pulse { 0% { transform: scale(1); opacity: .55; } 70%, 100% { transform: scale(2.4); opacity: 0; } }
 
 /* «печатает» с бегущими точками */
 .typing-dots { display: inline-flex; gap: 2px; margin-left: 3px; vertical-align: middle; }
@@ -805,11 +807,16 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 
 /* значок партнёра переливается */
 .role.partner {
-  background: linear-gradient(110deg, #f5c542 0%, #e08a1e 40%, #ffe08a 50%, #e08a1e 60%, #f5c542 100%);
-  background-size: 250% 100%;
-  animation: shimmer 3.5s linear infinite;
+  background: linear-gradient(110deg, #f5c542, #e08a1e 55%, #f0b23a);
+  position: relative; overflow: hidden; isolation: isolate;
 }
-@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+/* блик бежит поверх значка через transform — дёшево; раньше двигался фон и значок перекрашивался каждый кадр */
+.role.partner::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: linear-gradient(110deg, transparent 30%, rgba(255, 240, 190, .95) 50%, transparent 70%);
+  transform: translateX(-120%); animation: shimmer 3.5s linear infinite;
+}
+@keyframes shimmer { 0% { transform: translateX(-120%); } 45%, 100% { transform: translateX(120%); } }
 .role.mini { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; font-size: 12px; line-height: 1; border-radius: 999px; letter-spacing: 0; }
 [data-style="dot"] .role.mini { font-size: 12px; font-family: var(--font); letter-spacing: 0; border-radius: 999px; }
 
@@ -837,7 +844,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .md-spoiler { border-radius: 4px; background: currentColor; cursor: pointer; transition: background .3s; -webkit-user-select: none; user-select: none; }
 .md-spoiler > * { visibility: hidden; }
 .md-spoiler { color: inherit; }
-.md-spoiler:not(.open) { color: transparent; background: rgba(127, 127, 127, .55); background-image: radial-gradient(rgba(255, 255, 255, .5) 1px, transparent 1.2px); background-size: 4px 4px; animation: spoiler-shimmer 1.2s linear infinite; }
+.md-spoiler:not(.open) { color: transparent; background: rgba(127, 127, 127, .55); background-image: radial-gradient(rgba(255, 255, 255, .5) 1px, transparent 1.2px); background-size: 4px 4px; animation: spoiler-shimmer 1.2s steps(4) infinite; }
 .md-spoiler.open { background: rgba(127, 127, 127, .15); -webkit-user-select: text; user-select: text; }
 .md-spoiler.open > * { visibility: visible; }
 @keyframes spoiler-shimmer { to { background-position: 4px 4px; } }
@@ -1114,3 +1121,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .chat { position: relative; }
 .chat:has(.sticker-panel:not([hidden])) .jump-down, .chat:has(.composer.recording) .jump-down { display: none; }
 .forgot-btn { justify-self: center; margin-top: -6px; padding: 4px 8px; }
+
+/* на телефонах размытие фона под окном дорогое (старые iPhone подтормаживают) — просто затемняем */
+@media (max-width: 720px) { .overlay { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(10, 10, 16, .55); } }
+@media (prefers-reduced-motion: reduce) { .role.partner::after, .unread-dot::after, .md-spoiler:not(.open) { animation: none; } }
