@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110154933';
-import * as CONFIG from '../config.js?v=20261110154933';
-import * as E2E from './crypto.js?v=20261110154933';
-import { createNet } from './net.js?v=20261110154933';
-import { qrSvg } from './qr.js?v=20261110154933';
-import { findEmbed } from './embeds.js?v=20261110154933';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110154933';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110154933';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110154933';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110160928';
+import * as CONFIG from '../config.js?v=20261110160928';
+import * as E2E from './crypto.js?v=20261110160928';
+import { createNet } from './net.js?v=20261110160928';
+import { qrSvg } from './qr.js?v=20261110160928';
+import { findEmbed } from './embeds.js?v=20261110160928';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110160928';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110160928';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110160928';
 
 /* =====================================================================
    Утилиты
@@ -352,6 +352,7 @@ const BADGE = {
   plus: { icon: 'plus', label: 'Плюс' },
   donor: { icon: 'heart', label: 'Донатер' },
   relay: { icon: 'relay', label: 'Связь' },
+  bro: { icon: 'sparkle', label: 'Реальный бро' },
 };
 /** Информация о подтверждённых статусах пользователя. Права определяет база, не значок. */
 const STATUS_INFO = {
@@ -388,6 +389,12 @@ const STATUS_INFO = {
     description: 'Поддержал проект деньгами — на эти деньги мессенджер растёт.',
     benefits: ['Значок с сердцем у ника', 'Огромное спасибо от команды'],
     how: 'Поддержать проект: Настройки → «Поддержать проект». Значок выдаёт создатель.',
+  },
+  bro: {
+    label: 'Реальный бро проекта',
+    description: 'Уникальный значок — такой есть только у одного человека во всём мессенджере. Он поверил в проект одним из первых, поднял узлы и серверы для звонков и тестировал всё подряд.',
+    benefits: ['Единственный в мире значок «Реальный бро»', 'Вечный — его нельзя снять', 'Респект от создателя 🤝'],
+    how: 'Никак: он выпущен в одном экземпляре и уже занят.',
   },
   relay: {
     label: 'Связь',
@@ -456,6 +463,7 @@ async function openStatusInfo(uid, kind) {
     if (!overlay.isConnected) return;
     status.classList.add(confirmed ? 'is-ok' : 'is-bad');
     status.textContent = !confirmed ? 'Статус не подтверждён: он мог измениться. Обновите страницу.'
+      : kind === 'bro' ? '✓ Подтверждено сервером: единственный такой значок в мессенджере'
       : granted && kind !== 'donor' ? '✓ Подтверждено сервером: значок выдан создателем'
       : '✓ Подтверждено сервером: статус действителен';
   } catch (err) {
@@ -491,6 +499,7 @@ function badgeKinds(id) {
   for (const t of ['bronze', 'silver', 'gold']) if (b.has(t) && (TIER_RANK[t] > (TIER_RANK[tier] || 0))) tier = t;   // выданный создателем уровень
   return [
     r && BADGE[r] ? r : null,
+    b.has('bro') ? 'bro' : null,
     r !== 'tester' && b.has('tester') ? 'tester' : null,
     tier || (k === 'plus' || b.has('plus') ? 'plus' : null),
     b.has('relay') ? 'relay' : null,

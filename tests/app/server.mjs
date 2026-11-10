@@ -444,6 +444,7 @@ http.createServer(async (req, res) => {
       if (s) { s.turn_active = db.turn_providers.some((x) => x.owner === t.owner && x.status === 'active'); s.silver_since = s.turn_active ? (s.silver_since || now()) : null; s.tier = s.turn_active ? 'silver' : 'bronze'; }
       return send(res, 200, { data: { checked: 1, results: [{ id: t.id, ok, error: t.last_error }] } });
     }
+    case '/api/grant': { const p = db.profiles.find((x) => x.username === j.username); db.badge_grants.push({ user_id: p.id, kind: j.kind, since: now() }); return send(res, 200, { ok: true }); }
     case '/api/role': { const p = db.profiles.find((x) => x.username === j.username); p.role = j.role; return send(res, 200, { ok: true }); }
     case '/api/partner': {   // тест: сделать человека партнёром (узел)
       const p = db.profiles.find((x) => x.username === j.username);

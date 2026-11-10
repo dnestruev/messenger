@@ -483,6 +483,14 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .role.tester { background: linear-gradient(135deg, #2f80ed, #26c6da); color: #fff; }
 .role.donor { background: linear-gradient(135deg, #ff5f8f, #ff9a6b); color: #fff; }
 .role.relay { background: linear-gradient(135deg, #12b886, #0ca5c6); color: #fff; }
+/* «Реальный бро» — единственный: радуга плывёт (двигаем слой transform'ом — без перерисовки), искра мерцает */
+.role.bro { position: relative; overflow: hidden; isolation: isolate; color: #fff; background: #7c5cff; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.role.bro::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 300%; z-index: -1; pointer-events: none;
+  background: linear-gradient(90deg, #ff4d6d, #ff9f1c, #ffe14d, #3ddc97, #3ab0ff, #9b5cff, #ff4d6d, #ff9f1c, #ffe14d, #3ddc97, #3ab0ff, #9b5cff, #ff4d6d);
+  animation: bro-flow 4s linear infinite; }
+.role.bro > .i { animation: bro-twinkle 1.6s ease-in-out infinite; }
+@keyframes bro-flow { to { transform: translateX(-50%); } }
+@keyframes bro-twinkle { 50% { transform: scale(1.25) rotate(20deg); opacity: .8; } }
 .role.partner.tier-bronze { background: linear-gradient(135deg, #e3a473, #a8612f 60%, #c98450); color: #2b1405; }
 .role.partner.tier-silver { background: linear-gradient(135deg, #f2f5f8, #a9b3bd 55%, #dfe5ea); color: #1d262e; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); }
 .role.partner.tier-gold { background: linear-gradient(110deg, #f5c542, #e08a1e 55%, #f0b23a); color: #2a1a00; }
