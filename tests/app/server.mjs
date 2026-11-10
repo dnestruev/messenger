@@ -13,7 +13,7 @@ const uuid = () => crypto.randomUUID();
 const db = {
   users: [], profiles: [], user_keys: [], key_backups: [], conversations: [], conversation_members: [],
   conversation_keys: [], conversation_key_claims: [], messages: [], reactions: [], blocks: [], nodes: [],
-  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], donors: [], app_settings: [], turn_providers: [],
+  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], app_settings: [], turn_providers: [],
 };
 const files = new Map();        // bucket/path -> { bytes, owner, type }
 let msgSeq = 1;
@@ -253,13 +253,20 @@ const RPC = {
     if (p_value) db.app_settings.push({ key: p_key, value: p_value });
     return null;
   },
-  set_donor: (uid, { p_username, p_on }) => {
-    if (prof(uid)?.role !== 'creator') return fail('only creators can mark donors');
+  set_badge: (uid, { p_username, p_kind, p_on }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators can grant badges');
+    if (!['donor', 'tester', 'bronze', 'silver', 'gold', 'plus', 'relay'].includes(p_kind)) return fail('bad badge');
     const p = db.profiles.find((x) => x.username === String(p_username).replace(/^@/, '').toLowerCase());
     if (!p) return fail('user not found');
-    db.donors = db.donors.filter((d) => d.user_id !== p.id);
-    if (p_on) db.donors.push({ user_id: p.id, since: now() });
+    if (p_kind !== 'donor' && p.id !== uid) return fail('only own badges');
+    db.badge_grants = db.badge_grants.filter((d) => !(d.user_id === p.id && d.kind === p_kind));
+    if (p_on) db.badge_grants.push({ user_id: p.id, kind: p_kind, since: now() });
     return null;
+  },
+  badges_list: () => {
+    const relay = [...new Set(db.turn_providers.filter((t) => t.status === 'active').map((t) => t.owner))];
+    return [...relay.map((u) => ({ user_id: u, kind: 'relay', granted: false })),
+      ...db.badge_grants.filter((g) => !(g.kind === 'relay' && relay.includes(g.user_id))).map((g) => ({ user_id: g.user_id, kind: g.kind, granted: true }))];
   },
   touch_seen: (uid) => { const r = db.last_seen.find((x) => x.user_id === uid); if (r) r.seen_at = now(); else db.last_seen.push({ user_id: uid, seen_at: now(), hidden: false }); return null; },
   seen_of: (uid, { p_ids }) => db.last_seen.filter((s) => p_ids.includes(s.user_id)).map((s) => ({ user_id: s.user_id, seen_at: s.seen_at, recently: true, hidden: s.hidden })),

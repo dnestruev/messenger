@@ -482,6 +482,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .role.creator { background: linear-gradient(135deg, #7c4dff, #e0457b); color: #fff; box-shadow: 0 1px 4px rgba(124, 77, 255, .35); }
 .role.tester { background: linear-gradient(135deg, #2f80ed, #26c6da); color: #fff; }
 .role.donor { background: linear-gradient(135deg, #ff5f8f, #ff9a6b); color: #fff; }
+.role.relay { background: linear-gradient(135deg, #12b886, #0ca5c6); color: #fff; }
 .role.partner.tier-bronze { background: linear-gradient(135deg, #e3a473, #a8612f 60%, #c98450); color: #2b1405; }
 .role.partner.tier-silver { background: linear-gradient(135deg, #f2f5f8, #a9b3bd 55%, #dfe5ea); color: #1d262e; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); }
 .role.partner.tier-gold { background: linear-gradient(110deg, #f5c542, #e08a1e 55%, #f0b23a); color: #2a1a00; }
@@ -1183,3 +1184,8 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .turn-form { display: grid; gap: 8px; }
 .donate-card { display: grid; gap: 8px; padding: 14px; border-radius: var(--radius); background: linear-gradient(135deg, rgba(255, 95, 143, .14), rgba(255, 154, 107, .14)); }
 .donate-card .btn-primary { background: linear-gradient(135deg, #ff5f8f, #ff9a6b); color: #fff; border: 0; }
+
+/* Окно «Помочь со звонками» */
+.calls-help { display: grid; gap: 12px; }
+.howto { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; }
+.howto a { color: var(--accent); }

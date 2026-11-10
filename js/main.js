@@ -1,14 +1,14 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110100032';
-import * as CONFIG from '../config.js?v=20261110100032';
-import * as E2E from './crypto.js?v=20261110100032';
-import { createNet } from './net.js?v=20261110100032';
-import { qrSvg } from './qr.js?v=20261110100032';
-import { findEmbed } from './embeds.js?v=20261110100032';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110100032';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110100032';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110100032';
-import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110100032';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110104057';
+import * as CONFIG from '../config.js?v=20261110104057';
+import * as E2E from './crypto.js?v=20261110104057';
+import { createNet } from './net.js?v=20261110104057';
+import { qrSvg } from './qr.js?v=20261110104057';
+import { findEmbed } from './embeds.js?v=20261110104057';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110104057';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110104057';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110104057';
+import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110104057';
 
 /* =====================================================================
    Утилиты
@@ -153,7 +153,7 @@ const state = {
   typing: { channel: null, until: 0, sentAt: 0, timer: null },
   perks: new Map(),         // id -> 'partner' | 'plus' (награды за узел-партнёр)
   tiers: new Map(),         // id партнёра -> 'bronze' | 'silver' | 'gold'
-  donors: new Set(),        // id тех, кто поддержал проект
+  badges: new Map(),        // id → Map(значок → выдан вручную): «Связь», донатер, значки от создателя
   settings: {},             // общие настройки: donate_url, donate_text
   seen: new Map(),          // chatId -> Set: какие сообщения уже показаны (новые появляются с анимацией)
   online: new Set(),        // кто сейчас в сети (Realtime Presence)
@@ -338,7 +338,11 @@ const PERK_LABEL = { partner: 'Партнёр', plus: 'Плюс' };
 const TIER_LABEL = { bronze: 'Бронза', silver: 'Серебро', gold: 'Золото' };
 /** Уровень партнёра: бронза — узел, серебро — узел + TURN, золото — серебро 30 дней */
 const tierOf = (id) => (perkOf(id) === 'partner' ? state.tiers.get(id) || 'bronze' : null);
-const isDonor = (id) => state.donors.has(id);
+/** Значки сверх ролей и уровней (badges_list): «Связь» за свой TURN и выданные создателем. Map<kind, granted> */
+const badgesOf = (id) => state.badges.get(id) || new Map();
+const hasBadge = (id, kind) => badgesOf(id).has(kind);
+const isDonor = (id) => hasBadge(id, 'donor');
+const TIER_RANK = { bronze: 1, silver: 2, gold: 3 };
 /** Как выглядит каждый значок: иконка, короткая надпись (в профиле) и класс цвета */
 const BADGE = {
   creator: { icon: 'crown', label: 'Создатель' },
@@ -348,6 +352,7 @@ const BADGE = {
   gold: { icon: 'medal', label: 'Золото', cls: 'partner tier-gold' },
   plus: { icon: 'plus', label: 'Плюс' },
   donor: { icon: 'heart', label: 'Донатер' },
+  relay: { icon: 'relay', label: 'Связь' },
 };
 /** Информация о подтверждённых статусах пользователя. Права определяет база, не значок. */
 const STATUS_INFO = {
@@ -371,7 +376,7 @@ const STATUS_INFO = {
     label: 'Партнёр · Серебро',
     description: 'Держит узел сети и свой TURN-сервер: через него проходят звонки, когда телефоны не могут соединиться напрямую.',
     benefits: ['Серебряный значок у ника', 'Всё, что даёт бронза', '+500 очков в рейтинге партнёров'],
-    how: 'Быть бронзовым партнёром и добавить рабочий TURN: Настройки → Партнёрство → «TURN для звонков».',
+    how: 'Держать узел (бронза) и получить значок «Связь»: Настройки → «Помочь со звонками».',
   },
   gold: {
     label: 'Партнёр · Золото',
@@ -384,6 +389,12 @@ const STATUS_INFO = {
     description: 'Поддержал проект деньгами — на эти деньги мессенджер растёт.',
     benefits: ['Значок с сердцем у ника', 'Огромное спасибо от команды'],
     how: 'Поддержать проект: Настройки → «Поддержать проект». Значок выдаёт создатель.',
+  },
+  relay: {
+    label: 'Связь',
+    description: 'Подключил свой TURN-сервер: через него проходят звонки, когда телефоны не могут соединиться напрямую.',
+    benefits: ['Значок «Связь» у ника', 'Звонки у всех стали надёжнее', 'Вместе с узлом — серебро, а через 30 дней — золото'],
+    how: 'Добавить рабочий TURN: Настройки → «Помочь со звонками». Сервер проверяет его сам.',
   },
   plus: {
     label: 'Плюс',
@@ -426,26 +437,28 @@ async function openStatusInfo(uid, kind) {
   document.body.append(overlay);
   document.addEventListener('keydown', onEscape, true);
   try {
-    let confirmed = false;
+    let confirmed = false, granted = false;
     if (kind === 'creator' || kind === 'tester') {
       const { data, error } = await sb.from('profiles').select('role').eq('id', uid).maybeSingle();
       if (error) throw error;
       confirmed = data?.role === kind;
-    } else if (kind === 'donor') {
-      const { data, error } = await sb.from('donors').select('user_id').eq('user_id', uid).maybeSingle();
-      if (error) throw error;
-      confirmed = !!data;
-    } else {
+    } else if (kind === 'plus' || TIER_RANK[kind]) {
       const { data, error } = await sb.rpc('perks_list');
       if (error) throw error;
       const row = (data || []).find((r) => r.user_id === uid);
       confirmed = kind === 'plus' ? row?.kind === 'plus' : row?.kind === 'partner' && (row.tier || 'bronze') === kind;
     }
+    if (!confirmed && kind !== 'creator') {                  // «Связь», донатер и значки, выданные создателем
+      const { data, error } = await sb.rpc('badges_list');
+      if (error) throw error;
+      const row = (data || []).find((r) => r.user_id === uid && r.kind === kind);
+      confirmed = !!row; granted = !!row?.granted;
+    }
     if (!overlay.isConnected) return;
     status.classList.add(confirmed ? 'is-ok' : 'is-bad');
-    status.textContent = confirmed
-      ? '✓ Подтверждено сервером: статус действителен'
-      : 'Статус не подтверждён: он мог измениться. Обновите страницу.';
+    status.textContent = !confirmed ? 'Статус не подтверждён: он мог измениться. Обновите страницу.'
+      : granted && kind !== 'donor' ? '✓ Подтверждено сервером: значок выдан создателем'
+      : '✓ Подтверждено сервером: статус действителен';
   } catch (err) {
     if (!overlay.isConnected) return;
     status.textContent = 'Не удалось проверить статус. Проверьте соединение и повторите.';
@@ -473,13 +486,20 @@ function clickableBadge(id, kind, compact = false) {
 }
 
 /** Все значки человека: команда, партнёрка (уровень) или Плюс, донатер. compact — только иконки. */
-function roleBadge(id, compact = false) {
-  const r = roleOf(id), k = perkOf(id);
+function badgeKinds(id) {
+  const r = roleOf(id), k = perkOf(id), b = badgesOf(id);
+  let tier = tierOf(id);
+  for (const t of ['bronze', 'silver', 'gold']) if (b.has(t) && (TIER_RANK[t] > (TIER_RANK[tier] || 0))) tier = t;   // выданный создателем уровень
   return [
-    r && BADGE[r] ? clickableBadge(id, r, compact) : null,
-    k === 'partner' ? clickableBadge(id, tierOf(id), compact) : k === 'plus' ? clickableBadge(id, 'plus', compact) : null,
-    isDonor(id) ? clickableBadge(id, 'donor', compact) : null,
-  ];
+    r && BADGE[r] ? r : null,
+    r !== 'tester' && b.has('tester') ? 'tester' : null,
+    tier || (k === 'plus' || b.has('plus') ? 'plus' : null),
+    b.has('relay') ? 'relay' : null,
+    b.has('donor') ? 'donor' : null,
+  ].filter(Boolean);
+}
+function roleBadge(id, compact = false) {
+  return badgeKinds(id).map((kind) => clickableBadge(id, kind, compact));
 }
 /** Рамка видна, только пока у человека есть Плюс */
 const frameOf = (id) => (hasPlus(id) && state.people.get(id)?.frame) || null;
@@ -493,11 +513,16 @@ async function loadPerks() {
   state.perks = next;
   state.tiers = tiers;
   // донатеры и ссылка «Поддержать» (таблицы появятся с update-14; до этого просто пусто)
-  const [dn, st] = await Promise.all([sb.from('donors').select('user_id'), sb.from('app_settings').select('key, value')]);
-  if (!dn.error) {
-    const donors = new Set((dn.data || []).map((r) => r.user_id));
-    if (donors.size !== state.donors.size || [...donors].some((x) => !state.donors.has(x))) changed = true;
-    state.donors = donors;
+  const [bl, st] = await Promise.all([sb.rpc('badges_list'), sb.from('app_settings').select('key, value')]);
+  if (!bl.error) {
+    const badges = new Map();
+    for (const r of bl.data || []) {
+      if (!badges.has(r.user_id)) badges.set(r.user_id, new Map());
+      badges.get(r.user_id).set(r.kind, !!r.granted);
+    }
+    const sig = (m) => [...m].map(([u, b]) => u + ':' + [...b.keys()].sort().join(',')).sort().join(';');
+    if (sig(badges) !== sig(state.badges)) changed = true;
+    state.badges = badges;
   }
   if (!st.error) state.settings = Object.fromEntries((st.data || []).map((r) => [r.key, r.value]));
   const plus = hasPlus();
@@ -1035,7 +1060,7 @@ function stopApp() {
   state.activeId = null;
   state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
   state.showArchive = false;
-  clearInterval(state.perksTimer); state.perks.clear(); state.tiers.clear(); state.donors.clear(); state.settings = {}; state.seen.clear(); state.savedId = null;
+  clearInterval(state.perksTimer); state.perks.clear(); state.tiers.clear(); state.badges.clear(); state.settings = {}; state.seen.clear(); state.savedId = null;
   stopPresence(); state.lastSeen.clear(); state.reactions.clear(); state.shown.clear();
   stopCalls();
   setCompose(null);
@@ -4281,6 +4306,7 @@ function openSettings() {
       say(msg, 'Профиль сохранён', 'ok');
     } })),
     perksSection(msg),
+    callsHelpSection(),
     donateSection(msg),
     section('Оформление',
       segmented([['classic', 'Обычный'], ['dot', 'Dot']], prefs.style, (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })),
@@ -4297,6 +4323,7 @@ function openSettings() {
     section('Приложение', appBlock),
     teamSection,
     roleOf(state.me.id) === 'creator' ? donateAdmin(msg) : null,
+    roleOf(state.me.id) === 'creator' ? ownBadgesAdmin(msg) : null,
     section('Шифрование',
       h('div', { class: 'row-text' }, h('small', { text: 'Ключ этого устройства' }),
         h('span', { class: 'fp', text: (keys.fp || '').slice(0, 24).replace(/(.{4})/g, '$1 ').trim() })),
@@ -4398,11 +4425,9 @@ function tierLadder(msg) {
   const me = state.me.id;
   const wrap = h('div', { class: 'tier-ladder' });
   const draw = async () => {
-    const [{ data: ps }, { data: turns, error: turnErr }] = await Promise.all([
-      sb.from('partner_state').select('active, turn_active, silver_since, tier').eq('user_id', me).maybeSingle(),
-      sb.from('turn_providers').select('id, urls, status, last_ok, last_error, created_at').eq('owner', me).order('created_at', { ascending: true }),
-    ]);
-    const node = ps ? !!ps.active : perkOf(me) === 'partner', turn = !!ps?.turn_active;   // до update-14 колонок нет — берём из значков
+    const { data: ps } = await sb.from('partner_state').select('active, turn_active, silver_since, tier').eq('user_id', me).maybeSingle();
+    const node = ps ? !!ps.active : perkOf(me) === 'partner';   // до update-14 колонок нет — берём из значков
+    const turn = !!ps?.turn_active || badgesOf(me).get('relay') === false;   // «Связь» заработана, а не выдана
     const days = ps?.silver_since ? Math.floor((Date.now() - ts(ps.silver_since)) / 86400000) : 0;
     const step = (kind, done, title, sub, extra) => h('div', { class: 'tier-step' + (done ? ' done' : '') },
       badgeEl(kind, true), h('div', { class: 'row-text' }, h('b', { text: title }), h('small', { text: sub })),
@@ -4411,11 +4436,11 @@ function tierLadder(msg) {
     wrap.replaceChildren(
       h('b', { text: 'Уровни партнёра' }),
       step('bronze', node, 'Бронза', node ? 'Ваш узел в сети' : 'Подключите узел сети'),
-      step('silver', node && turn, 'Серебро', turn ? (node ? 'Узел и TURN работают' : 'TURN работает — нужен ещё узел') : 'Узел + свой TURN для звонков'),
+      step('silver', node && turn, 'Серебро', turn ? (node ? 'Узел и «Связь» работают' : '«Связь» есть — нужен ещё узел') : 'Узел + значок «Связь» (свой TURN)',
+        turn ? null : h('button', { class: 'btn', type: 'button', text: 'Помочь со звонками', onclick: () => openCallsHelp() })),
       step('gold', ps?.tier === 'gold', 'Золото',
         ps?.tier === 'gold' ? 'Серебро больше 30 дней — вы опора сети' : node && turn ? `Серебро ${days} из 30 дней` : 'Серебро 30 дней подряд',
-        node && turn && ps?.tier !== 'gold' ? h('div', { class: 'tier-progress' }, h('span', { style: { width: goldPct + '%' } })) : null),
-      turnErr ? null : turnBlock(turns || [], msg, draw));
+        node && turn && ps?.tier !== 'gold' ? h('div', { class: 'tier-progress' }, h('span', { style: { width: goldPct + '%' } })) : null));
   };
   draw();
   return wrap;
@@ -4451,7 +4476,7 @@ function turnBlock(list, msg, redraw) {
   };
   return h('div', { class: 'turn-form' },
     h('div', { class: 'row-text' }, h('b', {}, icon('relay'), ' TURN для звонков'),
-      h('small', { text: 'Когда телефоны не видят друг друга напрямую (часто на мобильном интернете), звонок идёт через TURN. Добавьте свой — и станьте серебряным партнёром.' })),
+      h('small', { text: 'Когда телефоны не видят друг друга напрямую (часто на мобильном интернете), звонок идёт через TURN. Добавьте свой — получите значок «Связь», а с узлом — серебро.' })),
     ...rows,
     list.length < 2 ? h('div', { class: 'turn-form' }, urls, user, pass, add,
       h('small', { class: 'muted', text: 'Бесплатно: expressturn.com (1 ТБ в месяц). Звук и видео идут зашифрованными — TURN их не слышит и не видит, но знает IP-адреса собеседников. Пароль хранится на сервере и никому не показывается.' })) : null);
@@ -4469,6 +4494,40 @@ async function checkTurnNow(id, msg, redraw, btn) {
   await loadPerks().catch(() => {});
   document.querySelectorAll('.profile-head .name-line').forEach((el) => el.replaceWith(h('div', { class: 'name-line' }, roleBadge(state.me.id))));
   redraw();
+}
+
+/* ---------- Помочь со звонками: свой TURN → значок «Связь» (можно без узла) ---------- */
+function callsHelpSection() {
+  const has = hasBadge(state.me.id, 'relay');
+  return section('Помочь со звонками',
+    h('div', { class: 'row' },
+      h('div', { class: 'row-text' }, h('b', {}, icon('relay'), has ? ' Ваш TURN помогает звонкам' : ' Свой TURN для звонков'),
+        h('small', { text: has ? 'У вас значок «Связь». Спасибо!' : 'Бесплатно, 5 минут. Дадим значок «Связь», а с узлом — серебро.' })),
+      h('button', { class: 'btn', type: 'button', text: 'Открыть', onclick: () => openCallsHelp() })));
+}
+function openCallsHelp() {
+  const msg = note();
+  const body = h('div', { class: 'calls-help' });
+  const draw = async () => {
+    const { data: turns, error } = await sb.from('turn_providers').select('id, urls, status, last_ok, last_error, created_at')
+      .eq('owner', state.me.id).order('created_at', { ascending: true });
+    if (!body.isConnected && body.dataset.drawn) return;
+    body.dataset.drawn = '1';
+    body.replaceChildren(
+      h('div', { class: 'tier-step' + (hasBadge(state.me.id, 'relay') ? ' done' : '') }, badgeEl('relay', true),
+        h('div', { class: 'row-text' }, h('b', { text: 'Значок «Связь»' }),
+          h('small', { text: hasBadge(state.me.id, 'relay') ? 'Есть — ваш TURN работает' : 'Появится, когда сервер проверит ваш TURN' })),
+        h('span', { class: 'tier-mark', text: hasBadge(state.me.id, 'relay') ? '✓' : '' })),
+      h('ol', { class: 'howto' },
+        h('li', {}, 'Откройте ', h('a', { href: 'https://www.expressturn.com/', target: '_blank', rel: 'noopener noreferrer', text: 'expressturn.com' }), ' и зарегистрируйтесь (бесплатно, без карты).'),
+        h('li', { text: 'Нажмите Dashboard — там TURN Servers, Username и Password.' }),
+        h('li', { text: 'Скопируйте их в поля ниже и нажмите «Добавить и проверить».' })),
+      error ? h('p', { class: 'muted', text: 'Скоро заработает — ждём обновления сервера.' }) : turnBlock(turns || [], msg, draw),
+      msg);
+  };
+  openModal({ title: 'Помочь со звонками' }, body,
+    h('button', { class: 'btn btn-block', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
+  draw();
 }
 
 /* ---------- Поддержать проект ---------- */
@@ -4490,12 +4549,12 @@ function donateAdmin(msg) {
   const nick = h('input', { placeholder: 'Ник донатера', autocapitalize: 'off', spellcheck: 'false' });
   const list = h('div', { style: { display: 'grid', gap: '8px' } });
   const drawDonors = async () => {
-    const ids = [...state.donors];
+    const ids = [...state.badges].filter(([, b]) => b.has('donor')).map(([uid]) => uid);
     await loadPeople(ids);
     list.replaceChildren(...(ids.length ? ids.map((uid) => h('div', { class: 'member' }, userAvatar(uid, 'xs'),
       h('div', { class: 'row-text', style: { flex: '1' } }, h('b', { text: nameOf(uid) }), h('small', { text: nickOf(uid) })),
       h('button', { class: 'btn', type: 'button', text: 'Убрать', onclick: async () => {
-        const { error } = await sb.rpc('set_donor', { p_username: state.people.get(uid)?.username, p_on: false });
+        const { error } = await sb.rpc('set_badge', { p_username: state.people.get(uid)?.username, p_kind: 'donor', p_on: false });
         if (error) return say(msg, humanError(error));
         await loadPerks(); drawDonors();
       } }))) : [h('small', { class: 'muted', text: 'Донатеров пока нет.' })]));
@@ -4515,11 +4574,32 @@ function donateAdmin(msg) {
     h('div', { class: 'inline' }, nick, h('button', { class: 'btn', type: 'button', text: 'Выдать', onclick: async () => {
       const u = nick.value.trim().replace(/^@/, '').toLowerCase();
       if (!u) return;
-      const { error } = await sb.rpc('set_donor', { p_username: u, p_on: true });
+      const { error } = await sb.rpc('set_badge', { p_username: u, p_kind: 'donor', p_on: true });
       if (error) return say(msg, /not found/i.test(error.message) ? `Не нашли @${u}` : humanError(error));
       nick.value = ''; say(msg, `@${u} получил значок «Донатер»`, 'ok');
       await loadPerks(); drawDonors(); renderChats();
     } })));
+}
+
+/** Для создателя: поставить себе любые значки (сервер разрешает только себе, донатера — кому угодно) */
+function ownBadgesAdmin(msg) {
+  const me = state.me.id;
+  const KINDS = ['tester', 'bronze', 'silver', 'gold', 'plus', 'relay', 'donor'];
+  const rows = KINDS.map((kind) => h('div', { class: 'row' },
+    h('div', { class: 'row-text' }, h('span', { class: 'name-line' }, badgeEl(kind)), h('small', { text: STATUS_INFO[kind]?.label || BADGE[kind].label })),
+    toggle(badgesOf(me).get(kind) === true, async (e) => {
+      const on = e.target.checked;
+      e.target.disabled = true;
+      const { error } = await sb.rpc('set_badge', { p_username: state.people.get(me)?.username, p_kind: kind, p_on: on });
+      e.target.disabled = false;
+      if (error) { e.target.checked = !on; return say(msg, humanError(error)); }
+      await loadPerks();
+      document.querySelectorAll('.profile-head .name-line').forEach((el) => el.replaceWith(h('div', { class: 'name-line' }, roleBadge(me))));
+      say(msg, on ? `Значок «${BADGE[kind].label}» поставлен` : `Значок «${BADGE[kind].label}» убран`, 'ok');
+    })));
+  return section('Мои значки (видно только вам)',
+    h('small', { class: 'muted', text: 'Значки, которые вы ставите себе сами. В карточке статуса будет написано «выдан создателем». Заработанные значки так не убрать.' }),
+    ...rows);
 }
 
 function giftsBlock(msg) {

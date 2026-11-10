@@ -2,7 +2,9 @@
 --   Бронза — держит узел сети (как раньше «Партнёр»).
 --   Серебро — узел + свой TURN-сервер для звонков (через него идут звонки, если основной кончился).
 --   Золото — серебро 30 дней подряд.
+--   «Связь» — значок за свой рабочий TURN (можно без узла; вкладка «Помочь со звонками»).
 --   Донаты — ссылка «Поддержать проект» (ставит создатель), значок «Донатер» выдаёт создатель вручную.
+--   Создатель может поставить себе любые значки (badge_grants).
 -- Запускать ОДИН раз в Supabase (центр) → SQL Editor, после update-13.sql.
 
 begin;
@@ -143,29 +145,44 @@ begin
 end;
 $$;
 
-create table if not exists public.donors (
-  user_id uuid primary key references public.profiles(id) on delete cascade,
-  since timestamptz not null default now()
+-- ---------- Выданные значки ----------
+-- donor — создатель выдаёт кому угодно; любые другие значки создатель может поставить только себе.
+create table if not exists public.badge_grants (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null check (kind in ('donor', 'tester', 'bronze', 'silver', 'gold', 'plus', 'relay')),
+  since timestamptz not null default now(),
+  primary key (user_id, kind)
 );
-alter table public.donors enable row level security;
-revoke all on public.donors from anon, authenticated;
-grant select on public.donors to authenticated;
-drop policy if exists "donors: read" on public.donors;
-create policy "donors: read" on public.donors for select to authenticated using (true);
+alter table public.badge_grants enable row level security;
+revoke all on public.badge_grants from anon, authenticated;
 
-create or replace function public.set_donor(p_username text, p_on boolean)
+create or replace function public.set_badge(p_username text, p_kind text, p_on boolean)
 returns void language plpgsql security definer set search_path = '' as $$
 declare uid uuid;
 begin
-  if not public.is_creator(auth.uid()) then raise exception 'only creators can mark donors'; end if;
+  if not public.is_creator(auth.uid()) then raise exception 'only creators can grant badges'; end if;
+  if p_kind not in ('donor', 'tester', 'bronze', 'silver', 'gold', 'plus', 'relay') then raise exception 'bad badge'; end if;
   select id into uid from public.profiles where username = lower(trim(both '@ ' from p_username));
   if uid is null then raise exception 'user not found'; end if;
-  if p_on then insert into public.donors (user_id) values (uid) on conflict do nothing;
-  else delete from public.donors where user_id = uid; end if;
+  if p_kind <> 'donor' and uid <> auth.uid() then raise exception 'only own badges'; end if;
+  if p_on then insert into public.badge_grants (user_id, kind) values (uid, p_kind) on conflict do nothing;
+  else delete from public.badge_grants where user_id = uid and kind = p_kind; end if;
 end;
 $$;
-revoke execute on function public.set_app_setting(text, text), public.set_donor(text, boolean) from public, anon;
-grant execute on function public.set_app_setting(text, text), public.set_donor(text, boolean) to authenticated;
+
+-- Значки сверх ролей и уровней: «Связь» (свой рабочий TURN, проверен за 2 суток) и выданные создателем.
+-- granted = true — значок выдан вручную, а не заработан.
+create or replace function public.badges_list()
+returns table (user_id uuid, kind text, granted boolean) language sql stable security definer set search_path = '' as $$
+  select distinct t.owner, 'relay'::text, false from public.turn_providers t
+    where t.status = 'active' and t.last_ok > now() - interval '2 days'
+  union all
+  select g.user_id, g.kind, true from public.badge_grants g
+    where not (g.kind = 'relay' and exists (select 1 from public.turn_providers t
+      where t.owner = g.user_id and t.status = 'active' and t.last_ok > now() - interval '2 days'));
+$$;
+revoke execute on function public.set_app_setting(text, text), public.set_badge(text, text, boolean), public.badges_list() from public, anon;
+grant execute on function public.set_app_setting(text, text), public.set_badge(text, text, boolean), public.badges_list() to authenticated;
 
 -- ---------- Проверка TURN-серверов партнёров раз в 6 часов (функция turn-check) ----------
 do $$ begin
