@@ -1113,3 +1113,4 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .jump-down .i { transform: rotate(-90deg); }
 .chat { position: relative; }
 .chat:has(.sticker-panel:not([hidden])) .jump-down, .chat:has(.composer.recording) .jump-down { display: none; }
+.forgot-btn { justify-self: center; margin-top: -6px; padding: 4px 8px; }

@@ -1,12 +1,12 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110001111';
-import * as CONFIG from '../config.js?v=20261110001111';
-import * as E2E from './crypto.js?v=20261110001111';
-import { createNet } from './net.js?v=20261110001111';
-import { qrSvg } from './qr.js?v=20261110001111';
-import { findEmbed } from './embeds.js?v=20261110001111';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110001111';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110001111';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110004238';
+import * as CONFIG from '../config.js?v=20261110004238';
+import * as E2E from './crypto.js?v=20261110004238';
+import { createNet } from './net.js?v=20261110004238';
+import { qrSvg } from './qr.js?v=20261110004238';
+import { findEmbed } from './embeds.js?v=20261110004238';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110004238';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110004238';
 
 /* =====================================================================
    Утилиты
@@ -108,6 +108,10 @@ function humanError(err) {
     [/only partners can gift/i, 'Дарить Плюс могут только партнёры с работающим узлом'],
     [/gift limit reached/i, 'Можно подарить Плюс только 5 друзьям'],
     [/cannot gift yourself/i, 'Себе подарить нельзя'],
+    [/Database error saving new user/i, 'Этот ник только что заняли — выберите другой'],
+    [/Unable to validate email|invalid format/i, 'Проверьте email: похоже, в нём опечатка'],
+    [/too many nodes/i, 'Можно подключить не больше 3 узлов'],
+    [/stale key/i, 'Ключ чата обновился — попробуйте ещё раз'],
   ];
   for (const [re, text] of rules) if (re.test(m)) return text;
   if (/(user_keys|key_backups|conversation_keys|messages_e2ee|last_ct|my_chats|conversation)/i.test(m)
@@ -652,6 +656,7 @@ function setAuthMode(m) {
   $('tabLogin').classList.toggle('on', m === 'login');
   $('tabSignup').classList.toggle('on', m === 'signup');
   $('usernameField').hidden = m === 'login';
+  $('forgotBtn').hidden = m !== 'login';
   $('authBtn').textContent = m === 'login' ? 'Войти' : 'Создать аккаунт';
   $('authSub').textContent = m === 'login' ? 'С возвращением' : 'Пара секунд — и вы с нами';
   $('password').autocomplete = m === 'login' ? 'current-password' : 'new-password';
@@ -688,9 +693,40 @@ $('authForm').onsubmit = async (e) => {
   }
 };
 
-sb.auth.onAuthStateChange((_event, session) => {
-  setTimeout(() => (session ? startApp(session.user) : stopApp()), 0);
+let recoveryPending = false;          // пришли по ссылке «сбросить пароль» из письма
+sb.auth.onAuthStateChange((event, session) => {
+  if (event === 'PASSWORD_RECOVERY') recoveryPending = true;
+  setTimeout(async () => {
+    if (!session) return stopApp();
+    await startApp(session.user);
+    if (recoveryPending && state.me) { recoveryPending = false; newPasswordDialog(); }
+  }, 0);
 });
+
+/** Забыли пароль: письмо со ссылкой. По ссылке приложение откроется и попросит новый пароль. */
+$('forgotBtn').onclick = async () => {
+  const email = $('email').value.trim();
+  if (!/^\S+@\S+\.\S+$/.test(email)) return say('authMsg', 'Впишите email выше — пришлём на него ссылку');
+  $('forgotBtn').disabled = true;
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  $('forgotBtn').disabled = false;
+  say('authMsg', error ? humanError(error) : 'Если такой аккаунт есть, письмо со ссылкой уже летит. Проверьте почту (и «Спам»).', error ? 'err' : 'ok');
+};
+function newPasswordDialog() {
+  const pass = h('input', { type: 'password', placeholder: 'Новый пароль, от 6 символов', autocomplete: 'new-password' });
+  const msg = note();
+  const go = h('button', { class: 'btn btn-primary btn-block', text: 'Сохранить пароль', onclick: async () => {
+    if (pass.value.length < 6) return say(msg, 'Пароль должен быть от 6 символов');
+    go.disabled = true;
+    const { error } = await sb.auth.updateUser({ password: pass.value });
+    go.disabled = false;
+    if (error) return say(msg, humanError(error));
+    closeModal(); toast('Пароль изменён');
+  } });
+  pass.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
+  openModal({ title: 'Новый пароль' }, h('p', { text: 'Придумайте новый пароль для входа.' }), pass, go, msg);
+  pass.focus();
+}
 
 /* =====================================================================
    Запуск и выход
@@ -707,15 +743,19 @@ async function startApp(user) {
   try {
     await ensureIdentity();
   } catch (err) {
-    $('chatList').replaceChildren(h('div', { class: 'list-empty', text: humanError(err) }));
+    $('chatList').replaceChildren(h('div', { class: 'list-empty' }, humanError(err),
+      h('button', { class: 'btn', style: { marginTop: '12px' }, text: 'Повторить', onclick: () => location.reload() })));
     return;
   }
+  const alive = () => state.me?.id === user.id;              // пока шёл запуск, могли выйти из аккаунта
   await loadChatKeys();
   await loadBlocks();
   await loadPerks();
+  if (!alive()) return;
   $('chatList').classList.add('list-enter');
   await loadChats();
   await ensureSaved();
+  if (!alive()) return;
   scheduleCleanup();
   setTimeout(() => $('chatList').classList.remove('list-enter'), 600);
   clearInterval(state.perksTimer);
@@ -819,6 +859,10 @@ function stopApp() {
   leaveTyping();
   for (const url of state.images.values()) URL.revokeObjectURL(url);
   state.images.clear();
+  for (const a of voiceAudio.values()) { try { a.pause(); } catch {} }
+  voiceAudio.clear(); playing = null;
+  seenSignals.clear(); endedCalls.clear();
+  clearTimeout(removeMessage.t);
   keys.priv = null; keys.fp = null; keys.chat.clear(); keys.pub.clear(); keys.trusted = {}; keys.sign = null; keys.verify.clear();
   if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
   closeModal();
@@ -846,11 +890,24 @@ function renderMe() {
    ===================================================================== */
 const isUnread = (c) => c.last_sender && c.last_sender !== state.me.id && ts(c.last_read_at) < ts(c.last_message_at);
 
-async function loadChats() {
+/** Список чатов. Вызовы, пришедшие во время загрузки, склеиваются в одну повторную загрузку,
+    а старый список держится до готовности нового — иначе он на миг пустеет и мигает. */
+let chatsLoading = null, chatsAgain = false;
+function loadChats() {
+  if (chatsLoading) { chatsAgain = true; return chatsLoading; }
+  chatsLoading = (async () => {
+    try {
+      do { chatsAgain = false; await loadChatsOnce(); } while (chatsAgain && state.me);
+    } finally { chatsLoading = null; }
+  })();
+  return chatsLoading;
+}
+async function loadChatsOnce() {
+  const me = state.me?.id;
   const { data, error } = await sb.rpc('my_chats');
-  if (error) { $('chatList').replaceChildren(h('div', { class: 'list-empty', text: humanError(error) })); return; }
+  if (state.me?.id !== me || !me) return;
+  if (error) { if (!state.chats.size) $('chatList').replaceChildren(h('div', { class: 'list-empty', text: humanError(error) })); return; }
   const previous = new Map(state.chats);
-  state.chats.clear();
   await Promise.all(data.map(async (c) => {
     c.keyWarn = previous.get(c.id)?.keyWarn;
     const prevLast = previous.get(c.id);
@@ -859,8 +916,11 @@ async function loadChats() {
       ? prevLast.last_p
       : c.last_sender ? (await decryptMessage(lastMessageOf(c))).p : null;
   }));
-  for (const c of data) state.chats.set(c.id, c);
+  if (state.me?.id !== me) return;
   await loadPeople(data.flatMap((c) => c.member_ids || []));
+  if (state.me?.id !== me) return;
+  state.chats = new Map(data.map((c) => [c.id, c]));
+  if (state.activeId && !state.chats.has(state.activeId)) closeChat();   // чат удалили или нас из него убрали
   renderChats();
 }
 
@@ -877,7 +937,7 @@ function previewText(p) {
   return p.img ? 'Фото' + (t ? ': ' + t : '') : t;
 }
 function previewOf(c) {
-  if (!c.last_sender) return c.is_group ? (c.is_official ? 'Официальный чат' : 'Группа создана') : 'Новый чат';
+  if (!c.last_sender) return isSaved(c) ? 'Заметки и сохранённое' : c.is_group ? (c.is_official ? 'Официальный чат' : 'Группа создана') : 'Новый чат';
   if (state.blocked.has(c.last_sender)) return 'Сообщение скрыто';
   const who = c.last_sender === state.me.id ? 'Вы: ' : c.is_group ? nameOf(c.last_sender) + ': ' : '';
   return who + previewText(c.last_p);
@@ -1105,7 +1165,10 @@ async function ensureSaved() {
 async function openDirectByNick(raw) {
   const q = String(raw || '').trim().toLowerCase().replace(/^@/, '');
   if (!q) return;
-  if (q === state.people.get(state.me.id).username) return say('findMsg', 'Это же вы');
+  if (q === state.people.get(state.me.id).username) {      // свой ник — открываем «Избранное»
+    $('findInput').value = ''; say('findMsg', '');
+    return state.savedId ? openChat(state.savedId) : say('findMsg', 'Это же вы');
+  }
   const { data, error } = await selectProfiles((x) => x.eq('username', q).maybeSingle());
   if (error) return say('findMsg', humanError(error));
   if (!data) return say('findMsg', `Не нашли @${q} — проверьте ник`);
@@ -1244,7 +1307,7 @@ function sendTyping() {
 
 async function loadReads(chatId) {
   const { data } = await sb.from('conversation_members').select('user_id, last_read_at').eq('conversation_id', chatId);
-  state.reads = new Map((data || []).map((r) => [r.user_id, r.last_read_at]));
+  if (state.activeId === chatId && data) state.reads = new Map(data.map((r) => [r.user_id, r.last_read_at]));
 }
 
 async function openChat(id) {
@@ -1254,7 +1317,7 @@ async function openChat(id) {
   closeSearch();
   if (!state.chats.has(id)) await loadChats();
   if (!state.chats.has(id)) return;
-  if (state.activeId !== id) setCompose(null);
+  if (state.activeId !== id) { setCompose(null); state.reads = new Map(); }
   state.activeId = id;
   document.body.classList.add('in-chat');
   $('placeholder').hidden = true;
@@ -1264,13 +1327,13 @@ async function openChat(id) {
   markRead(id);
   renderChats();
   joinTyping(id);
-  loadReads(id).then(() => { if (state.activeId === id && state.history.has(id)) renderMessages(); });
+  loadReads(id).then(() => { if (state.activeId === id) patchTicks(); });
 
   if (!state.history.has(id)) {
     $('messages').replaceChildren(h('div', { class: 'day', text: 'Загрузка…' }));
     const { data, error } = await sb.from('messages').select(MSG_COLUMNS)
       .eq('conversation_id', id).order('created_at', { ascending: false }).limit(PAGE);
-    if (error) { $('messages').replaceChildren(h('div', { class: 'inline-err', text: humanError(error) })); return; }
+    if (error) { if (state.activeId === id) $('messages').replaceChildren(h('div', { class: 'inline-err', text: humanError(error) })); return; }
     const merged = new Map([...(state.history.get(id) || []), ...data].map((m) => [m.id, m]));
     state.history.set(id, [...merged.values()].sort(byTime));
     state.more.set(id, data.length === PAGE);
@@ -1466,6 +1529,21 @@ function isReadByOthers(m) {
   return false;
 }
 
+/** Обновить только галочки прочтения — без перерисовки ленты */
+function patchTicks() {
+  const box = $('messages');
+  const byId = new Map((state.history.get(state.activeId) || []).map((m) => [String(m.id), m]));
+  for (const el of box.querySelectorAll('.msg.mine[data-id]')) {
+    const m = byId.get(el.dataset.id), t = el.querySelector(':scope > .msg-meta .ticks');
+    if (!m || !t) continue;
+    const read = isReadByOthers(m);
+    if (t.classList.contains('read') === read) continue;
+    t.classList.toggle('read', read);
+    t.textContent = read ? '✓✓' : '✓';
+    t.title = read ? 'Прочитано' : 'Отправлено';
+  }
+}
+
 /** Кнопка «вниз», когда пролистал вверх */
 function updateJumpDown() {
   const box = $('messages');
@@ -1528,13 +1606,22 @@ document.addEventListener('scroll', closeMenu, true);
 
 async function deleteMessage(m) {
   if (!confirm('Удалить сообщение у всех?')) return;
-  if (m.nodes?.length && m.ct_hash) net.del(m.nodes, `${m.conversation_id}/${m.ct_hash}`);
-  if (m.p?.img?.hash && m.p.img.nodes?.length) net.del(m.p.img.nodes, `${m.conversation_id}/${m.p.img.hash}`);
-  if (m.p?.v?.hash && m.p.v.nodes?.length) net.del(m.p.v.nodes, `${m.conversation_id}/${m.p.v.hash}`);
-  if (m.p?.file?.hash && m.p.file.nodes?.length) net.del(m.p.file.nodes, `${m.conversation_id}/${m.p.file.hash}`);
+  // сначала само сообщение: если база откажет, вложения должны остаться на месте
   const { error } = await sb.from('messages').delete().eq('id', m.id);
   if (error) return inlineError('Не удалилось: ' + humanError(error));
   removeMessage(m.id);
+  if (m.nodes?.length && m.ct_hash) net.del(m.nodes, `${m.conversation_id}/${m.ct_hash}`);
+  for (const media of [m.p?.img, m.p?.v, m.p?.file]) dropMedia(m.conversation_id, media);
+}
+/** Убрать вложение (фото, голосовое, файл) с узлов или из хранилища центра. true — получилось или нечего убирать. */
+async function dropMedia(chatId, media) {
+  if (!media || media.gone) return true;
+  if (media.hash && media.nodes?.length) { await net.del(media.nodes, `${chatId}/${media.hash}`).catch(() => {}); return true; }
+  if (media.path) {                                        // старый способ: файл в хранилище центра (удалить можно после update-12)
+    const { data, error } = await sb.storage.from(BUCKET).remove([media.path]).catch((e) => ({ error: e }));
+    return !error && !!data?.length;
+  }
+  return true;
 }
 
 function removeMessage(id) {
@@ -1549,7 +1636,10 @@ function removeMessage(id) {
     renderChats();
     return;
   }
-  loadChats();   // сообщения не было в открытой истории — просто обновим список
+  // Сообщения нет в загруженных историях. Сервер присылает такие события про ЛЮБЫЕ удаления
+  // (без подробностей), поэтому не дёргаем список на каждое — раз в несколько секунд, не чаще.
+  clearTimeout(removeMessage.t);
+  removeMessage.t = setTimeout(() => { if (state.me) loadChats(); }, 4000);
 }
 
 /* ---------- Ответ / изменение ---------- */
@@ -1688,8 +1778,11 @@ async function insertMessage(chatId, payload, retried = false) {
   const { data, error } = await sb.from('messages')
     .insert({ conversation_id: chatId, sender_id: state.me.id, ...row })
     .select(MSG_COLUMNS).single();
-  if (error && !retried && isRlsError(error) && (await refreshKeyVersion(chatId))) return insertMessage(chatId, payload, true);
-  if (error) throw error;
+  if (error) {
+    if (row.nodes) net.del(row.nodes, `${chatId}/${row.ct_hash}`);   // шифр уже лёг на узлы — убираем, раз сообщения не будет
+    if (!retried && isRlsError(error) && (await refreshKeyVersion(chatId))) return insertMessage(chatId, payload, true);
+    throw error;
+  }
   data.p = payload;
   data.sigOk = row.sig ? true : null;
   return data;
@@ -1708,8 +1801,11 @@ async function updatePayload(m, payload, retried = false) {
   delete row.cid;                                         // id сообщения при правке не меняется
   const oldKey = m.nodes?.length && m.ct_hash ? [m.nodes, `${m.conversation_id}/${m.ct_hash}`] : null;
   const { data, error } = await sb.from('messages').update(row).eq('id', m.id).select(MSG_COLUMNS).single();
-  if (error && !retried && isRlsError(error) && (await refreshKeyVersion(m.conversation_id))) return updatePayload(m, payload, true);
-  if (error) throw error;
+  if (error) {
+    if (row.nodes) net.del(row.nodes, `${m.conversation_id}/${row.ct_hash}`);
+    if (!retried && isRlsError(error) && (await refreshKeyVersion(m.conversation_id))) return updatePayload(m, payload, true);
+    throw error;
+  }
   if (oldKey) net.del(...oldKey);                         // старую версию убираем с узлов
   data.p = payload;
   data.sigOk = data.sig ? true : null;
@@ -1722,19 +1818,26 @@ $('composer').onsubmit = async (e) => {
   e.preventDefault();
   const content = textArea.value.trim();
   const chatId = state.activeId;
-  if (!content || !chatId || !(await canSend(chatId))) return;
+  if (!content || !chatId) return;
+  // Сразу забираем текст из поля: повторный Enter, пока идёт отправка, не пошлёт его второй раз
   const compose = state.compose;
   const payload = { t: content, r: replyRef() };
   textArea.value = '';
   autosize();
   setCompose(null);
+  /** Не отправилось — вернуть текст в поле (если человек ещё в этом чате и ничего нового не набрал) */
+  const restore = () => {
+    if (state.activeId !== chatId || textArea.value) return;
+    if (compose) setCompose(compose);
+    textArea.value = content; autosize();
+  };
+  if (compose?.mode === 'edit' && compose.msg.p?.t === content) return;   // текст не поменялся — нечего сохранять
+  if (!(await canSend(chatId))) return restore();
   try {
     if (compose?.mode === 'edit') await editMessage(compose.msg, content);
     else addMessage(await insertMessage(chatId, payload));
   } catch (err) {
-    textArea.value = content;
-    autosize();
-    if (compose) setCompose(compose);
+    restore();
     inlineError(sendError(err));
   }
 };
@@ -1764,7 +1867,10 @@ async function sendImage(file, target = null, extra = null, opts = {}) {
   if (!chatId) return;
   if (!file.type.startsWith('image/')) return inlineError('Можно отправлять только картинки');
   if (!(await canSend(chatId))) return;
-  const caption = extra ? (extra.t || '') : textArea.value.trim();
+  // подпись — текст из поля (кроме стикеров и режима правки); поле очищаем сразу, чтобы набранное дальше не пропало
+  const takeCaption = !extra && !opts.sticker && state.compose?.mode !== 'edit' && chatId === state.activeId;
+  const caption = extra ? (extra.t || '') : takeCaption ? textArea.value.trim() : '';
+  if (takeCaption && caption) { textArea.value = ''; autosize(); }
   $('uploading').hidden = false;
   let uploadedNodes = [], uploadedKey = null;
   try {
@@ -1787,14 +1893,12 @@ async function sendImage(file, target = null, extra = null, opts = {}) {
       if (error) throw error;
     }
     state.images.set(img.path || hash, URL.createObjectURL(blob));
-    const msg = await insertMessage(chatId, extra ? { t: caption, img, f: extra.f } : { t: opts.sticker ? '' : caption, img, r: replyRef() });
-    if (!extra && !opts.sticker) {
-      if (caption) { textArea.value = ''; autosize(); }
-      setCompose(null);
-    }
+    const msg = await insertMessage(chatId, extra ? { t: caption, img, f: extra.f } : { t: caption, img, r: replyRef() });
+    if (!extra && state.compose?.mode === 'reply') setCompose(null);
     addMessage(msg);
   } catch (err) {
     if (uploadedNodes.length && uploadedKey) net.del(uploadedNodes, uploadedKey);   // не оставляем фото без сообщения
+    if (takeCaption && caption && !textArea.value) { textArea.value = caption; autosize(); }
     inlineError(sendError(err).replace('Не отправилось', 'Фото не отправилось'));
   } finally {
     $('uploading').hidden = true;
@@ -1857,7 +1961,7 @@ async function sendFile(file, target = null, extra = null) {
     state.images.set('f:' + (meta.path || hash), URL.createObjectURL(file));
     const caption = extra ? extra.t || '' : '';
     const msg = await insertMessage(chatId, extra ? { file: meta, t: caption, f: extra.f } : { file: meta, r: replyRef() });
-    if (!extra) setCompose(null);
+    if (!extra && state.compose?.mode === 'reply') setCompose(null);
     addMessage(msg);
   } catch (err) {
     if (uploadedNodes.length && key) net.del(uploadedNodes, key);
@@ -1906,6 +2010,9 @@ function fileBubble(m) {
     h('span', { class: 'row-text' }, h('b', { class: 'file-name', text: fl.name }), status),
     h('span', { class: 'file-dl' }, icon('download')));
 }
+// файл, брошенный мимо чата, браузер открыл бы вместо мессенджера — не даём
+addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
+addEventListener('drop', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
 // перетащить файлы в чат (на компьютере)
 (() => {
   const zone = $('messages').parentElement;
@@ -2095,7 +2202,10 @@ async function loadReactions(chatId, ids) {
 async function onReactionChange(p) {
   const r = p.eventType === 'DELETE' ? p.old : p.new;
   if (!r?.message_id) return;
-  if (p.eventType === 'DELETE') setReaction(r.message_id, r.user_id, null);
+  if (p.eventType === 'DELETE') {                         // приходят про все реакции подряд — берём только известные
+    if (!state.reactions.get(r.message_id)?.has(r.user_id)) return;
+    setReaction(r.message_id, r.user_id, null);
+  }
   else setReaction(r.message_id, r.user_id, await decodeReaction(r));
   patchReactions(r.message_id);
 }
@@ -2178,9 +2288,9 @@ async function cleanupOldMedia() {
         const p = m.p;
         if (!p || p.bad || p.missing) continue;
         const media = p.img && !p.img.gone ? ['img', p.img] : p.v && !p.v.gone ? ['v', p.v] : p.file && !p.file.gone ? ['file', p.file] : null;
-        if (!media || !media[1].nodes?.length || !media[1].hash) continue;   // старые фото в центре удалить нельзя — не трогаем
+        if (!media) continue;
         const [kind, obj] = media;
-        await net.del(obj.nodes, `${m.conversation_id}/${obj.hash}`).catch(() => {});
+        if (!(await dropMedia(m.conversation_id, obj))) continue;   // файл в центре без update-12 удалить нельзя — не трогаем
         const gone = { gone: 1, w: obj.w, h: obj.h, dur: obj.dur, st: obj.st, name: obj.name, size: obj.size };
         await updatePayload(m, { ...p, [kind]: gone }).catch(() => {});
         cleaned++;
@@ -2234,7 +2344,7 @@ async function sendSticker(id) {
   if (!chatId || !(await canSend(chatId))) return;
   closeStickers();
   pushRecent(id);
-  try { addMessage(await insertMessage(chatId, { st: id, r: replyRef() })); setCompose(null); }
+  try { addMessage(await insertMessage(chatId, { st: id, r: replyRef() })); if (state.compose?.mode === 'reply') setCompose(null); }
   catch (err) { inlineError(sendError(err)); }
 }
 async function renderStickers() {
@@ -2341,17 +2451,36 @@ async function sendSignal(conv, to, msg) {
   const ch = await outChannel(to);
   await ch.send({ type: 'broadcast', event: 'sig', payload: { from: state.me.id, conv, kv, ...sealed } });
 }
+const DEVICE = uuid();                 // эта вкладка: чтобы отличать свои другие устройства
+const endedCalls = new Set();          // завершённые звонки: их запоздавшие повторы offer не должны звонить снова
+/** Сказать своим другим устройствам: этот входящий звонок уже обработан здесь */
+async function tellMyDevices(conv, id) {
+  const kv = currentVersion(conv), key = chatKey(conv, kv);
+  if (!key || !callInbox) return;
+  const sealed = await E2E.sealJson(key, { t: 'taken', id, dev: DEVICE, ts: Date.now() }, `call|${conv}|${state.me.id}`);
+  await callInbox.send({ type: 'broadcast', event: 'sig', payload: { from: state.me.id, conv, kv, ...sealed } });
+}
 async function onSignal(env) {
-  if (!env || !state.me || env.from === state.me.id) return;
+  if (!env || !state.me) return;
+  const self = env.from === state.me.id;
   const c = state.chats.get(env.conv);
-  if (!c || c.is_group || otherOf(c) !== env.from) return;          // только из своего личного чата
+  if (!c || c.is_group || (!self && otherOf(c) !== env.from)) return;   // только из своего личного чата
   if (!chatKey(env.conv, env.kv)) await loadChatKeys();
   const msg = await E2E.openJson(chatKey(env.conv, env.kv), env.ct, env.iv, `call|${env.conv}|${env.from}`);
   if (!msg || msg.bad || Math.abs(Date.now() - msg.ts) > 90000) return;
+  if (self) {
+    // на другом моём устройстве ответили или отклонили — здесь перестаём звонить
+    if (msg.t === 'taken' && msg.dev !== DEVICE) {
+      endedCalls.add(msg.id);
+      if (call?.id === msg.id && call.dir === 'in' && !call.answered) finishCall('cancel', { remote: true, silent: true });
+    }
+    return;
+  }
   const tag = msg.t + ':' + msg.id + ':' + msg.ts;
   if (seenSignals.has(tag)) return;
   seenSignals.add(tag);
-  if (msg.t === 'offer') return incomingOffer(env.conv, env.from, msg);
+  if (seenSignals.size > 500) seenSignals.clear();
+  if (msg.t === 'offer') return endedCalls.has(msg.id) ? undefined : incomingOffer(env.conv, env.from, msg);
   if (!call || call.id !== msg.id) return;
   if (msg.t === 'ring' && call.dir === 'out') { call.ringing = true; setCallStatus('Звонит…'); }
   if (msg.t === 'answer' && call.dir === 'out' && !call.answered) {
@@ -2429,7 +2558,7 @@ async function startCall(video) {
     if (!call || call.id !== id) return;
     const sdp = withBitrate(pc.localDescription.sdp);
     // запись о звонке в чате: заодно отправит push «новое сообщение», если приложение у собеседника закрыто
-    insertMessage(c.id, { call: { id, v: video, s: 'ring' } }).then((m) => { if (call?.id === id) call.log = m; addMessage(m); }).catch(() => {});
+    call.logP = insertMessage(c.id, { call: { id, v: video, s: 'ring' } }).then((m) => { addMessage(m); return m; }).catch(() => null);
     const offer = () => sendSignal(c.id, peer, { t: 'offer', id, video, sdp }).catch(() => {});
     offer();
     call.resend = setInterval(offer, 3000);                 // повторяем, пока собеседник не откроет приложение
@@ -2462,7 +2591,9 @@ async function acceptCall(withVideo) {
   const cur = call;
   cur.answered = true;
   stopTone();
+  stopTitle();
   setCallStatus('Соединяю…');
+  tellMyDevices(cur.conv, cur.id).catch(() => {});
   try {
     cur.local = await getMedia(withVideo && cur.video);
     if (call !== cur) { cur.local.getTracks().forEach((t) => t.stop()); return; }
@@ -2478,6 +2609,7 @@ async function acceptCall(withVideo) {
 function hangUp(why = 'hangup') {
   if (!call) return;
   sendSignal(call.conv, call.peer, { t: 'end', id: call.id, why }).catch(() => {});
+  if (call.dir === 'in' && !call.answered) tellMyDevices(call.conv, call.id).catch(() => {});
   finishCall(why === 'declined' ? 'declined' : call.connectedAt ? 'ok' : call.dir === 'in' ? 'declined' : 'cancel');
 }
 
@@ -2485,9 +2617,13 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   const cur = call;
   if (!cur) return;
   call = null;
+  endedCalls.add(cur.id);
   clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer);
   cur.unfit?.();
   stopTone();
+  stopTitle();
+  if (cur.dir === 'in') (swReg ? Promise.resolve(swReg) : navigator.serviceWorker?.ready)?.then((r) => r?.getNotifications({ tag: 'call' }))
+    .then((list) => list?.forEach((n) => n.close())).catch(() => {});
   navigator.vibrate?.(0);
   cur.local?.getTracks().forEach((t) => t.stop());
   try { cur.pc.close(); } catch {}
@@ -2503,13 +2639,9 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   }
   if (!silent && status === 'failed') toast('Не удалось соединиться. В некоторых мобильных сетях звонки без сервера-посредника не проходят.');
   // итог звонка записывает тот, кто звонил
-  if (cur.dir === 'out') {
-    const save = (m) => updatePayload(m, { call: { id: cur.id, v: cur.video, s: status === 'ok' ? 'ok' : status, d: dur } }).catch(() => {});
-    if (cur.log) save(cur.log);
-    else setTimeout(() => {
-      const m = (state.history.get(cur.conv) || []).find((x) => x.p?.call?.id === cur.id && x.sender_id === state.me.id);
-      if (m) save(m);
-    }, 2500);
+  if (cur.dir === 'out' && cur.logP) {
+    // ждём, пока запишется «звоню…», и только потом меняем её на итог (иначе итог мог потеряться)
+    cur.logP.then((m) => m && updatePayload(m, { call: { id: cur.id, v: cur.video, s: status === 'ok' ? 'ok' : status, d: dur } })).catch(() => {});
   }
 }
 
@@ -2594,7 +2726,12 @@ function flashTitle(text) {
   titleTimer = setInterval(() => { document.title = (on = !on) ? text : orig; if (!call || call.answered) stopTitle(orig); }, 900);
   flashTitle.orig = orig;
 }
-function stopTitle(orig = flashTitle.orig) { clearInterval(titleTimer); titleTimer = null; if (orig) document.title = orig; }
+function stopTitle(orig = flashTitle.orig) {
+  if (!titleTimer) return;
+  clearInterval(titleTimer); titleTimer = null;
+  if (orig) document.title = orig;
+  if (state.me) renderChats();                            // вернуть заголовок со счётчиком непрочитанных
+}
 
 /* ---------- Гудки ---------- */
 let tone = null;
@@ -2657,15 +2794,20 @@ let rec = null;
 const pickVoiceMime = () => ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4']
   .find((t) => window.MediaRecorder?.isTypeSupported?.(t)) || '';
 
+let recStarting = false;        // пока спрашиваем микрофон: второе нажатие не должно начать вторую запись
 async function startVoice() {
-  if (rec) return;
+  if (rec || recStarting) return;
   const chatId = state.activeId;
   if (!chatId) return;
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return inlineError('Этот браузер не умеет записывать голос');
-  if (!(await canSend(chatId))) return;
+  recStarting = true;
   let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
-  catch { return inlineError('Нет доступа к микрофону. Разрешите его: значок замка у адреса сайта → Микрофон (на iPhone: Настройки → Safari → Микрофон).'); }
+  try {
+    if (!(await canSend(chatId))) return;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+    catch { return inlineError('Нет доступа к микрофону. Разрешите его: значок замка у адреса сайта → Микрофон (на iPhone: Настройки → Safari → Микрофон).'); }
+  } finally { recStarting = false; }
+  if (state.activeId !== chatId) { stream.getTracks().forEach((t) => t.stop()); return; }   // пока разрешали — ушли из чата
   const mime = pickVoiceMime();
   let mr;
   try { mr = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : undefined); }
@@ -2755,7 +2897,7 @@ async function sendVoice(blob, dur, wave, chatId, extra = null) {
     }
     state.images.set('v:' + (v.path || hash), URL.createObjectURL(blob));
     const msg = await insertMessage(chatId, extra ? { v, f: extra.f } : { v, r: replyRef() });
-    if (!extra) setCompose(null);
+    if (!extra && state.compose?.mode === 'reply') setCompose(null);
     addMessage(msg);
   } catch (err) {
     if (uploadedNodes.length && key) net.del(uploadedNodes, key);
@@ -2868,18 +3010,45 @@ function subscribe() {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (p) => addMessage(p.new, true))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (p) => onReactionChange(p))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, async (p) => {
-      if (p.new?.id) upsertMessage(await decryptMessage({ ...p.new, p: null }));
+      const m = p.new;
+      if (!m?.id) return;
+      if (!state.history.get(m.conversation_id)?.some((x) => x.id === m.id)) {   // не загружено — нужен только список
+        const c = state.chats.get(m.conversation_id);
+        if (c?.last_cid && c.last_cid === m.cid) { setLast(c, await decryptMessage({ ...m, p: null })); renderChats(); }
+        return;
+      }
+      if (!chatKey(m.conversation_id, m.key_version)) await loadChatKeys();
+      upsertMessage(await decryptMessage({ ...m, p: null }));
     })
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (p) => { if (p.old?.id) removeMessage(p.old.id); })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'conversation_members' }, (p) => {
       const r = p.new;
       if (!r) return;
-      if (r.conversation_id === state.activeId && r.user_id !== me) { state.reads.set(r.user_id, r.last_read_at); renderMessages(); }
+      if (r.conversation_id === state.activeId && r.user_id !== me && state.reads.get(r.user_id) !== r.last_read_at) {
+        state.reads.set(r.user_id, r.last_read_at); patchTicks();
+      }
       const c = state.chats.get(r.conversation_id);
       if (r.user_id === me && c && c.archived !== r.archived) { c.archived = r.archived; renderChats(); }
     })
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversation_members', filter: `user_id=eq.${me}` },
-      async () => { await loadChats(); shareAllChatKeys(); })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'conversation_members' }, async (p) => {
+      const r = p.new;
+      if (!r?.conversation_id) return;
+      if (r.user_id === me) { await loadChats(); shareAllChatKeys(); return; }   // меня добавили в чат
+      const c = state.chats.get(r.conversation_id);                              // в мою группу добавили человека
+      if (!c || (c.member_ids || []).includes(r.user_id)) return;
+      c.member_ids = [...(c.member_ids || []), r.user_id];
+      await loadPeople([r.user_id]);
+      if (c.id === state.activeId) renderHeader();
+    })
+    // Удаления приходят без фильтра и только с ключом строки (чат + человек): берём лишь свои чаты
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'conversation_members' }, (p) => {
+      const r = p.old, c = r && state.chats.get(r.conversation_id);
+      if (!c) return;
+      if (r.user_id === me) return forgetChat(c.id);           // чат удалили (или вышли с другого устройства)
+      c.member_ids = (c.member_ids || []).filter((id) => id !== r.user_id);
+      if (c.id === state.activeId) renderHeader();
+      if (c.is_group) loadChats();                           // ключ группы сменился — узнаём новую версию
+    })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'conversation_keys', filter: `user_id=eq.${me}` },
       () => onChatKeysArrived())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'user_keys' }, async (p) => {
@@ -2897,7 +3066,8 @@ async function onChatKeysArrived() {
   for (const id of got) {
     const c = state.chats.get(id);
     if (c && c.last_sender) c.last_p = (await decryptMessage(lastMessageOf(c))).p;
-    for (const m of state.history.get(id) || []) { m.p = null; await decryptMessage(m); }
+    // только то, что ещё не открылось: уже расшифрованное заново с узлов не качаем
+    await Promise.all((state.history.get(id) || []).filter((m) => !m.p || m.p.bad || m.p.missing).map((m) => { m.p = null; return decryptMessage(m); }));
     shareChatKey(id).catch(() => {});
   }
   renderChats();
@@ -2922,6 +3092,9 @@ async function addMessage(m, fromServer = false) {
   await loadPeople([m.sender_id]);
   if (!chatKey(c.id, m.key_version)) await loadChatKeys();
   await decryptMessage(m);
+  if (!state.me) return;
+  c = state.chats.get(m.conversation_id) || c;             // список могли перезагрузить, пока расшифровывали
+  if ((m.key_version || 1) > (c.key_version || 1)) c.key_version = m.key_version;   // ключ группы сменился
 
   const hist = state.history.get(c.id);
   const isNew = !hist || !hist.some((x) => x.id === m.id);
@@ -3062,7 +3235,7 @@ $('newGroupBtn').onclick = () => {
     closeModal();
     await loadChats();
     await openChat(data);
-    if (missing.length) inlineError('Не нашли: ' + missing.map((n) => '@' + n).join(', '));
+    if (missing.length) toast('Не нашли: ' + missing.map((n) => '@' + n).join(', '));
   };
 };
 
@@ -3186,7 +3359,7 @@ async function openChatInfo(id) {
         await loadChats(); renderHeader();
         await shareChatKey(id).catch(() => {});
         await openChatInfo(id);
-        if (missing.length) inlineError('Не нашли: ' + missing.map((n) => '@' + n).join(', '));
+        if (missing.length) toast('Не нашли: ' + missing.map((n) => '@' + n).join(', '));
       } }, icon('plus')))),
     msg,
     actionBtn(c.archived ? 'Вернуть из архива' : 'В архив', 'archive', msg, async () => { await setArchived(id, !c.archived); closeModal(); }),
@@ -3580,6 +3753,7 @@ function deleteAccountDialog(username) {
     h('button', { class: 'btn btn-danger btn-block', text: 'Удалить навсегда', onclick: async () => {
       if (confirmInput.value.trim().toLowerCase() !== username) return say(msg, 'Ник не совпадает');
       await setupPush(false).catch(() => {});
+      await cleanAvatarFolder(null, state.people.get(state.me.id)?.avatar_path);   // фото лежит в открытой корзине — убираем до удаления
       const { error } = await sb.rpc('delete_account');
       if (error) return say(msg, humanError(error));
       await E2E.store.del('me:' + state.me.id).catch(() => {});

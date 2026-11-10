@@ -83,18 +83,20 @@ export const stickerLabel = (id) => BY_ID.get(id)?.[1] || 'Стикер';
 export const hasSticker = (id) => BY_ID.has(id);
 
 /** SVG стикера (строка). Только наши заранее нарисованные части — безопасно вставлять. */
+let uid = 0;   // у каждой картинки свой id градиента: одинаковые id на странице ломают отрисовку в скрытых панелях
 export function stickerSvg(id, size = 140) {
   const s = BY_ID.get(id);
   if (!s) return '';
+  const g = `g-${id}-${++uid}`;
   const [, , body, eyes, mouth, ...extra] = s;
   const front = extra.filter((e) => e !== 'fire' && e !== 'party');
   const back = extra.filter((e) => e === 'fire' || e === 'party');
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="${size}" height="${size}" style="--b:${body}">
-<defs><radialGradient id="g-${id}" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<defs><radialGradient id="${g}" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
 ${back.map((e) => EXTRA[e]).join('')}
 <ellipse cx="100" cy="182" rx="52" ry="8" fill="#000" opacity=".12"/>
 <circle cx="100" cy="106" r="72" fill="${body}" stroke="${C.ink}" stroke-width="6"/>
-<circle cx="100" cy="106" r="69" fill="url(#g-${id})"/>
+<circle cx="100" cy="106" r="69" fill="url(#${g})"/>
 ${EYES[eyes] || ''}${MOUTH[mouth] || ''}${front.map((e) => EXTRA[e]).join('')}
 </svg>`;
 }
