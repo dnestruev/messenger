@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110115238';
-import * as CONFIG from '../config.js?v=20261110115238';
-import * as E2E from './crypto.js?v=20261110115238';
-import { createNet } from './net.js?v=20261110115238';
-import { qrSvg } from './qr.js?v=20261110115238';
-import { findEmbed } from './embeds.js?v=20261110115238';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110115238';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110115238';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110115238';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110120235';
+import * as CONFIG from '../config.js?v=20261110120235';
+import * as E2E from './crypto.js?v=20261110120235';
+import { createNet } from './net.js?v=20261110120235';
+import { qrSvg } from './qr.js?v=20261110120235';
+import { findEmbed } from './embeds.js?v=20261110120235';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110120235';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110120235';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110120235';
 
 /* =====================================================================
    Утилиты
@@ -330,17 +330,13 @@ function avatar(label, hue, size = '', badge = null, extra = '', photo = null) {
     badge ? h('span', { class: 'badge' }, icon(badge)) : null);
 }
 const roleOf = (id) => state.people.get(id)?.role || null;
-const ROLE_LABEL = { creator: 'Создатель', tester: 'Тестер' };
 const perkOf = (id) => state.perks.get(id) || null;
 const hasPlus = (id = state.me?.id) => !!perkOf(id);
-const PERK_LABEL = { partner: 'Партнёр', plus: 'Плюс' };
-const TIER_LABEL = { bronze: 'Бронза', silver: 'Серебро', gold: 'Золото' };
 /** Уровень партнёра: бронза — узел, серебро — узел + TURN, золото — серебро 30 дней */
 const tierOf = (id) => (perkOf(id) === 'partner' ? state.tiers.get(id) || 'bronze' : null);
 /** Значки сверх ролей и уровней (badges_list): «Связь» за свой TURN и выданные создателем. Map<kind, granted> */
 const badgesOf = (id) => state.badges.get(id) || new Map();
 const hasBadge = (id, kind) => badgesOf(id).has(kind);
-const isDonor = (id) => hasBadge(id, 'donor');
 const TIER_RANK = { bronze: 1, silver: 2, gold: 3 };
 /** Как выглядит каждый значок: иконка, короткая надпись (в профиле) и класс цвета */
 const BADGE = {

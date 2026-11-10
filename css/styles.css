@@ -215,15 +215,15 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   background: var(--surface-2);
   transition: background .15s, transform .1s;
 }
-.btn:hover:not(:disabled) { background: var(--surface-3); }
+@media (hover: hover) { .btn:hover:not(:disabled) { background: var(--surface-3); } }
 .btn:active:not(:disabled) { transform: scale(.98); }
 .btn-primary { background: var(--accent); color: var(--accent-text); }
-.btn-primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+@media (hover: hover) { .btn-primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); } }
 .btn-danger { color: var(--danger); }
 .btn-block { width: 100%; }
 [data-style="dot"] .btn { font-family: var(--font-mono); font-size: 13px; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; }
 [data-style="dot"] .btn:not(.btn-primary) { background: transparent; border: 1px solid var(--line); }
-[data-style="dot"] .btn:not(.btn-primary):hover:not(:disabled) { border-color: var(--text); background: transparent; }
+@media (hover: hover) { [data-style="dot"] .btn:not(.btn-primary):hover:not(:disabled) { border-color: var(--text); background: transparent; } }
 
 .icon-btn {
   width: 40px; height: 40px; flex-shrink: 0;
@@ -232,9 +232,9 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   color: var(--text);
   transition: background .15s;
 }
-.icon-btn:hover { background: var(--surface-2); }
+@media (hover: hover) { .icon-btn:hover { background: var(--surface-2); } }
 .icon-btn-accent { background: var(--accent); color: var(--accent-text); }
-.icon-btn-accent:hover { background: var(--accent); filter: brightness(1.08); }
+@media (hover: hover) { .icon-btn-accent:hover { background: var(--accent); filter: brightness(1.08); } }
 
 .segmented { display: flex; gap: 4px; padding: 4px; background: var(--surface-2); border-radius: 999px; }
 .segmented button { flex: 1; min-height: 36px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--muted); }
@@ -317,7 +317,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 /* ---------- Боковая панель ---------- */
 .side-top { display: flex; align-items: center; gap: 4px; padding: 14px 12px 8px 14px; }
 .me { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; text-align: left; padding: 4px; margin: -4px; border-radius: var(--radius); }
-.me:hover { background: var(--surface-2); }
+@media (hover: hover) { .me:hover { background: var(--surface-2); } }
 .me-text { min-width: 0; display: grid; }
 .me-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .me-nick { font-size: 12.5px; color: var(--muted); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -335,7 +335,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   border-radius: var(--radius);
   transition: background .12s;
 }
-.chat-item:hover { background: var(--surface-2); }
+@media (hover: hover) { .chat-item:hover { background: var(--surface-2); } }
 .chat-item.active { background: var(--accent-soft); }
 [data-style="dot"] .chat-item.active { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
 .chat-item-body { flex: 1; min-width: 0; display: grid; gap: 1px; }
@@ -356,7 +356,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 }
 .back { display: none; }
 .chat-info { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; text-align: left; padding: 4px; border-radius: var(--radius); }
-.chat-info:hover { background: var(--surface-2); }
+@media (hover: hover) { .chat-info:hover { background: var(--surface-2); } }
 .chat-info-text { min-width: 0; display: grid; }
 .chat-title { font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-sub { display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -466,7 +466,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   background: var(--accent); color: var(--accent-text);
   transition: transform .1s, filter .15s;
 }
-.send:hover { filter: brightness(1.08); }
+@media (hover: hover) { .send:hover { filter: brightness(1.08); } }
 .send:active { transform: scale(.92); }
 .send .i { stroke-width: 2.4; }
 
@@ -508,7 +508,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   padding: 10px; margin-bottom: 2px; border-radius: var(--radius);
   color: var(--muted); font-weight: 600; text-align: left;
 }
-.archive-row:hover { background: var(--surface-2); color: var(--text); }
+@media (hover: hover) { .archive-row:hover { background: var(--surface-2); color: var(--text); } }
 .archive-row .avatar { background: var(--surface-2); color: var(--muted); }
 .archive-row .count { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
 
@@ -546,7 +546,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 }
 [data-style="dot"] .menu { border: 1px solid var(--line); }
 .menu button { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; text-align: left; font-size: 14px; }
-.menu button:hover { background: var(--surface-2); }
+@media (hover: hover) { .menu button:hover { background: var(--surface-2); } }
 .menu button.danger { color: var(--danger); }
 .menu .i { width: 18px; height: 18px; }
 
@@ -774,7 +774,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .icon-btn:active { transform: scale(.88); }
 #modeBtn:active .i { transform: rotate(-40deg); }
 #modeBtn .i, #settingsBtn .i { transition: transform .35s var(--spring); }
-#settingsBtn:hover .i { transform: rotate(45deg); }
+@media (hover: hover) { #settingsBtn:hover .i { transform: rotate(45deg); } }
 
 /* список чатов */
 .chat-item { transition: background .15s, transform .15s var(--spring); }
@@ -832,7 +832,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 
 /* аватарка в профиле слегка «дышит» при наведении */
 .profile-head .avatar { transition: transform .3s var(--spring); }
-.profile-head .avatar:hover { transform: scale(1.06) rotate(-3deg); }
+@media (hover: hover) { .profile-head .avatar:hover { transform: scale(1.06) rotate(-3deg); } }
 
 /* заметки и ошибки появляются плавно */
 .note:not(:empty) { animation: fade-up .25s var(--ease-out); }
@@ -905,7 +905,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .avatar.zoomable { cursor: zoom-in; }
 .lightbox img.round { border-radius: 50%; max-width: min(90vw, 640px); max-height: min(80vh, 640px); }
 .member.clickable { cursor: pointer; border-radius: var(--radius); transition: background .15s; }
-.member.clickable:hover { background: var(--surface-2); }
+@media (hover: hover) { .member.clickable:hover { background: var(--surface-2); } }
 .msg-from { cursor: pointer; }
 
 /* ---------- Плашка «Вышло обновление» ---------- */
@@ -1047,7 +1047,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .sticker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 4px; padding: 0 10px 12px; }
 .sticker-sub { grid-column: 1 / -1; font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 2px 0; }
 .sticker-tile { aspect-ratio: 1; display: grid; place-items: center; border-radius: 14px; transition: background .15s, transform .15s var(--spring); }
-.sticker-tile:hover { background: var(--surface-2); }
+@media (hover: hover) { .sticker-tile:hover { background: var(--surface-2); } }
 .sticker-tile:active { transform: scale(.88); }
 .sticker-tile svg { width: 72px; height: 72px; }
 .sticker-tile img { max-width: 72px; max-height: 72px; object-fit: contain; }
@@ -1076,7 +1076,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .msg.sticker .reactions { justify-content: flex-end; }
 .menu-react { display: flex; gap: 2px; padding: 4px; margin: -2px -2px 4px; border-bottom: 1px solid var(--line); }
 .menu-react button { width: 38px; height: 38px; display: grid; place-items: center; font-size: 22px; border-radius: 10px; transition: transform .15s var(--spring), background .15s; }
-.menu-react button:hover { background: var(--surface-2); transform: scale(1.18); }
+@media (hover: hover) { .menu-react button:hover { background: var(--surface-2); transform: scale(1.18); } }
 .menu-react button.on { background: var(--accent-soft); }
 
 /* ---------- Поиск ---------- */
