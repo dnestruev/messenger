@@ -8,6 +8,7 @@ export const DEFAULT_ICE_SERVERS = [
 const TURN_RE = /^turns?:/i;
 let cached = null;
 let pending = null;
+let pendingUserId = null;
 
 export function hasTurn(servers) {
   return (servers || []).some((server) =>
@@ -28,11 +29,14 @@ function usableServers(servers) {
   }));
 }
 
-export async function loadIceConfiguration(sb, configuredServers = DEFAULT_ICE_SERVERS) {
-  if (cached && cached.until > Date.now()) return cached.value;
-  if (pending) return pending;
+export async function loadIceConfiguration(sb, configuredServers = DEFAULT_ICE_SERVERS, userId = '') {
+  // TURN credentials относятся к конкретной учётной записи: не переиспользуем
+  // их после выхода из аккаунта и входа под другим пользователем.
+  if (cached && cached.userId === userId && cached.until > Date.now()) return cached.value;
+  if (pending && pendingUserId === userId) return pending;
 
-  pending = (async () => {
+  pendingUserId = userId;
+  const request = (async () => {
     const fallback = usableServers(configuredServers);
     const defaults = fallback.length ? fallback : DEFAULT_ICE_SERVERS;
     let value = { iceServers: defaults, turnConfigured: hasTurn(defaults), turnError: null };
@@ -55,9 +59,15 @@ export async function loadIceConfiguration(sb, configuredServers = DEFAULT_ICE_S
         turnError: (error?.message || String(error)).slice(0, 150),
       };
     }
-    cached = { value, until: Date.now() + cacheMs };
+    cached = { value, userId, until: Date.now() + cacheMs };
     return value;
-  })().finally(() => { pending = null; });
+  })();
+  pending = request.finally(() => {
+    if (pendingUserId === userId) {
+      pending = null;
+      pendingUserId = null;
+    }
+  });
   return pending;
 }
 
