@@ -102,6 +102,9 @@ export function createClient() {
     functions: { async invoke(name, o = {}) {
       await new Promise((r) => setTimeout(r, 150));
       if (name === 'turn-check') { const r = await api('fn/turn-check', o.body || {}); return { data: r.data, error: null }; }
+      // тест: два TURN с одинаковым адресом и разными логинами (как у партнёров) — браузер должен их принять
+      if (name === 'turn-credentials' && localStorage.getItem('mock-turn')) return { data: { iceServers: [
+        { urls: ['turn:127.0.0.1:3479'], username: 'u1', credential: 'p1' }, { urls: ['turn:127.0.0.1:3479'], username: 'u2', credential: 'p2' }], ttlSeconds: 3600 }, error: null };
       return { data: null, error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code' } };   // turn-credentials: TURN не настроен
     } },
     // Разбор канала занимает время (ответ сервера), до этого sb.channel(то же имя) вернёт этот же канал

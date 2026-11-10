@@ -78,6 +78,7 @@
 - **Звонки, адреса (ICE)**: перед отправкой приглашения/ответа ждём сбор адресов `ICE_WAIT` = 1,5 с, чтобы они были в самом SDP; поздние досылаем ПАЧКАМИ (`queueIce`, `{t:'ice', cands:[…]}`; старый одиночный `candidate` тоже принимаем). Чистый trickle (по сообщению на адрес, без ожидания) ломал звонки на телефонах. `setConfiguration` — только `{ iceServers }`, без копии `getConfiguration()` (Safari). Тест «адреса только из SDP»: подменить `addIceCandidate` (см. `t_calls2.py`).
 - **Presence**: сервер режет частые track/untrack (`ClientPresenceRateLimitReached` в логах realtime) — `syncPresence()` не чаще раза в 2 с.
 - Отладка звонков: логи Supabase (`query_logs`: `function_edge_logs`, `edge_logs` с user_agent) показывают, кто кому звонил и когда закончилось; после update-13 — таблица `call_reports` (этапы, типы адресов, ошибки, без IP), читает только создатель.
+- **Адреса iceServers не трогать**: дописанный к TURN-адресу «?n=0» Chrome считает неверным и не создаёт соединение вообще (звонки с Android умерли). `newPeerConnection()` при ошибке пробует без странных адресов, потом только STUN. Тест — `t_calls3.py` (мок выдаёт TURN при `localStorage['mock-turn']`).
 - Звонок: после завершения повторные `offer` ещё летят ~3 с — id завершённых звонков помнить (`endedCalls`), иначе звонит снова.
 
 ## Тесты

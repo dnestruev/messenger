@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110114809';
-import * as CONFIG from '../config.js?v=20261110114809';
-import * as E2E from './crypto.js?v=20261110114809';
-import { createNet } from './net.js?v=20261110114809';
-import { qrSvg } from './qr.js?v=20261110114809';
-import { findEmbed } from './embeds.js?v=20261110114809';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110114809';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110114809';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110114809';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110115238';
+import * as CONFIG from '../config.js?v=20261110115238';
+import * as E2E from './crypto.js?v=20261110115238';
+import { createNet } from './net.js?v=20261110115238';
+import { qrSvg } from './qr.js?v=20261110115238';
+import { findEmbed } from './embeds.js?v=20261110115238';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110115238';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110115238';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110115238';
 
 /* =====================================================================
    Утилиты
@@ -2753,22 +2753,10 @@ const endedCalls = new Set();   // завершённые звонки: их з�
 
 /* ---------- Адреса STUN/TURN: берём заранее и держим свежими ---------- */
 let iceServers = ICE_SERVERS, iceTimer = null, iceInfo = 'STUN';
-function distinctUrls(list) {                             // одинаковые адреса с разными логинами браузер может склеить
-  const seen = new Set();
-  return list.map((s) => {
-    const urls = (Array.isArray(s.urls) ? s.urls : [s.urls]).map((u) => {
-      let v = u;
-      for (let i = 0; seen.has(v); i++) v = u + (u.includes('?') ? '&' : '?') + 'n=' + i;
-      seen.add(v);
-      return v;
-    });
-    return { ...s, urls };
-  });
-}
 async function refreshIce() {
   try {
     const c = await loadIceConfiguration(sb, ICE_SERVERS, state.me?.id || '');
-    if (c?.iceServers?.length) { iceServers = distinctUrls(c.iceServers); iceInfo = c.turnConfigured ? 'TURN' : 'STUN' + (c.turnError ? ' (' + c.turnError + ')' : ''); }
+    if (c?.iceServers?.length) { iceServers = c.iceServers; iceInfo = c.turnConfigured ? 'TURN' : 'STUN' + (c.turnError ? ' (' + c.turnError + ')' : ''); }
   } catch {}
 }
 const iceSoon = (ms = 2000) => Promise.race([refreshIce(), new Promise((r) => setTimeout(r, ms))]);
@@ -2931,10 +2919,19 @@ async function getMedia(video) {
   }
 }
 
+/** Создать соединение. Если браузер не принял какой-то адрес сервера — без него, в крайнем случае только STUN */
+function newPeerConnection() {
+  const tries = [iceServers, iceServers.filter((s) => (Array.isArray(s.urls) ? s.urls : [s.urls]).every((u) => /^(stun|turns?):[^?\s]+(\?transport=(udp|tcp))?$/i.test(u))), ICE_SERVERS, []];
+  for (const list of tries) {
+    try { return { pc: new RTCPeerConnection({ iceServers: list }), used: list === iceServers ? iceInfo : list.length ? 'STUN (запасной)' : 'без серверов' }; }
+    catch (e) { console.warn('RTCPeerConnection не принял серверы', e); }
+  }
+  throw new Error('Этот браузер не умеет звонить');
+}
 function makePeer(cur) {
-  const pc = new RTCPeerConnection({ iceServers });
+  const { pc, used } = newPeerConnection();
   cur.pc = pc;
-  cur.iceUsed = iceInfo;
+  cur.iceUsed = used;
   pc.onicecandidate = (e) => { if (e.candidate && call === cur) queueIce(cur, e.candidate.toJSON ? e.candidate.toJSON() : e.candidate); };
   pc.ontrack = (e) => {
     for (const tr of (e.streams[0]?.getTracks() || [e.track])) if (!cur.remote.getTracks().includes(tr)) cur.remote.addTrack(tr);
