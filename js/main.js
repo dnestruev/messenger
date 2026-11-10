@@ -1,12 +1,12 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110004238';
-import * as CONFIG from '../config.js?v=20261110004238';
-import * as E2E from './crypto.js?v=20261110004238';
-import { createNet } from './net.js?v=20261110004238';
-import { qrSvg } from './qr.js?v=20261110004238';
-import { findEmbed } from './embeds.js?v=20261110004238';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110004238';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110004238';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110005547';
+import * as CONFIG from '../config.js?v=20261110005547';
+import * as E2E from './crypto.js?v=20261110005547';
+import { createNet } from './net.js?v=20261110005547';
+import { qrSvg } from './qr.js?v=20261110005547';
+import { findEmbed } from './embeds.js?v=20261110005547';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110005547';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110005547';
 
 /* =====================================================================
    Утилиты
@@ -1392,6 +1392,10 @@ const imgPool = new Map();   // ref -> уже загруженный <img> из 
 const embedPool = new Map(); // id сообщения -> уже открытый плеер (не перезагружаем при перерисовке)
 function renderMessages({ keepScroll = false, toBottom = false } = {}) {
   const box = $('messages');
+  // Положение ленты запоминаем ДО того, как заберём из неё готовые фото и плееры: как только фото
+  // уходит из ленты, браузер сам сдвигает прокрутку на его высоту, и лента «уезжала» вверх.
+  const prevTop = box.scrollTop;
+  const wasNearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 150;
   imgPool.clear();
   embedPool.clear();
   for (const fr of box.querySelectorAll('.embed-open[data-mid]')) embedPool.set(fr.dataset.mid, fr);
@@ -1441,8 +1445,6 @@ function renderMessages({ keepScroll = false, toBottom = false } = {}) {
     nodes.push(bubble(m, { showName: c?.is_group && m.sender_id !== state.me.id && !continued, continued, fresh }));
     prev = m;
   }
-  const prevTop = box.scrollTop;
-  const wasNearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 150;
   imgPool.clear();
   box.replaceChildren(...nodes);
   if (!$('searchBar').hidden && search.hits.length) requestAnimationFrame(() => { clearSearchMarks(); showHitQuiet(); });

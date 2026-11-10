@@ -55,6 +55,17 @@ with sync_playwright() as pw:
     b.page.wait_for_function("document.title.startsWith('(1)')", timeout=10000)
     check('в заголовке вкладки (1)', True)
 
+    # лента не уезжает вверх при перерисовке (фото выше экрана + сохранение профиля)
+    a.open_chat('Клуб')
+    for i in range(30): a.page.fill('#text', f'много {i}'); a.page.press('#text', 'Enter'); time.sleep(0.05)
+    time.sleep(1)
+    a.page.evaluate("document.getElementById('messages').scrollTop = 250"); time.sleep(0.3)
+    a.page.click('#meBtn'); a.page.fill('.modal input[placeholder^="Имя"]', 'Алиса')
+    a.page.locator('.modal .btn-primary', has_text='Сохранить').first.click(); time.sleep(0.5)
+    top = a.page.evaluate("document.getElementById('messages').scrollTop")
+    check(f'лента осталась на месте после «Сохранить» профиль (250 → {top})', abs(top - 250) < 5)
+    a.page.keyboard.press('Escape')
+
     for u in (a, b, c):
         errs = [e for e in u.errors if 'ERR_' not in e]
         check(f'нет ошибок JS ({u.nick})', not errs)
