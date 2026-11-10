@@ -25,6 +25,7 @@
 - Сайт: https://dnestruev.github.io/messenger/ (GitHub Pages из ветки `main` репозитория `dnestruev/messenger`).
 - Центр (база) — Supabase, проект **`jlyuqsqlvhytvsijpejr`**, организация `corbhettudwxncoqvoob`, тариф FREE, eu-central-1. Доступ через MCP-коннектор Supabase.
 - Тестовый узел-партнёр — Supabase-проект **`trvqgpqinbukddfuybms`** (`messenger-node-1`), владелец — создатель.
+- Функция **turn-credentials** (Edge Function, verify_jwt выключен, токен проверяет сама; код в `supabase/functions/turn-credentials`) — выдаёт временные данные TURN. Задеплоена, но TURN пока **не настроен**: нужны секреты `CF_TURN_KEY_ID` + `CF_TURN_API_TOKEN` (Cloudflare Realtime TURN, бесплатно) или `TURN_SHARED_SECRET` + `TURN_URLS` (свой coturn). Без них отвечает 503, звонки идут через STUN.
 - Функция **push** (Edge Function, verify_jwt выключен) есть только в Supabase, в репозитории её нет — смотреть через `get_edge_function`. Вызывается триггером `on_message_push` → `public.notify_push()` (через pg_net) при новом сообщении. Секреты VAPID лежат в Supabase.
 - В базе по расписанию (pg_cron, каждые 10 мин) — `public.check_nodes()`: пингует узлы, пересчитывает статус партнёров.
 
@@ -32,14 +33,15 @@
 
 - `index.html` — разметка + SVG-спрайт иконок (`<symbol id="i-…">`), ранний скрипт темы.
 - `css/styles.css` — всё оформление. Темы через `[data-style]` (classic, dot, paper, neon) × `[data-mode]` (light/dark). Шрифты Inter, JetBrains Mono, Doto (точечный, только латиница/цифры).
-- `js/main.js` (~3200 строк) — всё приложение. Хелперы `h()` (создание DOM), `icon()`, `$()`. Состояние `state`, ключи `keys`.
+- `js/calls.js` — ICE: загрузка TURN (кеш, привязка к аккаунту), типы адресов, маршрут без IP. `js/call-extras.js` — экспериментальное (`?calltest=1`): экран, шумоподавление, качество связи.
+- `js/main.js` (~4400 строк) — всё приложение. Хелперы `h()` (создание DOM), `icon()`, `$()`. Состояние `state`, ключи `keys`.
 - `js/crypto.js` — WebCrypto: личный ключ ECDH P-256 (неизвлекаемый, в IndexedDB), бэкап под секретным кодом (PBKDF2 600k + AES-GCM), ключи чатов AES-256-GCM, обёртка ключа для каждого участника (ECIES), подписи ECDSA, коды безопасности.
 - `js/net.js` — сеть партнёров: зашифрованные куски `chatId/sha256`, по 2 копии на узлы **разных владельцев**, проверка хеша, жалобы на плохие узлы.
 - `js/md.js` — markdown (только DOM, без innerHTML), `js/qr.js` — свой генератор QR, `js/stickers.js` — набор «Точка» (SVG), `js/embeds.js` — плееры Spotify / Яндекс Музыка / YouTube / SoundCloud.
 - `sw.js` — push, клик по уведомлению, сверка своих файлов с сервером (`cache: no-cache`).
 - `config.js` — публичные настройки. Можно добавить `export const ICE_SERVERS = [...]` (TURN для звонков) — код подхватит.
 - `partner/` — всё для партнёров: `node.sql`, функция `node` (у каждого партнёра своя копия — **менять её нельзя без их передеплоя**, поэтому новое делаем на стороне клиента/центра), `README.md`.
-- `schema.sql`, `update-1.sql … update-12.sql` — база. **Применены все 1–12** (из update-6 убран перенос pg_net — на нём держатся push и пинг узлов; update-12 — время сообщения ставит сервер, удаление своих вложений из хранилища центра, ник не меняется через API).
+- `schema.sql`, `update-1.sql … update-13.sql` — база. **Применены 1–12; update-13 (таблица `call_reports` — отчёты о звонках) написан и проверен, ждёт «применяй update-13»** (из update-6 убран перенос pg_net — на нём держатся push и пинг узлов; update-12 — время сообщения ставит сервер, удаление своих вложений из хранилища центра, ник не меняется через API).
 - `tests/` — стенд проверки (см. `tests/README.md`): SQL-заглушки Supabase + сценарии, Supabase в памяти + Playwright-тесты. На сайт не влияет.
 - `scripts/bump.sh` — номер версии перед выкладкой.
 
@@ -65,11 +67,15 @@
 - **Прочтение** (`conversation_members` UPDATE) приходит на каждое сообщение — только `patchTicks()`, не `renderMessages()`.
 - Поля, которые ставит сервер (`created_at` и т.п.), клиент мог подделать при вставке — защищать триггером BEFORE INSERT (сделано в update-12).
 - **storage.objects** нельзя удалять SQL-запросом (триггер `protect_objects_delete`) — только через Storage API с правилом delete.
+- **Каналы Realtime**: `sb.channel(имя)` возвращает УЖЕ существующий канал с тем же именем, пока старый не разобран (`removeChannel` асинхронный), а повторный `subscribe()` ничего не делает и колбэк не зовёт. «Убрать и сразу создать заново» = мёртвый канал (звонки после перевхода, «печатает» после смены чатов). Создавать только через `freshChannel()`, убирать через `dropChannel()`. Входящий канал звонков сам переподключается при CHANNEL_ERROR/CLOSED.
+- **Звонки, адреса (ICE)**: перед отправкой приглашения/ответа ждём сбор адресов `ICE_WAIT` = 1,5 с, чтобы они были в самом SDP; поздние досылаем ПАЧКАМИ (`queueIce`, `{t:'ice', cands:[…]}`; старый одиночный `candidate` тоже принимаем). Чистый trickle (по сообщению на адрес, без ожидания) ломал звонки на телефонах. `setConfiguration` — только `{ iceServers }`, без копии `getConfiguration()` (Safari). Тест «адреса только из SDP»: подменить `addIceCandidate` (см. `t_calls2.py`).
+- **Presence**: сервер режет частые track/untrack (`ClientPresenceRateLimitReached` в логах realtime) — `syncPresence()` не чаще раза в 2 с.
+- Отладка звонков: логи Supabase (`query_logs`: `function_edge_logs`, `edge_logs` с user_agent) показывают, кто кому звонил и когда закончилось; после update-13 — таблица `call_reports` (этапы, типы адресов, ошибки, без IP), читает только создатель.
 - Звонок: после завершения повторные `offer` ещё летят ~3 с — id завершённых звонков помнить (`endedCalls`), иначе звонит снова.
 
 ## Тесты
 
-Стенд лежит в репозитории: **`tests/README.md`** — как поднять PostgreSQL с заглушками и прогнать сценарии, как запустить Supabase в памяти и Playwright-тесты (`t_basic`, `t_calls`, `t_more`, `t_window`, `t_layout`). Новую функцию — добавь в заглушку (`tests/app/server.mjs`) и в тест.
+Стенд лежит в репозитории: **`tests/README.md`** — как поднять PostgreSQL с заглушками и прогнать сценарии, как запустить Supabase в памяти и Playwright-тесты (`t_basic`, `t_calls`, `t_calls2`, `t_more`, `t_window`, `t_layout`). Заглушка Realtime повторяет поведение supabase-js (повторное использование каналов, асинхронный разбор) и доставляет broadcast с задержкой до 400 мс вперемешку (`JITTER`). Новую функцию — добавь в заглушку (`tests/app/server.mjs`) и в тест.
 - Обязательно гонять вёрстку на 320×568, 375×667 (iPhone 7), 667×375 и 1440×900 (`t_layout.py`, скриншоты в `/home/claude/test/shots`).
 - Учти: «Избранное» всегда первое в списке чатов — в тестах не нажимать «первый чат». Чат искать по `.chat-item-name`, а не по тексту всей строки (в превью группы тоже есть имена).
 - Окна `confirm()` в Playwright по умолчанию отменяются — вешай `page.on('dialog', d => d.accept())`.

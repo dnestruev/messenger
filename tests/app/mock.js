@@ -36,7 +36,7 @@ class Query {
 }
 
 class Channel {
-  constructor(topic, opts) { this.topic = topic; this.subs = []; this.handlers = []; this.presenceKey = opts?.config?.presence?.key; this.state = {}; }
+  constructor(topic, opts) { this.topic = topic; this.subs = []; this.handlers = []; this.presenceKey = opts?.config?.presence?.key; this.state = {}; this.joinState = 'closed'; }
   on(kind, filter, cb) {
     const id = this.handlers.length;
     this.handlers.push({ kind, filter, cb });
@@ -45,7 +45,14 @@ class Channel {
     if (kind === 'presence') this.subs.push({ kind: 'presence' });
     return this;
   }
-  subscribe(cb) { channels.add(this); api('subscribe', { topic: this.topic, subs: this.subs }).then(() => cb?.('SUBSCRIBED')); return this; }
+  // Как в supabase-js: повторный subscribe() у уже подключённого канала ничего не делает и колбэк НЕ вызывает
+  subscribe(cb) {
+    if (this.joinState !== 'closed') return this;
+    this.joinState = 'joining';
+    channels.add(this);
+    api('subscribe', { topic: this.topic, subs: this.subs }).then(() => { if (this.joinState === 'joining') { this.joinState = 'joined'; cb?.('SUBSCRIBED'); } });
+    return this;
+  }
   async send({ event, payload }) { await api('broadcast', { topic: this.topic, event, payload }); return 'ok'; }
   track() { return api('presence', { topic: this.topic, key: this.presenceKey, track: true }); }
   untrack() { return api('presence', { topic: this.topic, key: this.presenceKey, track: false }); }
@@ -56,7 +63,8 @@ class Channel {
     for (const h of this.handlers) if (h.kind === 'broadcast' && h.filter.event === ev.event) h.cb({ payload: ev.payload });
   }
 }
-const channels = new Set();
+const channels = new Set();     // подписанные (получают события)
+const allChannels = new Set();  // все созданные и ещё не разобранные
 (async function poll() {
   for (;;) {
     try {
@@ -87,8 +95,19 @@ export function createClient() {
     },
     from: (t) => new Query(t),
     rpc: (fn, args) => api('rpc', { fn, args }).then((r) => ({ data: r.data ?? null, error: r.error || null })),
-    channel: (topic, opts) => new Channel(topic, opts),
-    removeChannel(ch) { channels.delete(ch); api('unsubscribe', { topic: ch.topic }); },
+    // Как в supabase-js: канал с тем же именем, который ещё не разобран, возвращается тот же самый
+    channel: (topic, opts) => [...allChannels].find((c) => c.topic === topic) || (() => { const c = new Channel(topic, opts); allChannels.add(c); return c; })(),
+    getChannels: () => [...allChannels],
+    // Edge Functions: как в рабочем проекте — функции turn-credentials нет (404)
+    functions: { async invoke(name) { await new Promise((r) => setTimeout(r, 150)); return { data: null, error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code' } }; } },
+    // Разбор канала занимает время (ответ сервера), до этого sb.channel(то же имя) вернёт этот же канал
+    async removeChannel(ch) {
+      ch.joinState = 'leaving';
+      await api('unsubscribe', { topic: ch.topic });
+      await new Promise((r) => setTimeout(r, 250));
+      channels.delete(ch); allChannels.delete(ch); ch.joinState = 'closed';
+      return 'ok';
+    },
     storage: {
       from: (bucket) => ({
         async upload(p, blob, o = {}) {

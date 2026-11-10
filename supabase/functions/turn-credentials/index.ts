@@ -37,6 +37,32 @@ Deno.serve(async (req) => {
     return reply({ error: 'Сервер авторизации недоступен' }, 503);
   }
 
+  // Вариант 1: Cloudflare Realtime TURN (бесплатно до 1000 ГБ в месяц).
+  // Секреты: CF_TURN_KEY_ID и CF_TURN_API_TOKEN (Cloudflare → Realtime → TURN Server → Create).
+  const cfKey = Deno.env.get('CF_TURN_KEY_ID');
+  const cfToken = Deno.env.get('CF_TURN_API_TOKEN');
+  if (cfKey && cfToken) {
+    try {
+      const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(cfKey)}/credentials/generate-ice-servers`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + cfToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ttl: 3600, customIdentifier: userId.slice(0, 36) }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!r.ok) return reply({ error: 'Cloudflare TURN: ' + r.status }, 502);
+      const data = await r.json();
+      const list = Array.isArray(data.iceServers) ? data.iceServers : data.iceServers ? [data.iceServers] : [];
+      // порт 53 браузеры часто блокируют — такие адреса только тормозят сбор
+      const iceServers = list.map((s: { urls: string | string[]; username?: string; credential?: string }) => ({
+        ...s, urls: (Array.isArray(s.urls) ? s.urls : [s.urls]).filter((u) => !/:53(\?|$)/.test(u)),
+      })).filter((s: { urls: string[] }) => s.urls.length);
+      return reply({ iceServers, ttlSeconds: 3600 });
+    } catch {
+      return reply({ error: 'Cloudflare TURN недоступен' }, 502);
+    }
+  }
+
+  // Вариант 2: свой coturn (use-auth-secret). Секреты: TURN_SHARED_SECRET и TURN_URLS.
   const sharedSecret = Deno.env.get('TURN_SHARED_SECRET');
   const urls = (Deno.env.get('TURN_URLS') || '')
     .split(',')

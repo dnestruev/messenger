@@ -21,7 +21,7 @@ jobs:
           node-version: '22'
       - name: Проверка синтаксиса
         run: |
-          node --check js/main.js
-          node --check js/calls.js
+          # ES-модули: обычный node --check проверяет файл как CommonJS и пропускает ошибки
+          for f in js/*.js; do cp "$f" /tmp/check.mjs; node --check /tmp/check.mjs || exit 1; done
       - name: Тесты ICE
         run: node --test tests/calls-ice.test.mjs

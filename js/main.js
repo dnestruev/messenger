@@ -1,14 +1,14 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110165000';
-import * as CONFIG from '../config.js?v=20261110165000';
-import * as E2E from './crypto.js?v=20261110165000';
-import { createNet } from './net.js?v=20261110165000';
-import { qrSvg } from './qr.js?v=20261110165000';
-import { findEmbed } from './embeds.js?v=20261110165000';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110165000';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110165000';
-import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110165000';
-import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110165000';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110085106';
+import * as CONFIG from '../config.js?v=20261110085106';
+import * as E2E from './crypto.js?v=20261110085106';
+import { createNet } from './net.js?v=20261110085106';
+import { qrSvg } from './qr.js?v=20261110085106';
+import { findEmbed } from './embeds.js?v=20261110085106';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110085106';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110085106';
+import { CALL_BETA, prepareVideo, createCallExtras } from './call-extras.js?v=20261110085106';
+import { DEFAULT_ICE_SERVERS, hasTurn, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110085106';
 
 /* =====================================================================
    Утилиты
@@ -897,35 +897,54 @@ setInterval(checkUpdate, 3 * 60 * 1000);
    В сети / был(а) недавно
    ===================================================================== */
 let presence = null, seenTimer = null;
-function startPresence() {
+async function startPresence() {
   stopPresence();
   const me = state.me.id;
-  presence = sb.channel('online', { config: { presence: { key: me } } });
+  const ch = await freshChannel('online', { config: { presence: { key: me } } });
+  if (state.me?.id !== me || presence) { dropChannel(ch); return; }
+  presence = ch;
   presence.on('presence', { event: 'sync' }, () => {
     // В канале — все, кто в сети. Перерисовываем, только если зашёл или вышел кто-то из МОИХ чатов:
     // раньше любой вход/выход любого человека перерисовывал список у всех.
     const mine = new Set([...state.chats.values()].flatMap((c) => c.member_ids || []));
-    const next = new Set(Object.keys(presence.presenceState() || {}));
+    if (presence !== ch) return;                           // канал уже закрыли (вышли из аккаунта)
+    const next = new Set(Object.keys(ch.presenceState() || {}));
     const came = [...next].some((id) => mine.has(id) && !state.online.has(id));
     const left = [...state.online].some((id) => mine.has(id) && !next.has(id));
     state.online = next;
     if (came || left) { renderChats(); if (state.activeId) renderHeader(); }
     if (left) setTimeout(loadSeen, 1500);                  // кто-то вышел — узнаём, когда он был в последний раз
   });
-  presence.subscribe((status) => { if (status === 'SUBSCRIBED' && !document.hidden) presence.track({ at: Date.now() }); });
+  presence.subscribe((status) => { if (status === 'SUBSCRIBED') { presenceSent = null; syncPresence(); } });
   sb.rpc('touch_seen').then(() => {}, () => {});
   seenTimer = setInterval(() => { if (!document.hidden) sb.rpc('touch_seen').then(() => {}, () => {}); loadSeen(); }, 2 * 60 * 1000);
   loadSeen();
 }
 function stopPresence() {
   clearInterval(seenTimer);
-  if (presence) { try { presence.untrack(); } catch {} sb.removeChannel(presence); presence = null; }
+  clearTimeout(presenceTimer);
+  if (presence) { try { presence.untrack(); } catch {} dropChannel(presence); presence = null; }
   state.online.clear();
+}
+/* «В сети» по видимости вкладки. Сервер ограничивает частоту track/untrack (в логах было
+   ClientPresenceRateLimitReached и канал закрывался) — поэтому шлём не чаще раза в 2 с и только изменение. */
+let presenceSent = null, presenceTimer = null, presenceAt = 0;
+function syncPresence() {
+  clearTimeout(presenceTimer);
+  if (!presence) return;
+  const want = !document.hidden;
+  if (want === presenceSent) return;
+  const wait = 2000 - (Date.now() - presenceAt);
+  if (wait > 0) { presenceTimer = setTimeout(syncPresence, wait); return; }
+  presenceAt = Date.now();
+  presenceSent = want;
+  try { want ? presence.track({ at: Date.now() }) : presence.untrack(); } catch {}
 }
 document.addEventListener('visibilitychange', () => {
   if (!presence || !state.me) return;
-  if (document.hidden) { presence.untrack(); sb.rpc('touch_seen').then(() => {}, () => {}); }
-  else { presence.track({ at: Date.now() }); sb.rpc('touch_seen').then(() => {}, () => {}); loadSeen(); }
+  syncPresence();
+  sb.rpc('touch_seen').then(() => {}, () => {});
+  if (!document.hidden) loadSeen();
 });
 /** Время последнего визита собеседников из личных чатов */
 async function loadSeen() {
@@ -969,7 +988,7 @@ function stopApp() {
   seenSignals.clear(); endedCalls.clear();
   clearTimeout(removeMessage.t);
   keys.priv = null; keys.fp = null; keys.chat.clear(); keys.pub.clear(); keys.trusted = {}; keys.sign = null; keys.verify.clear();
-  if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
+  if (state.channel) { dropChannel(state.channel); state.channel = null; }
   closeModal();
   $('app').hidden = true;
   $('auth').hidden = false;
@@ -1391,9 +1410,13 @@ function renderComposer() {
 }
 
 /* ---------- «печатает…» (через Realtime Broadcast, в базу не пишется) ---------- */
-function joinTyping(chatId) {
+let typingToken = 0;
+async function joinTyping(chatId) {
   leaveTyping();
-  state.typing.channel = sb.channel('typing:' + chatId)
+  const token = typingToken;
+  const ch = await freshChannel('typing:' + chatId);
+  if (token !== typingToken || state.activeId !== chatId) { dropChannel(ch); return; }   // пока ждали — ушли в другой чат
+  state.typing.channel = ch
     .on('broadcast', { event: 'typing' }, ({ payload }) => {
       if (!payload || payload.user === state.me?.id || state.activeId !== chatId || state.blocked.has(payload.user)) return;
       state.typing.until = Date.now() + 3500;
@@ -1405,7 +1428,8 @@ function joinTyping(chatId) {
     .subscribe();
 }
 function leaveTyping() {
-  if (state.typing.channel) sb.removeChannel(state.typing.channel);
+  typingToken++;
+  if (state.typing.channel) dropChannel(state.typing.channel);
   state.typing.channel = null;
   state.typing.until = 0;
 }
@@ -2595,14 +2619,16 @@ $('stickerBtn').onclick = () => ($('stickerPanel').hidden ? openStickers() : clo
    ===================================================================== */
 const ICE_SERVERS = CONFIG.ICE_SERVERS || DEFAULT_ICE_SERVERS;
 
-/** Настраиваем свежие TURN credentials перед SDP. При отсутствии функции остаётся STUN. */
+/** Настраиваем TURN перед SDP. Данные обычно уже лежат в кеше (берём при входе), ждём не дольше 1,5 с.
+    Без TURN остаётся STUN. setConfiguration — только iceServers: копия getConfiguration() с certificates
+    в Safari бросает ошибку. */
 async function configureCallIce(cur) {
   try {
-    const config = await loadIceConfiguration(sb, ICE_SERVERS, state.me.id);
-    if (call !== cur || cur.pc.signalingState === 'closed') return;
+    const config = await Promise.race([loadIceConfiguration(sb, ICE_SERVERS, state.me.id), new Promise((r) => setTimeout(r, 1500, null))]);
+    if (!config || call !== cur || cur.pc.signalingState === 'closed') return;
     cur.turnAvailable = config.turnConfigured;
     cur.turnError = config.turnError;
-    cur.pc.setConfiguration({ ...cur.pc.getConfiguration(), iceServers: config.iceServers });
+    if (config.turnConfigured) cur.pc.setConfiguration({ iceServers: config.iceServers });
   } catch (e) {
     if (call === cur) {
       cur.turnAvailable = hasTurn(ICE_SERVERS);
@@ -2612,6 +2638,7 @@ async function configureCallIce(cur) {
   }
 }
 const RING_TIMEOUT = 45000;
+const ICE_WAIT = 1500;        // сколько ждём сбор адресов перед отправкой приглашения/ответа
 /** Камера в HD: при слабом интернете браузер сам снизит качество, не обрывая звонок */
 const camConstraints = (facing = 'user') => ({ facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } });
 const VIDEO_BITRATE = 2_500_000;
@@ -2629,43 +2656,85 @@ async function tuneSenders(pc) {
     } catch {}
   }
 }
+/* Каналы Realtime. supabase-js возвращает УЖЕ существующий канал с тем же именем, пока старый не разобран
+   (removeChannel асинхронный), а повторный subscribe() у него ничего не делает и колбэк не вызывает.
+   Поэтому «убрать и сразу создать заново» давало мёртвый канал: звонки и «печатает» переставали доходить. */
+const removingChannels = new Map();   // имя -> обещание разбора
+const fullTopic = (c) => String(c.topic || '').replace(/^realtime:/, '');
+function dropChannel(ch) {
+  if (!ch) return Promise.resolve();
+  const name = fullTopic(ch);
+  const p = Promise.resolve().then(() => sb.removeChannel(ch)).catch(() => {}).finally(() => { if (removingChannels.get(name) === p) removingChannels.delete(name); });
+  removingChannels.set(name, p);
+  return p;
+}
+async function freshChannel(topic, opts) {
+  await removingChannels.get(topic);
+  for (const old of (sb.getChannels?.() || []).filter((c) => fullTopic(c) === topic)) await dropChannel(old);
+  return sb.channel(topic, opts);
+}
+
 let call = null;
 let callInbox = null;
 const callOut = new Map();
 const seenSignals = new Set();
 
-function startCallInbox() {
-  if (callInbox) sb.removeChannel(callInbox);
-  callInbox = sb.channel('call-' + state.me.id)
-    .on('broadcast', { event: 'sig' }, ({ payload }) => onSignal(payload).catch((e) => console.warn('Ошибка обработки сигнала звонка', e)))
-    .subscribe();
+/** Входящие звонки. Канал следим: если сервер его закрыл (сеть, сон телефона) — подключаемся заново,
+    иначе звонки молча перестают приходить. */
+let inboxRetry = null;
+async function startCallInbox() {
+  const me = state.me?.id;
+  if (!me) return;
+  clearTimeout(inboxRetry);
+  const old = callInbox; callInbox = null;
+  if (old) dropChannel(old);
+  const ch = await freshChannel('call-' + me);
+  if (state.me?.id !== me || callInbox) { dropChannel(ch); return; }
+  callInbox = ch;
+  ch.on('broadcast', { event: 'sig' }, ({ payload }) => onSignal(payload).catch((e) => console.warn('Ошибка обработки сигнала звонка', e)))
+    .subscribe((st) => {
+      if (callInbox !== ch) return;
+      if (st === 'SUBSCRIBED') { ch.ready = true; clearTimeout(inboxRetry); return; }   // переподключился сам — хорошо
+      if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') {
+        ch.ready = false;
+        clearTimeout(inboxRetry);
+        inboxRetry = setTimeout(() => { if (callInbox === ch && state.me?.id === me) startCallInbox(); }, 3000);
+      }
+    });
+  // TURN-данные берём заранее: в момент звонка ждать их уже не придётся
+  loadIceConfiguration(sb, ICE_SERVERS, me).catch(() => {});
 }
 function stopCalls() {
   if (call) finishCall('cancel', { silent: true });
-  if (callInbox) { sb.removeChannel(callInbox); callInbox = null; }
-  for (const ch of callOut.values()) sb.removeChannel(ch);
+  clearTimeout(inboxRetry);
+  if (callInbox) { dropChannel(callInbox); callInbox = null; }
+  for (const ch of callOut.values()) if (ch.real) dropChannel(ch.real);
   callOut.clear();
 }
 async function outChannel(uid) {
   let ch = callOut.get(uid);
   if (!ch) {
-    ch = sb.channel('call-' + uid);
-    callOut.set(uid, ch); // параллельные ICE-сигналы используют одну подписку
-    ch.callReady = new Promise((res, rej) => {
-      const timer = setTimeout(() => rej(new Error('Нет связи с сервером звонков')), 5000);
-      ch.subscribe((st) => {
-        if (st === 'SUBSCRIBED') { clearTimeout(timer); res(); }
-        if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') {
-          clearTimeout(timer); rej(new Error('Нет связи с сервером звонков'));
-        }
-      });
-    });
+    const made = freshChannel('call-' + uid);
+    ch = { callReady: made.then((real) => { ch.real = real; return realReady(real); }) };
+    callOut.set(uid, ch); // параллельные сигналы ждут одну и ту же подписку
   }
-  try { await ch.callReady; return ch; }
+  try { await ch.callReady; return ch.real; }
   catch (e) {
-    if (callOut.get(uid) === ch) { callOut.delete(uid); sb.removeChannel(ch); }
+    if (callOut.get(uid) === ch) { callOut.delete(uid); if (ch.real) dropChannel(ch.real); }
     throw e;
   }
+}
+function realReady(ch) {
+  return new Promise((res, rej) => {
+    const timer = setTimeout(() => rej(new Error('Нет связи с сервером звонков')), 6000);
+    ch.subscribe((st) => {
+      if (st === 'SUBSCRIBED') { clearTimeout(timer); res(); }
+      if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') {
+        clearTimeout(timer); rej(new Error('Нет связи с сервером звонков'));
+        for (const [uid, x] of callOut) if (x.real === ch) callOut.delete(uid);   // следующий сигнал откроет канал заново
+      }
+    });
+  });
 }
 async function sendSignal(conv, to, msg) {
   const kv = currentVersion(conv);
@@ -2716,10 +2785,14 @@ async function onSignal(env) {
   }
   if (msg.t === 'ice') {
     const cur = call;
-    if (msg.candidate && (!cur.remoteDev || cur.remoteDev === msg.dev)) {
-      (cur.remoteIceSeen ||= []).push(msg.candidate);
-      if (cur.remoteIceSeen.length > 300) cur.remoteIceSeen.shift();
-      (cur.pendingIce ||= []).push({ dev: msg.dev, candidate: msg.candidate, gen: msg.gen || 0 });
+    const list = Array.isArray(msg.cands) ? msg.cands : msg.candidate ? [msg.candidate] : [];   // пачка или старый формат
+    if (list.length && (!cur.remoteDev || cur.remoteDev === msg.dev)) {
+      for (const candidate of list.slice(0, 50)) {
+        if (!candidate || typeof candidate.candidate !== 'string') continue;
+        (cur.remoteIceSeen ||= []).push(candidate);
+        if (cur.remoteIceSeen.length > 300) cur.remoteIceSeen.shift();
+        (cur.pendingIce ||= []).push({ dev: msg.dev, candidate, gen: msg.gen || 0 });
+      }
       await flushIce(cur);
     }
     return;
@@ -2804,10 +2877,25 @@ async function flushIce(cur) {
     }
   } finally { cur.flushingIce = false; }
 }
-function replayIce(cur) {
-  for (const candidate of cur.localIce || []) {
-    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, candidate, gen: cur.iceGeneration || 0 }).catch(() => {});
+/* Адреса (ICE) шлём пачками: раньше на каждый адрес уходило отдельное сообщение — 10–20 штук разом,
+   часть терялась или приходила раньше приглашения. Основные адреса и так лежат в самом приглашении/ответе. */
+function queueIce(cur, data) {
+  (cur.iceQueue ||= []).push(data);
+  if (cur.iceTimer) return;
+  cur.iceTimer = setTimeout(() => {
+    cur.iceTimer = null;
+    if (call !== cur || !cur.iceQueue?.length) return;
+    const cands = cur.iceQueue.splice(0);
+    sendIce(cur, cands);
+  }, 200);
+}
+function sendIce(cur, cands) {
+  for (let i = 0; i < cands.length; i += 20) {
+    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, cands: cands.slice(i, i + 20), gen: cur.iceGeneration || 0 }).catch(() => {});
   }
+}
+function replayIce(cur) {
+  if (cur.localIce?.length) sendIce(cur, cur.localIce.slice());
 }
 function connectionDeadline(cur) {
   if (cur.connectTimer || cur.connectedAt) return;
@@ -2870,6 +2958,7 @@ async function startIceRestart(cur) {
     cur.seenIce = new Set();
     cur.pc.restartIce?.();
     await cur.pc.setLocalDescription(await cur.pc.createOffer({ iceRestart: true }));
+    await gathered(cur.pc, ICE_WAIT);
     if (call !== cur) return;
     cur.restartOfferSdp = cur.pc.localDescription.sdp;
     const send = () => {
@@ -2910,6 +2999,7 @@ async function applyRestartOffer(cur, msg) {
     cur.localIce = [];
     cur.seenIce = new Set();
     await cur.pc.setLocalDescription(await cur.pc.createAnswer());
+    await gathered(cur.pc, ICE_WAIT);
     if (call !== cur) return;
     cur.restartAnswerGen = msg.gen;
     cur.restartAnswerSdp = cur.pc.localDescription.sdp;
@@ -2977,7 +3067,7 @@ function makePeer() {
     if (!candidate || !cur || cur.pc !== pc) return;
     const data = candidate.toJSON();
     (cur.localIce ||= []).push(data);
-    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, candidate: data, gen: cur.iceGeneration || 0 }).catch(() => {});
+    queueIce(cur, data);
   };
   pc.ontrack = (e) => {
     for (const tr of (e.streams[0]?.getTracks() || [e.track])) if (!remote.getTracks().includes(tr)) remote.addTrack(tr);
@@ -3041,7 +3131,9 @@ async function startCall(video) {
     if (!call || call.id !== id) return;
     if (CALL_BETA) prepareVideo(pc, true);
     await pc.setLocalDescription(await pc.createOffer());
-    // Trickle ICE: offer отправляем сразу, кандидаты следуют отдельными сигналами.
+    // Ждём сбор адресов (до 1,5 с): они попадают в само приглашение и не зависят от доставки
+    // отдельных сообщений. Поздние адреса всё равно досылаются пачками.
+    await gathered(pc, ICE_WAIT);
     if (!call || call.id !== id) return;
     const sdp = withBitrate(pc.localDescription.sdp);
     // запись о звонке в чате: заодно отправит push «новое сообщение», если приложение у собеседника закрыто
@@ -3137,7 +3229,8 @@ async function acceptCall(withVideo) {
 
     cur.callStep = 'Формирование ответа (createAnswer)';
     await cur.pc.setLocalDescription(await cur.pc.createAnswer());
-    // Trickle ICE: не ждём 2,5 секунды перед передачей ответа.
+    cur.callStep = 'Сбор сетевых адресов';
+    await gathered(cur.pc, ICE_WAIT);                          // адреса — прямо в ответ (см. startCall)
     if (call !== cur) return;
 
     cur.callStep = 'Отправка ответа (sendSignal)';
@@ -3177,7 +3270,7 @@ function hangUp(why = 'hangup') {
 
 function callDiagnostics(cur) {
   return [
-    'Тест: звонки 3',
+    'Версия: ' + (new URL(import.meta.url).searchParams.get('v') || '?'),
     'Направление: ' + (cur.dir === 'in' ? 'входящий' : 'исходящий'),
     'Ответ: ' + (cur.answered ? 'да' : 'нет'),
     'Локальное описание: ' + (cur.pc.localDescription?.type || 'нет'),
@@ -3186,6 +3279,9 @@ function callDiagnostics(cur) {
     'ICE: ' + cur.pc.iceConnectionState,
     'Сбор адресов: ' + cur.pc.iceGatheringState,
     'Адреса: свои ' + (cur.localIce?.length || 0) + ', принятые отдельно ' + (cur.seenIce?.size || 0),
+    'Адреса в SDP: свои ' + ((cur.pc.localDescription?.sdp || '').match(/^a=candidate/gm)?.length || 0) +
+      ', собеседника ' + ((cur.pc.remoteDescription?.sdp || '').match(/^a=candidate/gm)?.length || 0),
+    'Канал входящих: ' + (callInbox?.ready ? 'подключён' : 'нет'),
     'Свои типы: ' + describeCandidates(cur.localIce || []),
     'Чужие типы: ' + describeCandidates(cur.remoteIceSeen || []),
     'TURN: ' + (cur.turnAvailable ? 'подключён в браузере' : 'не настроен'),
@@ -3203,9 +3299,14 @@ function callDiagnostics(cur) {
 function finishCall(status, { remote = false, silent = false } = {}) {
   const cur = call;
   if (!cur) return;
-  const diagnostics = status === 'failed'
-    ? selectedRoute(cur.pc).then((route) => callDiagnostics(cur) + '\nМаршрут: ' + route)
-    : null;
+  // Отчёт о звонке (без IP-адресов) — и на экран при ошибке, и в базу: по нему видно, на каком шаге сломалось
+  const diagnostics = selectedRoute(cur.pc).then((route) => callDiagnostics(cur) + '\nМаршрут: ' + route, () => callDiagnostics(cur));
+  if (!silent) diagnostics.then((report) => sb.from('call_reports').insert({
+    call_id: cur.id, dir: cur.dir, status: String(status).slice(0, 20),
+    report: ('Итог: ' + status + '\nДлительность: ' + (cur.connectedAt ? Math.round((Date.now() - cur.connectedAt) / 1000) + ' с' : 'не соединились') +
+      '\nС начала: ' + Math.round((Date.now() - cur.startedAt) / 1000) + ' с\n' + report).slice(0, 4000),
+    ua: navigator.userAgent.slice(0, 300),
+  })).then(() => {}, () => {});
   call = null;
   endedCalls.add(cur.id);
   clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer);
@@ -3619,11 +3720,13 @@ $('recSend').onclick = () => stopVoice(true);
 /* =====================================================================
    Реальное время
    ===================================================================== */
-function subscribe() {
-  if (state.channel) sb.removeChannel(state.channel);
+async function subscribe() {
   const me = state.me.id;
+  if (state.channel) { dropChannel(state.channel); state.channel = null; }
+  const ch = await freshChannel('inbox-' + me);
+  if (state.me?.id !== me || state.channel) { dropChannel(ch); return; }
   let subscribedOnce = false;
-  state.channel = sb.channel('inbox-' + me)
+  state.channel = ch
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (p) => addMessage(p.new, true))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (p) => onReactionChange(p))
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, async (p) => {

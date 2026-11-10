@@ -53,6 +53,7 @@ export async function loadIceConfiguration(sb, configuredServers = DEFAULT_ICE_S
       const ttl = Number(result.data?.ttlSeconds);
       cacheMs = Number.isFinite(ttl) ? Math.min(600_000, Math.max(30_000, ttl * 1000 - 120_000)) : 300_000;
     } catch (error) {
+      cacheMs = 120_000;   // TURN не настроен или сеть моргнула — не дёргаем функцию на каждый звонок
       value = {
         iceServers: defaults,
         turnConfigured: hasTurn(defaults),

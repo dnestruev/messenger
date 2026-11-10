@@ -6,13 +6,14 @@ import crypto from 'node:crypto';
 
 const ROOT = process.argv[2];
 const PORT = +process.argv[3] || 8765;
+const JITTER = +(process.env.JITTER ?? 400);   // мс случайной задержки broadcast
 const now = () => new Date().toISOString();
 const uuid = () => crypto.randomUUID();
 
 const db = {
   users: [], profiles: [], user_keys: [], key_backups: [], conversations: [], conversation_members: [],
   conversation_keys: [], conversation_key_claims: [], messages: [], reactions: [], blocks: [], nodes: [],
-  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [],
+  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [],
 };
 const files = new Map();        // bucket/path -> { bytes, owner, type }
 let msgSeq = 1;
@@ -312,7 +313,11 @@ http.createServer(async (req, res) => {
     case '/api/broadcast': {
       for (const [ocid, c] of clients) {
         if (ocid === cid) continue;
-        for (const s of c.subs) if (s.topic === j.topic && s.kind === 'broadcast' && s.event === j.event) push(ocid, { topic: j.topic, type: 'broadcast', event: j.event, payload: j.payload });
+        // как в жизни: доставка с разной задержкой, порядок сообщений может перепутаться
+        for (const s of c.subs) if (s.topic === j.topic && s.kind === 'broadcast' && s.event === j.event) {
+          const ev = { topic: j.topic, type: 'broadcast', event: j.event, payload: j.payload };
+          setTimeout(() => push(ocid, ev), JITTER ? Math.random() * JITTER : 0);
+        }
       }
       return send(res, 200, { ok: true });
     }

@@ -5,6 +5,6 @@ cd "$(dirname "$0")/.." || exit 1
 V=$(date -u +%Y%m%d%H%M%S)
 printf '{ "v": "%s" }\n' "$V" > version.json
 sed -i -E "s#(js/main\.js|css/styles\.css)\?v=[^\"]*#\1?v=$V#g" index.html
-sed -i -E "s#from '(\./(crypto|net|qr|md|stickers|embeds|call-extras)\.js|\.\./config\.js)\?v=[^']*'#from '\1?v=$V'#" js/main.js
+sed -i -E "s#from '(\./(crypto|net|qr|md|stickers|embeds|call-extras|calls)\.js|\.\./config\.js)\?v=[^']*'#from '\1?v=$V'#" js/main.js
 sed -i -E "s#from '\./crypto\.js\?v=[^']*'#from './crypto.js?v=$V'#" js/net.js
 echo "$V"
