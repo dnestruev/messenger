@@ -1,12 +1,12 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110012431';
-import * as CONFIG from '../config.js?v=20261110012431';
-import * as E2E from './crypto.js?v=20261110012431';
-import { createNet } from './net.js?v=20261110012431';
-import { qrSvg } from './qr.js?v=20261110012431';
-import { findEmbed } from './embeds.js?v=20261110012431';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110012431';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110012431';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110062405';
+import * as CONFIG from '../config.js?v=20261110062405';
+import * as E2E from './crypto.js?v=20261110062405';
+import { createNet } from './net.js?v=20261110062405';
+import { qrSvg } from './qr.js?v=20261110062405';
+import { findEmbed } from './embeds.js?v=20261110062405';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110062405';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110062405';
 
 /* =====================================================================
    Утилиты
@@ -2528,19 +2528,33 @@ function stopCalls() {
 }
 async function outChannel(uid) {
   let ch = callOut.get(uid);
-  if (ch) return ch;
-  ch = sb.channel('call-' + uid);
-  await new Promise((res) => { ch.subscribe((st) => { if (st === 'SUBSCRIBED') res(); }); setTimeout(res, 5000); });
-  callOut.set(uid, ch);
-  return ch;
+  if (!ch) {
+    ch = sb.channel('call-' + uid);
+    callOut.set(uid, ch); // параллельные ICE-сигналы используют одну подписку
+    ch.callReady = new Promise((res, rej) => {
+      const timer = setTimeout(() => rej(new Error('Нет связи с сервером звонков')), 5000);
+      ch.subscribe((st) => {
+        if (st === 'SUBSCRIBED') { clearTimeout(timer); res(); }
+        if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') {
+          clearTimeout(timer); rej(new Error('Нет связи с сервером звонков'));
+        }
+      });
+    });
+  }
+  try { await ch.callReady; return ch; }
+  catch (e) {
+    if (callOut.get(uid) === ch) { callOut.delete(uid); sb.removeChannel(ch); }
+    throw e;
+  }
 }
 async function sendSignal(conv, to, msg) {
   const kv = currentVersion(conv);
   const key = chatKey(conv, kv);
   if (!key) throw new Error('нет ключа');
-  const sealed = await E2E.sealJson(key, { ...msg, ts: Date.now() }, `call|${conv}|${state.me.id}`);
+  const sealed = await E2E.sealJson(key, { ...msg, dev: DEVICE, sid: uuid(), ts: Date.now() }, `call|${conv}|${state.me.id}`);
   const ch = await outChannel(to);
-  await ch.send({ type: 'broadcast', event: 'sig', payload: { from: state.me.id, conv, kv, ...sealed } });
+  const result = await ch.send({ type: 'broadcast', event: 'sig', payload: { from: state.me.id, conv, kv, ...sealed } });
+  if (result !== 'ok') throw new Error('Не удалось отправить сигнал звонка');
 }
 const DEVICE = uuid();                 // эта вкладка: чтобы отличать свои другие устройства
 const endedCalls = new Set();          // завершённые звонки: их запоздавшие повторы offer не должны звонить снова
@@ -2567,21 +2581,66 @@ async function onSignal(env) {
     }
     return;
   }
-  const tag = msg.t + ':' + msg.id + ':' + msg.ts;
+  const tag = msg.sid || JSON.stringify([msg.t, msg.id, msg.ts, msg.dev, msg.candidate]);
   if (seenSignals.has(tag)) return;
   seenSignals.add(tag);
   if (seenSignals.size > 500) seenSignals.clear();
   if (msg.t === 'offer') return endedCalls.has(msg.id) ? undefined : incomingOffer(env.conv, env.from, msg);
-  if (!call || call.id !== msg.id) return;
-  if (msg.t === 'ring' && call.dir === 'out') { call.ringing = true; setCallStatus('Звонит…'); }
+  if (!call || call.id !== msg.id || call.conv !== env.conv || call.peer !== env.from) return;
+  if (msg.t === 'ice') {
+    const cur = call;
+    if (msg.candidate && (!cur.remoteDev || cur.remoteDev === msg.dev)) {
+      (cur.pendingIce ||= []).push({ dev: msg.dev, candidate: msg.candidate });
+      await flushIce(cur);
+    }
+    return;
+  }
+  if (msg.t === 'ring' && call.dir === 'out' && !call.answered) {
+    call.ringing = true; setCallStatus('Звонит…');
+    replayIce(call);
+  }
   if (msg.t === 'answer' && call.dir === 'out' && !call.answered) {
-    call.answered = true;
-    clearInterval(call.resend); stopTone();
+    const cur = call;
+    cur.answered = true;
+    cur.remoteDev = msg.dev;
+    clearInterval(cur.resend); stopTone();
     setCallStatus('Соединяю…');
-    await call.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+    connectionDeadline(cur);
+    try {
+      await cur.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+      await flushIce(cur);
+      replayIce(cur);
+    } catch { if (call === cur) finishCall('failed'); }
   }
   if (msg.t === 'busy') finishCall('busy');
-  if (msg.t === 'end') finishCall(msg.why === 'declined' ? 'declined' : call.connectedAt ? 'ok' : call.dir === 'in' ? 'missed' : 'cancel', { remote: true });
+  if (msg.t === 'end') finishCall(msg.why === 'failed' ? 'failed' : msg.why === 'declined' ? 'declined' : call.connectedAt ? 'ok' : call.dir === 'in' ? 'missed' : 'cancel', { remote: true });
+}
+
+// ICE может прийти раньше SDP; применяем его только после remoteDescription.
+async function flushIce(cur) {
+  if (cur.flushingIce || !cur.pc.remoteDescription || !cur.remoteDev) return;
+  cur.flushingIce = true;
+  try {
+    while (call === cur && cur.pendingIce?.length) {
+      const item = cur.pendingIce.shift();
+      if (item.dev !== cur.remoteDev) continue;
+      const key = JSON.stringify(item.candidate);
+      if ((cur.seenIce ||= new Set()).has(key)) continue;
+      await cur.pc.addIceCandidate(item.candidate);
+      cur.seenIce.add(key);
+    }
+  } finally { cur.flushingIce = false; }
+}
+function replayIce(cur) {
+  for (const candidate of cur.localIce || []) {
+    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, candidate }).catch(() => {});
+  }
+}
+function connectionDeadline(cur) {
+  clearTimeout(cur.connectTimer);
+  cur.connectTimer = setTimeout(() => {
+    if (call === cur && !cur.connectedAt) finishCall('failed');
+  }, 30000);
 }
 
 /** Подсказка в SDP: разрешаем видео до VIDEO_BITRATE (некоторые браузеры иначе держат ~600 кбит/с) */
@@ -2607,19 +2666,26 @@ async function getMedia(video) {
 function makePeer() {
   const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   const remote = new MediaStream();
+  pc.onicecandidate = ({ candidate }) => {
+    const cur = call;
+    if (!candidate || !cur || cur.pc !== pc) return;
+    const data = candidate.toJSON();
+    (cur.localIce ||= []).push(data);
+    sendSignal(cur.conv, cur.peer, { t: 'ice', id: cur.id, candidate: data }).catch(() => {});
+  };
   pc.ontrack = (e) => {
     for (const tr of (e.streams[0]?.getTracks() || [e.track])) if (!remote.getTracks().includes(tr)) remote.addTrack(tr);
-    if (call) { call.ui.remote.srcObject = remote; call.ui.remote.play?.().catch(() => {}); updateCallUi(); }
+    if (call?.pc === pc) { call.ui.remote.srcObject = remote; call.ui.remote.play?.().catch(() => {}); updateCallUi(); }
   };
   pc.onconnectionstatechange = () => {
     if (!call || call.pc !== pc) return;
     const st = pc.connectionState;
     if (st === 'connected') {
-      clearTimeout(call.lostTimer);
+      clearTimeout(call.lostTimer); clearTimeout(call.connectTimer);
       if (!call.connectedAt) { call.connectedAt = Date.now(); stopTone(); call.clock = setInterval(updateCallUi, 1000); tuneSenders(pc); }
       updateCallUi();
     }
-    if (st === 'disconnected') { setCallStatus('Связь пропала…'); call.lostTimer = setTimeout(() => finishCall(call?.connectedAt ? 'ok' : 'failed'), 10000); }
+    if (st === 'disconnected') { const cur = call; clearTimeout(cur.lostTimer); setCallStatus('Связь пропала…'); cur.lostTimer = setTimeout(() => { if (call === cur) finishCall(cur.connectedAt ? 'ok' : 'failed'); }, 10000); }
     if (st === 'failed') finishCall('failed');
   };
   return { pc, remote };
@@ -2635,6 +2701,7 @@ async function startCall(video) {
   if (!hasCurrentKey(c.id)) return toast('Ещё нет ключа шифрования — дождитесь, пока собеседник откроет приложение');
   let local;
   try { local = await getMedia(video); } catch (e) { return toast(e.message); }
+  if (call) { local.getTracks().forEach((t) => t.stop()); return; }
   video = local.getVideoTracks().length > 0;
   const id = uuid();
   const { pc, remote } = makePeer();
@@ -2654,7 +2721,7 @@ async function startCall(video) {
     offer();
     call.resend = setInterval(offer, 3000);                 // повторяем, пока собеседник не откроет приложение
     call.giveUp = setTimeout(() => { if (call?.id === id && !call.answered) finishCall('missed'); }, RING_TIMEOUT);
-  } catch { finishCall('failed'); }
+  } catch { if (call?.id === id) finishCall('failed'); }
 }
 
 async function incomingOffer(conv, from, msg) {
@@ -2664,7 +2731,7 @@ async function incomingOffer(conv, from, msg) {
   }
   if (state.blocked.has(from)) return;
   const { pc, remote } = makePeer();
-  call = { id: msg.id, conv, peer: from, video: !!msg.video, dir: 'in', pc, remote, offer: msg.sdp, startedAt: Date.now() };
+  call = { id: msg.id, conv, peer: from, video: !!msg.video, dir: 'in', pc, remote, offer: msg.sdp, remoteDev: msg.dev, startedAt: Date.now() };
   sendSignal(conv, from, { t: 'ring', id: msg.id }).catch(() => {});
   showCallUi();
   setCallStatus(msg.video ? 'Входящий видеозвонок' : 'Входящий звонок');
@@ -2674,6 +2741,7 @@ async function incomingOffer(conv, from, msg) {
   if ((document.hidden || !document.hasFocus()) && 'Notification' in window && Notification.permission === 'granted') {
     try { (swReg || await navigator.serviceWorker.ready).showNotification(nameOf(from), { body: msg.video ? 'Входящий видеозвонок' : 'Входящий звонок', tag: 'call', renotify: true, requireInteraction: true, data: { conv } }); } catch {}
   }
+  if (call?.id !== msg.id) return;
   call.giveUp = setTimeout(() => { if (call?.id === msg.id && !call.answered) finishCall('missed'); }, RING_TIMEOUT);
 }
 
@@ -2685,16 +2753,20 @@ async function acceptCall(withVideo) {
   stopTitle();
   setCallStatus('Соединяю…');
   tellMyDevices(cur.conv, cur.id).catch(() => {});
+  connectionDeadline(cur);
   try {
     cur.local = await getMedia(withVideo && cur.video);
     if (call !== cur) { cur.local.getTracks().forEach((t) => t.stop()); return; }
     cur.local.getTracks().forEach((t) => cur.pc.addTrack(t, cur.local));
     await cur.pc.setRemoteDescription({ type: 'offer', sdp: cur.offer });
+    await flushIce(cur);
     await cur.pc.setLocalDescription(await cur.pc.createAnswer());
     await gathered(cur.pc);
+    if (call !== cur) return;
+    connectionDeadline(cur);
     await sendSignal(cur.conv, cur.peer, { t: 'answer', id: cur.id, sdp: withBitrate(cur.pc.localDescription.sdp) });
     updateCallUi();
-  } catch (e) { toast(e.message || 'Не получилось ответить'); finishCall('failed'); }
+  } catch (e) { if (call === cur) { toast(e.message || 'Не получилось ответить'); finishCall('failed'); } }
 }
 
 function hangUp(why = 'hangup') {
@@ -2709,7 +2781,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   if (!cur) return;
   call = null;
   endedCalls.add(cur.id);
-  clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer);
+  clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer);
   cur.unfit?.();
   stopTone();
   stopTitle();
@@ -2718,6 +2790,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   navigator.vibrate?.(0);
   cur.local?.getTracks().forEach((t) => t.stop());
   try { cur.pc.close(); } catch {}
+  if (!remote && status === 'failed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'failed' }).catch(() => {});
   if (!remote && !cur.answered && cur.dir === 'out' && status === 'missed') sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: 'timeout' }).catch(() => {});
   const dur = cur.connectedAt ? Math.round((Date.now() - cur.connectedAt) / 1000) : 0;
   const text = { ok: 'Звонок завершён · ' + fmtDur(dur), missed: cur.dir === 'out' ? 'Нет ответа' : 'Пропущенный звонок', declined: cur.dir === 'out' ? 'Звонок отклонён' : 'Вы отклонили звонок',
