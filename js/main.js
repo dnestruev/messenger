@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110120235';
-import * as CONFIG from '../config.js?v=20261110120235';
-import * as E2E from './crypto.js?v=20261110120235';
-import { createNet } from './net.js?v=20261110120235';
-import { qrSvg } from './qr.js?v=20261110120235';
-import { findEmbed } from './embeds.js?v=20261110120235';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110120235';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110120235';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110120235';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110123500';
+import * as CONFIG from '../config.js?v=20261110123500';
+import * as E2E from './crypto.js?v=20261110123500';
+import { createNet } from './net.js?v=20261110123500';
+import { qrSvg } from './qr.js?v=20261110123500';
+import { findEmbed } from './embeds.js?v=20261110123500';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110123500';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261110123500';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110123500';
 
 /* =====================================================================
    Утилиты
@@ -2780,6 +2780,14 @@ async function startCallInbox() {
   clearInterval(iceTimer);
   iceTimer = setInterval(refreshIce, 4 * 60 * 1000);
 }
+function reviveCalls() {
+  if (!state.me) return;
+  if (!callInbox || callInbox.state !== 'joined') startCallInbox();
+  else refreshIce();
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reviveCalls(); });
+addEventListener('online', reviveCalls);
+addEventListener('pageshow', (e) => { if (e.persisted) reviveCalls(); });
 function stopCalls() {
   if (call) finishCall('cancel', { silent: true });
   clearTimeout(inboxRetry); clearInterval(iceTimer);
@@ -3198,13 +3206,22 @@ function stopTitle(orig = flashTitle.orig) {
   if (state.me) renderChats();
 }
 
-/* ---------- Гудки ---------- */
-let tone = null;
+/* ---------- Гудки ----------
+   Один общий AudioContext: iOS даёт создать лишь несколько, и звук разрешает только после касания —
+   поэтому «разблокируем» его при первом касании экрана, чтобы входящий звонок звенел. */
+let toneCtx = null, tone = null;
+function sharedAudio() {
+  try { toneCtx ||= new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
+  if (toneCtx.state === 'suspended') toneCtx.resume().catch(() => {});
+  return toneCtx;
+}
+for (const ev of ['pointerdown', 'touchend', 'keydown']) addEventListener(ev, () => sharedAudio(), { passive: true });
 function startTone(kind) {
   stopTone();
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const beep = () => {
+  const ctx = sharedAudio();
+  if (!ctx) return;
+  const beep = () => {
+    try {
       const t = ctx.currentTime;
       const notes = kind === 'in' ? [[0, 660], [0.18, 880], [0.36, 660], [0.54, 880]] : [[0, 425]];
       for (const [d, f] of notes) {
@@ -3217,12 +3234,12 @@ function startTone(kind) {
         o.connect(g).connect(ctx.destination);
         o.start(t + d); o.stop(t + d + len + 0.05);
       }
-    };
-    beep();
-    tone = { ctx, timer: setInterval(beep, kind === 'in' ? 1600 : 4000) };
-  } catch {}
+    } catch {}
+  };
+  beep();
+  tone = { timer: setInterval(beep, kind === 'in' ? 1600 : 4000) };
 }
-function stopTone() { if (!tone) return; clearInterval(tone.timer); tone.ctx.close().catch(() => {}); tone = null; }
+function stopTone() { if (!tone) return; clearInterval(tone.timer); tone = null; }
 
 /* ---------- Запись о звонке в чате ---------- */
 function callLabel(cl, mine) {
@@ -3593,18 +3610,18 @@ async function addMessage(m, fromServer = false) {
 /* =====================================================================
    Звук и push
    ===================================================================== */
-let audioCtx = null;
 function ding() {
   try {
-    audioCtx ||= new AudioContext();
-    const t = audioCtx.currentTime;
+    const ctx = sharedAudio();             // общий с гудками; на старых Safari — webkitAudioContext
+    if (!ctx) return;
+    const t = ctx.currentTime;
     for (const [delay, freq] of [[0, 880], [0.12, 1320]]) {
-      const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
       osc.frequency.value = freq;
       gain.gain.setValueAtTime(0.0001, t + delay);
       gain.gain.exponentialRampToValueAtTime(0.16, t + delay + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, t + delay + 0.25);
-      osc.connect(gain).connect(audioCtx.destination);
+      osc.connect(gain).connect(ctx.destination);
       osc.start(t + delay);
       osc.stop(t + delay + 0.3);
     }
