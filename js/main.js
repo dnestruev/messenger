@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111132400';
-import * as CONFIG from '../config.js?v=20261111132400';
-import * as E2E from './crypto.js?v=20261111132400';
-import { createNet } from './net.js?v=20261111132400';
-import { qrSvg } from './qr.js?v=20261111132400';
-import { findEmbed } from './embeds.js?v=20261111132400';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111132400';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111132400';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111132400';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111180741';
+import * as CONFIG from '../config.js?v=20261111180741';
+import * as E2E from './crypto.js?v=20261111180741';
+import { createNet } from './net.js?v=20261111180741';
+import { qrSvg } from './qr.js?v=20261111180741';
+import { findEmbed } from './embeds.js?v=20261111180741';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111180741';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111180741';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111180741';
 
 /* =====================================================================
    Утилиты
@@ -123,6 +123,16 @@ function humanError(err) {
     [/cannot ban your level/i, 'Нельзя банить себя и тех, кто равен или старше по правам'],
     [/cannot ban a creator/i, 'Создателя забанить нельзя'],
     [/ban was set by someone higher/i, 'Этот бан поставил старший — снять или изменить его может только он или создатель'],
+    [/limited sold out/i, 'Этот статус уже разобрали — посмотрите во вкладке «С рук»'],
+    [/order already pending/i, 'Ваша заявка на этот статус уже ждёт проверки'],
+    [/too many pending orders/i, 'У вас уже 3 заявки на проверке — дождитесь ответа'],
+    [/bad proof/i, 'Напишите, как найти ваш донат: ссылку или имя и время (от 5 до 300 символов)'],
+    [/item reserved/i, 'На этот экземпляр уже есть заявка — дождитесь решения'],
+    [/not for sale/i, 'Этот экземпляр уже не продаётся'],
+    [/own item/i, 'Это ваш собственный статус'],
+    [/listing changed/i, 'Этот экземпляр уже не продаётся'],
+    [/bad price/i, 'Цена — от 100 до 10 000 000 ₽'],
+    [/total below sold/i, 'Тираж не может быть меньше, чем уже продано'],
     [/only creators/i, 'Недостаточно прав (или срок прав модератора закончился)'],
     [/user is banned|banned/i, 'Аккаунт заблокирован'],
     [/username taken/i, 'Этот ник занят'],
@@ -363,7 +373,34 @@ const BADGE = {
   donor: { icon: 'heart', label: 'Донатер' },
   relay: { icon: 'relay', label: 'Связь' },
   bro: { icon: 'sparkle', label: 'Реальный бро' },
+  bee: { icon: 'bee', label: 'Любитель пчёлок' },
 };
+/** Лимитированные статусы из магазина: от дешёвого к дорогому. Цена и тираж — в базе (limited_kinds) */
+const LIMITED = [
+  ['l_spark', 'Искра', 'bolt', 'С неё всё начинается. Маленькая, но своя.'],
+  ['l_owl', 'Ночная сова', 'moon', 'Онлайн в три ночи — это про него.'],
+  ['l_coffee', 'Кофеин', 'cup', 'Работает на кофе и упрямстве.'],
+  ['l_pond', 'Тихий омут', 'drop', 'Молчит в чате, но всё читает.'],
+  ['l_bug', 'Ловец багов', 'bug', 'Находит то, что сломалось, раньше остальных.'],
+  ['l_vibe', 'Вайб', 'wave', 'С ним в чате просто приятно.'],
+  ['l_neon', 'Неон', 'ring', 'Светится, даже когда не в сети.'],
+  ['l_comet', 'Комета', 'comet', 'Появляется редко, зато ярко.'],
+  ['l_storm', 'Шторм', 'storm', 'Когда он пишет — чат оживает.'],
+  ['l_ice', 'Ледяной', 'snow', 'Спокоен в любом споре.'],
+  ['l_flame', 'Пламя', 'flame', 'Горит идеей и поджигает других.'],
+  ['l_ghost', 'Призрак', 'ghost', 'Был в сети… или показалось?'],
+  ['l_diamond', 'Алмаз', 'gem', 'Редкий, твёрдый, с характером.'],
+  ['l_eclipse', 'Затмение', 'eclipse', 'Рядом с ним остальные значки меркнут.'],
+  ['l_legend', 'Легенда', 'star', 'О нём рассказывают новичкам.'],
+  ['l_astro', 'Космонавт', 'rocket', 'Давно улетел выше всех.'],
+  ['l_phoenix', 'Феникс', 'wing', 'Сколько ни падал — поднимался.'],
+  ['l_emperor', 'Император', 'crown', 'Таких на весь мессенджер единицы.'],
+  ['l_hole', 'Чёрная дыра', 'spiral', 'Притягивает всё внимание.'],
+  ['l_absolute', 'Абсолют', 'infinity', 'Самый редкий статус мессенджера. Выше некуда.'],
+].map(([kind, name, ic, text]) => ({ kind, name, icon: ic, text }));
+const LIMITED_BY = new Map(LIMITED.map((l) => [l.kind, l]));
+for (const l of LIMITED) BADGE[l.kind] = { icon: l.icon, label: l.name, cls: 'ltd ' + l.kind.replace('_', '-') };
+const rub = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 /** Информация о подтверждённых статусах пользователя. Права определяет база, не значок. */
 const STATUS_INFO = {
   creator: {
@@ -418,6 +455,12 @@ const STATUS_INFO = {
     benefits: ['Единственный в мире значок «Реальный бро»', 'Вечный — его нельзя снять', 'Респект от создателя 🤝'],
     how: 'Никак: он выпущен в одном экземпляре и уже занят.',
   },
+  bee: {
+    label: 'Любитель пчёлок',
+    description: 'Он пчёлок уважает.',
+    benefits: ['Единственный в мире значок «Любитель пчёлок»', 'Вечный — его нельзя снять', 'Пчёлки уважают в ответ 🐝'],
+    how: 'Никак: он выпущен в одном экземпляре и уже занят.',
+  },
   relay: {
     label: 'Связь',
     description: 'Подключил свой TURN-сервер: через него проходят звонки, когда телефоны не могут соединиться напрямую.',
@@ -432,6 +475,12 @@ const STATUS_INFO = {
 };
 
 /** Проверка выполняется по свежим данным Supabase, а не по надписи в браузере. */
+for (const l of LIMITED) STATUS_INFO[l.kind] = {
+  label: l.name,
+  description: l.text,
+  benefits: ['Лимитированный статус: выпущен ограниченным тиражом', 'У каждого экземпляра свой номер', 'Можно продать другому человеку через магазин'],
+  how: 'Купить в магазине: Настройки → «Магазин лимиток». Когда тираж закончится — только с рук.',
+};
 async function openStatusInfo(uid, kind) {
   const info = STATUS_INFO[kind];
   if (!info || !state.me) return;
@@ -485,7 +534,8 @@ async function openStatusInfo(uid, kind) {
     if (!overlay.isConnected) return;
     status.classList.add(confirmed ? 'is-ok' : 'is-bad');
     status.textContent = !confirmed ? 'Статус не подтверждён: он мог измениться. Обновите страницу.'
-      : kind === 'bro' ? '✓ Подтверждено сервером: единственный такой значок в мессенджере'
+      : kind === 'bro' || kind === 'bee' ? '✓ Подтверждено сервером: единственный такой значок в мессенджере'
+      : LIMITED_BY.has(kind) ? '✓ Подтверждено сервером: лимитированный статус действителен'
       : granted && kind !== 'donor' ? '✓ Подтверждено сервером: значок выдан создателем'
       : '✓ Подтверждено сервером: статус действителен';
   } catch (err) {
@@ -525,6 +575,8 @@ function badgeKinds(id, all = false) {
     r && BADGE[r] ? r : null,
     r === 'creator' ? null : b.has('senior') ? 'senior' : b.has('moderator') ? 'moderator' : null,
     b.has('bro') ? 'bro' : null,
+    b.has('bee') ? 'bee' : null,
+    ...LIMITED.filter((l) => b.has(l.kind)).map((l) => l.kind).reverse(),   // дорогие первыми
     r !== 'tester' && b.has('tester') ? 'tester' : null,
     tier || (k === 'plus' || b.has('plus') ? 'plus' : null),
     b.has('relay') ? 'relay' : null,
@@ -4592,6 +4644,7 @@ function openSettings() {
     perksSection(msg),
     callsHelpSection(),
     donateSection(msg),
+    shopSection(),
     section('Оформление',
       segmented([['classic', 'Обычный'], ['dot', 'Dot'], ['aurora', 'Аврора']], prefs.style, (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })),
       segmented([['light', 'Светлая'], ['dark', 'Тёмная'], ['auto', 'Авто']], prefs.mode, (v) => { prefs.mode = v; savePrefs(); applyTheme(); })),
@@ -4934,6 +4987,194 @@ function changeNickDialog() {
 }
 
 /* ---------- Админка (только создатель): люди, роли, значки, бан, статистика ---------- */
+/* ---------- Магазин лимитированных статусов. Деньги приложение не видит: человек платит донатом,
+   присылает подтверждение, создатель проверяет и выдаёт. Перепродажа — напрямую между людьми: продавец сам
+   подтверждает, что получил деньги, и статус переходит. Комиссии нет. ---------- */
+const shopOld = (error) => /limited_/i.test(error?.message || '') && /function|schema cache|does not exist/i.test(error?.message || '');
+function shopSection() {
+  return section('Магазин лимиток',
+    h('div', { class: 'row' },
+      h('div', { class: 'row-text' },
+        h('b', {}, icon('gem'), ' Лимитированные статусы'),
+        h('small', { text: '20 редких значков к нику. Тираж ограничен: разберут — останется только с рук.' })),
+      h('button', { class: 'btn btn-primary', type: 'button', text: 'Открыть', onclick: () => openShop() })));
+}
+function openShop(tab = 'shop') {
+  const creator = roleOf(state.me.id) === 'creator';
+  const body = h('div', { class: 'shop' });
+  const tabsList = [['shop', 'Витрина'], ['market', 'С рук'], ['mine', 'Мои'], creator ? ['orders', 'Заявки'] : null].filter(Boolean);
+  const fail = (error) => body.replaceChildren(h('p', { class: 'muted', text: shopOld(error) ? 'Магазин заработает после обновления сервера (update-19)' : humanError(error) }));
+  const card = (kind, ...rest) => h('div', { class: 'shop-card' }, h('div', { class: 'shop-badge' }, badgeEl(kind)), ...rest.filter(Boolean));
+  const draw = async (v) => {
+    tab = v;
+    body.replaceChildren(h('p', { class: 'muted', text: 'Загружаю…' }));
+    if (v === 'shop') {
+      const { data, error } = await sb.rpc('limited_catalog');
+      if (error) return fail(error);
+      body.replaceChildren(h('p', { class: 'muted shop-hint', text: 'Статус — это украшение к нику, прав он не даёт. Оплата — донатом, выдаёт создатель после проверки. Возврата нет.' }),
+        ...(data || []).slice().reverse().filter((r) => LIMITED_BY.has(r.kind)).map((r) => {
+          const l = LIMITED_BY.get(r.kind), left = Math.max(0, r.total - r.sold - r.pending);
+          return card(r.kind,
+            h('small', { text: l.text }),
+            h('div', { class: 'shop-line' }, h('b', { text: rub(r.price) }),
+              h('small', { class: left ? '' : 'sold-out', text: left ? `осталось ${left} из ${r.total}` : r.sold >= r.total ? `все ${r.total} разобраны` : 'все в заявках' })),
+            h('div', { class: 'shop-actions' },
+              left ? h('button', { class: 'btn btn-primary', type: 'button', text: 'Купить', onclick: () => buyDialog({ kind: r.kind, price: r.price }, () => openShop('mine')) })
+                : h('button', { class: 'btn', type: 'button', text: 'Искать с рук', onclick: () => draw('market') }),
+              creator ? h('button', { class: 'btn', type: 'button', text: 'Изменить', onclick: () => editLimited(r, () => openShop('shop')) }) : null));
+        }));
+    } else if (v === 'market') {
+      const { data, error } = await sb.rpc('limited_market');
+      if (error) return fail(error);
+      await loadPeople((data || []).map((r) => r.seller));
+      body.replaceChildren(h('p', { class: 'muted shop-hint', text: 'Здесь люди продают свои статусы друг другу. Об оплате вы договариваетесь с продавцом сами — он передаёт статус кнопкой, когда получит деньги. Создатель за такие сделки не отвечает: покупайте у тех, кому доверяете.' }),
+        ...(data || []).filter((r) => LIMITED_BY.has(r.kind)).map((r) => card(r.kind,
+          h('small', { text: `№${r.serial} · продаёт ${nickOf(r.seller)}` }),
+          h('div', { class: 'shop-line' }, h('b', { text: rub(r.price) }), r.reserved ? h('small', { class: 'sold-out', text: 'уже в заявке' }) : null),
+          r.seller === state.me.id || r.reserved ? null
+            : h('button', { class: 'btn btn-primary', type: 'button', text: 'Купить', onclick: () => buyDialog({ kind: r.kind, price: r.price, item: r.item_id, serial: r.serial, seller: r.seller }, () => openShop('mine')) })))
+          .concat(data?.length ? [] : [h('p', { class: 'muted', text: 'Пока никто ничего не продаёт' })]));
+    } else if (v === 'mine') {
+      const [it, od, rq] = await Promise.all([sb.rpc('limited_mine'), sb.rpc('limited_my_orders'), sb.rpc('limited_requests')]);
+      if (it.error || od.error || rq.error) return fail(it.error || od.error || rq.error);
+      await loadPeople((rq.data || []).map((r) => r.buyer));
+      const decide = async (id, ok) => {
+        const { error } = await sb.rpc('limited_decide', { p_id: id, p_ok: ok, p_note: null });
+        if (error) return toast(humanError(error));
+        toast(ok ? 'Статус передан' : 'Заявка отклонена');
+        await loadPerks().catch(() => {}); renderChats(); draw('mine');
+      };
+      const ST = { pending: 'ждёт проверки', approved: 'выдан', rejected: 'отклонена', cancelled: 'отменена' };
+      body.replaceChildren(
+        ...(rq.data?.length ? [h('b', { text: 'Хотят купить у вас' })] : []),
+        ...(rq.data || []).map((r) => h('div', { class: 'order-card' },
+          h('div', {}, h('b', { text: `${LIMITED_BY.get(r.kind)?.name || r.kind} №${r.serial} · ${rub(r.price)}` })),
+          h('small', { text: `покупатель ${nickOf(r.buyer)} · ${fmtWhen(r.created_at)}` }),
+          r.proof ? h('div', { class: 'order-proof', text: r.proof }) : null,
+          h('small', { class: 'order-pay', text: 'Передавайте только после того, как деньги реально пришли. Отменить передачу нельзя.' }),
+          h('div', { class: 'shop-actions' },
+            h('button', { class: 'btn btn-primary', type: 'button', text: 'Деньги получил — передать', onclick: () => { if (confirm(`Передать статус ${nickOf(r.buyer)}? Вернуть его будет нельзя.`)) decide(r.id, true); } }),
+            h('button', { class: 'btn', type: 'button', text: 'Отказать', onclick: () => decide(r.id, false) })))),
+        h('b', { text: 'Мои статусы' }),
+        ...(it.data || []).filter((r) => LIMITED_BY.has(r.kind)).map((r) => card(r.kind,
+          h('small', { text: `№${r.serial} · с ${fmtDate(r.acquired_at)}` + (r.sale_price ? ` · продаётся за ${rub(r.sale_price)}` : '') + (r.reserved ? ' · на него есть заявка' : '') }),
+          r.reserved ? null : h('div', { class: 'shop-actions' },
+            h('button', { class: 'btn', type: 'button', text: r.sale_price ? 'Изменить цену' : 'Продать', onclick: () => sellDialog(r, () => openShop('mine')) }),
+            r.sale_price ? h('button', { class: 'btn', type: 'button', text: 'Снять с продажи', onclick: async () => {
+              const { error } = await sb.rpc('limited_sell', { p_item: r.item_id, p_price: null });
+              if (error) return toast(humanError(error));
+              draw('mine');
+            } }) : null)))
+          .concat(it.data?.length ? [] : [h('p', { class: 'muted', text: 'Пока ни одного. Загляните на витрину.' })]),
+        h('b', { text: 'Мои заявки' }),
+        ...(od.data || []).map((o) => h('div', { class: 'log-row' },
+          h('span', {}, h('b', { text: LIMITED_BY.get(o.kind)?.name || o.kind }), ` · ${rub(o.price)}${o.resale ? ' · с рук' : ''} · ${ST[o.status] || o.status}` + (o.note ? ` (${o.note})` : '')),
+          h('small', { text: fmtWhen(o.created_at) }),
+          o.status === 'pending' ? h('button', { class: 'btn', type: 'button', text: 'Отменить заявку', onclick: async () => {
+            const { error } = await sb.rpc('limited_cancel', { p_id: o.id });
+            if (error) return toast(humanError(error));
+            draw('mine');
+          } }) : null))
+          .concat(od.data?.length ? [] : [h('p', { class: 'muted', text: 'Заявок нет' })]));
+    } else {
+      const { data, error } = await sb.rpc('limited_orders_admin', { p_all: false });
+      if (error) return fail(error);
+      const act = async (fn, args) => {
+        const { error: e } = await sb.rpc(fn, args);
+        if (e) return toast(humanError(e));
+        await loadPerks().catch(() => {}); renderChats(); draw('orders');
+      };
+      body.replaceChildren(h('p', { class: 'muted shop-hint', text: 'Проверьте, что донат на эту сумму действительно пришёл, и только потом выдавайте. Сделки «с рук» сюда не попадают — их подтверждает продавец.' }),
+        ...(data || []).map((o) => {
+          const link = /^https:\/\/[^\s]+$/i.test(o.proof) ? h('a', { href: o.proof, target: '_blank', rel: 'noopener noreferrer', text: o.proof }) : h('span', { text: o.proof });
+          return h('div', { class: 'order-card' },
+            h('div', {}, h('b', { text: `${LIMITED_BY.get(o.kind)?.name || o.kind} · ${rub(o.price)}` })),
+            h('small', { text: `покупатель @${o.buyer || '—'} · ${fmtWhen(o.created_at)}` }),
+            h('div', { class: 'order-proof' }, link),
+            h('div', { class: 'shop-actions' },
+              h('button', { class: 'btn btn-primary', type: 'button', text: 'Деньги пришли — выдать', onclick: () => act('limited_decide', { p_id: o.id, p_ok: true, p_note: null }) }),
+              h('button', { class: 'btn', type: 'button', text: 'Отклонить', onclick: () => {
+                const why = h('input', { placeholder: 'Причина (увидит покупатель)', maxLength: 200 });
+                openModal({ title: 'Отклонить заявку' }, why,
+                  h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Отклонить', onclick: async () => { await act('limited_decide', { p_id: o.id, p_ok: false, p_note: why.value.trim() || null }); openShop('orders'); } }),
+                  h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: () => openShop('orders') }));
+              } })));
+        }).concat(data?.length ? [] : [h('p', { class: 'muted', text: 'Новых заявок нет' })]));
+    }
+  };
+  openModal({ title: 'Магазин лимиток' }, segmented(tabsList, tab, (v) => draw(v)), body,
+    h('button', { class: 'btn btn-block', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
+  draw(tab);
+}
+function buyDialog({ kind, price, item = null, serial = null, seller = null }, done) {
+  const l = LIMITED_BY.get(kind), url = state.settings.donate_url;
+  if (item) {
+    const text = h('textarea', { rows: 2, maxLength: 300, placeholder: 'Сообщение продавцу (необязательно)' });
+    const m = note();
+    return openModal({ title: 'Покупка с рук' },
+      h('div', { class: 'shop-card' }, h('div', { class: 'shop-badge' }, badgeEl(kind)), h('small', { text: `Экземпляр №${serial} · продаёт ${nickOf(seller)}` }), h('div', { class: 'shop-line' }, h('b', { text: rub(price) }))),
+      h('ol', { class: 'shop-steps' },
+        h('li', { text: 'Отправьте заявку — продавец увидит её у себя в магазине.' }),
+        h('li', { text: `Напишите продавцу ${nickOf(seller)} и договоритесь, как оплатить.` }),
+        h('li', { text: 'Когда он получит деньги, он нажмёт «Передать» — статус станет вашим.' })),
+      h('small', { class: 'muted', text: 'Это сделка между вами и продавцом: создатель деньги не принимает и не возвращает. Покупайте у тех, кому доверяете.' }),
+      text, m,
+      h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Отправить заявку продавцу', onclick: async (e) => {
+        e.target.disabled = true;
+        const { error } = await sb.rpc('limited_order', { p_kind: null, p_item: item, p_proof: text.value.trim() });
+        e.target.disabled = false;
+        if (error) return say(m, humanError(error));
+        toast('Заявка отправлена продавцу'); done();
+      } }),
+      h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: () => openShop('market') }));
+  }
+  const proof = h('textarea', { rows: 3, maxLength: 300, placeholder: 'Ссылка на донат или: имя в донате, сумма и время' });
+  const msg = note();
+  openModal({ title: 'Покупка статуса' },
+    h('div', { class: 'shop-card' }, h('div', { class: 'shop-badge' }, badgeEl(kind)), h('small', { text: l.text }), h('div', { class: 'shop-line' }, h('b', { text: rub(price) }))),
+    h('ol', { class: 'shop-steps' },
+      h('li', {}, `Отправьте донат на ${rub(price)} — ровно эту сумму. `, url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Открыть страницу оплаты' }) : 'Ссылку на оплату спросите у @deltaofishal.'),
+      h('li', { text: 'В сообщении к донату напишите свой ник в мессенджере.' }),
+      h('li', { text: 'Вставьте сюда ссылку или опишите донат, чтобы создатель его нашёл.' }),
+      h('li', { text: 'Создатель проверит оплату и выдаст статус. Обычно в течение суток.' })),
+    proof, msg,
+    h('small', { class: 'muted', text: 'Возврата нет. Статус — украшение, а не вложение денег.' }),
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Я оплатил — отправить заявку', onclick: async (e) => {
+      e.target.disabled = true;
+      const { error } = await sb.rpc('limited_order', { p_kind: kind, p_item: null, p_proof: proof.value.trim() });
+      e.target.disabled = false;
+      if (error) return say(msg, humanError(error));
+      toast('Заявка отправлена — ждите проверки');
+      done();
+    } }),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: () => openShop('shop') }));
+}
+function sellDialog(r, done) {
+  const price = h('input', { type: 'number', inputMode: 'numeric', min: 100, placeholder: 'Цена в рублях', value: r.sale_price || '' });
+  const msg = note();
+  openModal({ title: 'Продать статус' },
+    h('div', { class: 'shop-card' }, h('div', { class: 'shop-badge' }, badgeEl(r.kind)), h('small', { text: `Экземпляр №${r.serial}` })),
+    h('small', { class: 'muted', text: 'Статус появится во вкладке «С рук». Покупатель пришлёт заявку, об оплате договоритесь с ним сами. Получили деньги — нажмите «Передать» в «Мои». Комиссии нет.' }),
+    price, msg,
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Выставить на продажу', onclick: async () => {
+      const { error } = await sb.rpc('limited_sell', { p_item: r.item_id, p_price: Math.floor(+price.value || 0) });
+      if (error) return say(msg, humanError(error));
+      toast('Выставлено на продажу'); done();
+    } }),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: done }));
+}
+function editLimited(r, done) {
+  const price = h('input', { type: 'number', inputMode: 'numeric', min: 1, value: r.price }), total = h('input', { type: 'number', inputMode: 'numeric', min: r.sold, value: r.total });
+  const msg = note();
+  openModal({ title: LIMITED_BY.get(r.kind).name + ': цена и тираж' },
+    h('label', {}, h('small', { text: 'Цена, ₽' }), price), h('label', {}, h('small', { text: `Тираж (продано ${r.sold})` }), total), msg,
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Сохранить', onclick: async () => {
+      const { error } = await sb.rpc('limited_set', { p_kind: r.kind, p_price: Math.floor(+price.value || 0), p_total: Math.floor(+total.value || 0) });
+      if (error) return say(msg, humanError(error));
+      done();
+    } }),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: done }));
+}
 function adminSection() {
   const lvl = modLevel();
   return section(lvl === 3 ? 'Админка (видно только вам)' : 'Модерация (видно только вам)',

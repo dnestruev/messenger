@@ -25,6 +25,8 @@ const isMember = (uid, conv) => db.conversation_members.some((m) => m.conversati
 const conv = (id) => db.conversations.find((c) => c.id === id);
 const prof = (id) => db.profiles.find((p) => p.id === id);
 const fail = (message, code = 400) => ({ error: { message, code }, status: code });
+/** магазин лимиток: создаётся заново после сброса базы */
+const LTD = () => (db.limited?.kinds ? db.limited : db.limited = { kinds: [['l_spark', 700, 100], ['l_owl', 900, 90], ['l_coffee', 1200, 80], ['l_pond', 1500, 70], ['l_bug', 1800, 60], ['l_vibe', 2200, 50], ['l_neon', 2700, 45], ['l_comet', 3200, 40], ['l_storm', 3800, 35], ['l_ice', 4500, 30], ['l_flame', 5200, 25], ['l_ghost', 6000, 20], ['l_diamond', 7000, 15], ['l_eclipse', 8000, 12], ['l_legend', 9500, 10], ['l_astro', 11000, 8], ['l_phoenix', 13000, 6], ['l_emperor', 15000, 5], ['l_hole', 17500, 3], ['l_absolute', 20000, 1]].map(([kind, price, total]) => ({ kind, price, total })), items: [], orders: [] });
 
 /* ---------- события ---------- */
 function push(cid, ev) {
@@ -360,11 +362,76 @@ const RPC = {
     if (p_on) db.badge_grants.push({ user_id: p.id, kind: p_kind, since: now() });
     return null;
   },
+  // ---- магазин лимиток (update-19) ----
+  limited_catalog: () => LTD().kinds.map((k) => ({ kind: k.kind, price: k.price, total: k.total, sold: LTD().items.filter((i) => i.kind === k.kind).length,
+    pending: LTD().orders.filter((o) => o.kind === k.kind && o.status === 'pending' && !o.resale).length })),
+  limited_market: () => LTD().items.filter((i) => i.sale_price != null).map((i) => ({ item_id: i.id, kind: i.kind, serial: i.serial, seller: i.owner, price: i.sale_price,
+    reserved: LTD().orders.some((o) => o.item_id === i.id && o.status === 'pending') })),
+  limited_mine: (uid) => LTD().items.filter((i) => i.owner === uid).map((i) => ({ item_id: i.id, kind: i.kind, serial: i.serial, sale_price: i.sale_price, acquired_at: i.acquired_at,
+    reserved: LTD().orders.some((o) => o.item_id === i.id && o.status === 'pending') })),
+  limited_my_orders: (uid) => LTD().orders.filter((o) => o.buyer === uid).map((o) => ({ id: o.id, kind: o.kind, resale: o.resale, price: o.price, status: o.status, note: o.note, created_at: o.created_at })).reverse(),
+  limited_requests: (uid) => LTD().orders.filter((o) => o.resale && o.status === 'pending' && o.seller === uid).map((o) => ({ id: o.id, kind: o.kind, serial: LTD().items.find((i) => i.id === o.item_id)?.serial, buyer: o.buyer, price: o.price, proof: o.proof, created_at: o.created_at })),
+  limited_order: (uid, { p_kind, p_item, p_proof }) => {
+    const L = LTD(), proof = String(p_proof || '').trim();
+    if (proof.length > 300 || (p_item == null && proof.length < 5)) return fail('bad proof');
+    if (L.orders.filter((o) => o.buyer === uid && o.status === 'pending').length >= 3) return fail('too many pending orders');
+    const o = { id: L.orders.length + 1, buyer: uid, proof, status: 'pending', note: null, created_at: now(), resale: false, seller: null, item_id: null };
+    if (p_item == null) {
+      const k = L.kinds.find((x) => x.kind === p_kind);
+      if (!k) return fail('no such limited');
+      if (L.orders.some((x) => x.buyer === uid && x.kind === k.kind && x.status === 'pending' && !x.resale)) return fail('order already pending');
+      if (L.items.filter((i) => i.kind === k.kind).length + L.orders.filter((x) => x.kind === k.kind && x.status === 'pending' && !x.resale).length >= k.total) return fail('limited sold out');
+      Object.assign(o, { kind: k.kind, price: k.price });
+    } else {
+      const it = L.items.find((i) => i.id === p_item);
+      if (!it || it.sale_price == null) return fail('not for sale');
+      if (it.owner === uid) return fail('own item');
+      if (L.orders.some((x) => x.item_id === it.id && x.status === 'pending')) return fail('item reserved');
+      Object.assign(o, { kind: it.kind, price: it.sale_price, resale: true, seller: it.owner, item_id: it.id });
+    }
+    L.orders.push(o); return o.id;
+  },
+  limited_cancel: (uid, { p_id }) => { const o = LTD().orders.find((x) => x.id === p_id && x.buyer === uid && x.status === 'pending'); if (!o) return fail('order not found'); o.status = 'cancelled'; return null; },
+  limited_sell: (uid, { p_item, p_price }) => {
+    const it = LTD().items.find((i) => i.id === p_item && i.owner === uid);
+    if (!it) return fail('item not found');
+    if (LTD().orders.some((x) => x.item_id === it.id && x.status === 'pending')) return fail('item reserved');
+    if (p_price != null && (p_price < 100 || p_price > 10000000)) return fail('bad price');
+    it.sale_price = p_price ?? null; return null;
+  },
+  limited_orders_admin: (uid, { p_all }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    return LTD().orders.filter((o) => !o.resale && (p_all || o.status === 'pending')).map((o) => ({ id: o.id, kind: o.kind, buyer: prof(o.buyer)?.username, price: o.price, proof: o.proof, status: o.status, note: o.note, created_at: o.created_at }));
+  },
+  limited_decide: (uid, { p_id, p_ok, p_note }) => {
+    const L = LTD(), o = L.orders.find((x) => x.id === p_id && x.status === 'pending');
+    if (!o || !(o.resale ? o.seller === uid : prof(uid)?.role === 'creator')) return fail('order not found');
+    if (!p_ok) { o.status = 'rejected'; o.note = p_note || null; return null; }
+    if (!o.resale) {
+      const k = L.kinds.find((x) => x.kind === o.kind), same = L.items.filter((i) => i.kind === o.kind);
+      if (same.length >= k.total) return fail('limited sold out');
+      const it = { id: L.items.length + 1, kind: o.kind, serial: Math.max(0, ...same.map((i) => i.serial)) + 1, owner: o.buyer, sale_price: null, acquired_at: now() };
+      L.items.push(it); o.item_id = it.id;
+    } else {
+      const it = L.items.find((i) => i.id === o.item_id);
+      if (!it || it.owner !== o.seller || it.sale_price == null) return fail('listing changed');
+      Object.assign(it, { owner: o.buyer, sale_price: null, acquired_at: now() });
+    }
+    o.status = 'approved'; return null;
+  },
+  limited_set: (uid, { p_kind, p_price, p_total }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    const k = LTD().kinds.find((x) => x.kind === p_kind);
+    if (!k) return fail('no such limited');
+    if (p_total < LTD().items.filter((i) => i.kind === p_kind).length) return fail('total below sold');
+    k.price = p_price; k.total = p_total; return null;
+  },
   badges_list: () => {
     const relay = [...new Set(db.turn_providers.filter((t) => t.status === 'active').map((t) => t.owner))];
     return [...relay.map((u) => ({ user_id: u, kind: 'relay', granted: false })),
       ...db.badge_grants.filter((g) => !(g.kind === 'relay' && relay.includes(g.user_id))).map((g) => ({ user_id: g.user_id, kind: g.kind, granted: true })),
-      ...db.moderators.filter((m) => activeMod(m.user_id) && modLevel(m.user_id)).map((m) => ({ user_id: m.user_id, kind: m.level, granted: true }))];
+      ...db.moderators.filter((m) => activeMod(m.user_id) && modLevel(m.user_id)).map((m) => ({ user_id: m.user_id, kind: m.level, granted: true })),
+      ...[...new Set(LTD().items.map((i) => i.owner + '|' + i.kind))].map((x) => ({ user_id: x.split('|')[0], kind: x.split('|')[1], granted: false }))];
   },
   touch_seen: (uid) => { const r = db.last_seen.find((x) => x.user_id === uid); if (r) r.seen_at = now(); else db.last_seen.push({ user_id: uid, seen_at: now(), hidden: false }); return null; },
   seen_of: (uid, { p_ids }) => db.last_seen.filter((s) => p_ids.includes(s.user_id)).map((s) => ({ user_id: s.user_id, seen_at: s.seen_at, recently: true, hidden: s.hidden })),
