@@ -1486,3 +1486,10 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   background: linear-gradient(90deg, #ff004c, #ff9f1c, #ffe14d, #2bff88, #2bd9ff, #9b5cff, #ff004c, #ff9f1c, #ffe14d, #2bff88, #2bd9ff, #9b5cff, #ff004c); animation: bro-flow 2.5s linear infinite; -webkit-mask: linear-gradient(#000, #000) content-box; }
 .role.l-absolute { color: #fff; text-shadow: 0 0 4px #000, 0 1px 2px #000; }
 @media (prefers-reduced-motion: reduce) { .role.ltd::after, .role.ltd > .i, .role.ltd > span, .role.bee > .i, .role.bee::before, .role.bee::after { animation: none; } }
+
+.donate-pill { display: flex; align-items: center; gap: 10px; margin: 0 12px 8px; padding: 10px 8px 10px 14px; border-radius: 18px; background: var(--surface-2); font-size: 13.5px; line-height: 1.35; animation: donate-in .35s var(--spring, ease-out); }
+.donate-pill > .i { flex: none; width: 18px; height: 18px; color: var(--accent); }
+.donate-pill > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.donate-pill a { color: var(--accent); font-weight: 600; text-decoration: underline; }
+.donate-pill .icon-btn { flex: none; width: 32px; height: 32px; }
+@keyframes donate-in { from { opacity: 0; transform: translateY(-8px); } }
