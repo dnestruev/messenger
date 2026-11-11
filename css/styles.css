@@ -1305,3 +1305,120 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .modal > .section:nth-of-type(3) { animation-delay: .06s; }
 .modal > .section:nth-of-type(n+4) { animation-delay: .09s; }
 .stat-tile { animation: rise .3s var(--spring) both; }
+
+/* =====================================================================
+   Тема «Аврора» (data-style="aurora") — бесплатная. Мягкое сияние на фоне, «стеклянные» панели,
+   градиентные свои сообщения, крупные скругления. Движется только слой сияния (transform).
+   ===================================================================== */
+[data-style="aurora"] {
+  --bg: #eef0fb;
+  --surface: rgba(255, 255, 255, .78);
+  --surface-2: rgba(120, 110, 200, .09);
+  --surface-3: rgba(120, 110, 200, .16);
+  --line: rgba(110, 100, 190, .16);
+  --text: #1a1830;
+  --muted: #6c6a8c;
+  --accent: #7a5cff;
+  --accent-2: #ff6fb1;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(122, 92, 255, .13);
+  --danger: #e0456b;
+  --ok: #12a37a;
+  --mine-bg: linear-gradient(135deg, var(--accent), var(--accent-2));
+  --mine-text: #ffffff;
+  --theirs-bg: rgba(255, 255, 255, .9);
+  --theirs-text: var(--text);
+  --chat-bg: transparent;
+  --pattern: none;
+  --radius: 18px;
+  --radius-lg: 28px;
+  --bubble-radius: 22px;
+  --shadow: 0 1px 2px rgba(60, 40, 140, .06), 0 10px 30px rgba(60, 40, 140, .08);
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --font-display: var(--font);
+  --label-case: none;
+  --label-spacing: 0;
+  --avatar-sat: 70%;
+  --avatar-light: 60%;
+  --glow-1: rgba(122, 92, 255, .38);
+  --glow-2: rgba(255, 111, 177, .32);
+  --glow-3: rgba(64, 196, 255, .30);
+}
+[data-style="aurora"][data-mode="dark"] {
+  --bg: #0b0a16;
+  --surface: rgba(24, 22, 44, .72);
+  --surface-2: rgba(150, 140, 255, .09);
+  --surface-3: rgba(150, 140, 255, .17);
+  --line: rgba(160, 150, 255, .14);
+  --text: #eeecff;
+  --muted: #9a97c2;
+  --accent: #9a82ff;
+  --accent-2: #ff7ab8;
+  --accent-soft: rgba(154, 130, 255, .18);
+  --theirs-bg: rgba(40, 37, 70, .85);
+  --shadow: 0 10px 30px rgba(0, 0, 0, .35);
+  --avatar-light: 52%;
+  --glow-1: rgba(122, 92, 255, .42);
+  --glow-2: rgba(255, 90, 170, .26);
+  --glow-3: rgba(40, 170, 255, .24);
+}
+/* сияние: один неподвижный фон + слой, который медленно плывёт (только transform) */
+[data-style="aurora"] body { background: var(--bg); position: relative; isolation: isolate; }
+[data-style="aurora"] body::before {
+  content: ""; position: fixed; z-index: -1; pointer-events: none;
+  top: -30%; left: -30%; width: 160%; height: 160%;
+  background:
+    radial-gradient(38% 34% at 22% 26%, var(--glow-1), transparent 70%),
+    radial-gradient(34% 30% at 78% 22%, var(--glow-2), transparent 70%),
+    radial-gradient(40% 36% at 62% 80%, var(--glow-3), transparent 70%);
+  animation: aurora-drift 26s ease-in-out infinite alternate;
+  will-change: transform;
+}
+@keyframes aurora-drift {
+  from { transform: translate3d(-3%, -2%, 0) rotate(0deg) scale(1); }
+  to { transform: translate3d(4%, 3%, 0) rotate(8deg) scale(1.08); }
+}
+@media (prefers-reduced-motion: reduce) { [data-style="aurora"] body::before { animation: none; } }
+
+/* стеклянные панели */
+[data-style="aurora"] .sidebar, [data-style="aurora"] .chat, [data-style="aurora"] .auth-card, [data-style="aurora"] .modal, [data-style="aurora"] .menu {
+  border: 1px solid rgba(255, 255, 255, .5);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4); backdrop-filter: blur(22px) saturate(1.4);
+}
+[data-style="aurora"][data-mode="dark"] .sidebar, [data-style="aurora"][data-mode="dark"] .chat, [data-style="aurora"][data-mode="dark"] .auth-card,
+[data-style="aurora"][data-mode="dark"] .modal, [data-style="aurora"][data-mode="dark"] .menu { border-color: rgba(255, 255, 255, .08); }
+/* там, где размытия нет (старые браузеры), панели делаем плотнее, чтобы текст читался */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-style="aurora"] { --surface: rgba(255, 255, 255, .95); }
+  [data-style="aurora"][data-mode="dark"] { --surface: rgba(24, 22, 44, .96); }
+}
+[data-style="aurora"] .modal, [data-style="aurora"] .menu { background: var(--surface); }
+[data-style="aurora"] .chat-head, [data-style="aurora"] .composer, [data-style="aurora"] .sidebar-head, [data-style="aurora"] .news-top, [data-style="aurora"] .news-compose { background: transparent; }
+[data-style="aurora"] .chat-head { border-bottom-color: var(--line); }
+[data-style="aurora"] .composer { border-top: 0; padding-top: 6px; }
+[data-style="aurora"] .composer textarea { border-radius: 22px; background: var(--surface-2); border: 1px solid var(--line); }
+[data-style="aurora"] .composer textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+
+/* сообщения */
+[data-style="aurora"] .msg { box-shadow: 0 1px 2px rgba(60, 40, 140, .06); border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) 8px; }
+[data-style="aurora"] .msg:not(.mine) { box-shadow: inset 0 0 0 1px var(--line), 0 2px 8px rgba(60, 40, 140, .07); }
+[data-style="aurora"] .msg.mine { background-image: var(--mine-bg); box-shadow: 0 6px 18px rgba(122, 92, 255, .28); border-radius: var(--bubble-radius) var(--bubble-radius) 8px var(--bubble-radius); }
+[data-style="aurora"] .day, [data-style="aurora"] .sys-note { background: var(--surface); border: 1px solid var(--line); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+
+/* список чатов и кнопки */
+[data-style="aurora"] .chat-item { border-radius: 20px; }
+[data-style="aurora"] .chat-item.active { background: linear-gradient(135deg, var(--accent-soft), rgba(255, 111, 177, .12)); box-shadow: inset 0 0 0 1px var(--line); }
+[data-style="aurora"] .btn-primary, [data-style="aurora"] .icon-btn-accent { background-image: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 6px 18px rgba(122, 92, 255, .3); border: 0; }
+[data-style="aurora"] .unread-dot, [data-style="aurora"] .unread-dot::after { background-image: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+[data-style="aurora"] .segmented button.on { background-image: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; }
+[data-style="aurora"] .switch input:checked + span { background-image: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+[data-style="aurora"] .section { background: var(--surface-2); border: 1px solid var(--line); }
+[data-style="aurora"] .brand-name, [data-style="aurora"] .placeholder h2 { background: linear-gradient(135deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+[data-style="aurora"] .news-screen { background: var(--bg); }
+[data-style="aurora"] .news-post { background: var(--surface); border: 1px solid var(--line); }
+@media (max-width: 720px) {
+  /* на телефоне панели во весь экран — рамки и размытие не нужны (и старым iPhone легче) */
+  [data-style="aurora"] .sidebar, [data-style="aurora"] .chat { border: 0; -webkit-backdrop-filter: none; backdrop-filter: none; background: transparent; }
+  [data-style="aurora"] body::before { animation-duration: 40s; }
+}

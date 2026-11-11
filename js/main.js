@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111075608';
-import * as CONFIG from '../config.js?v=20261111075608';
-import * as E2E from './crypto.js?v=20261111075608';
-import { createNet } from './net.js?v=20261111075608';
-import { qrSvg } from './qr.js?v=20261111075608';
-import { findEmbed } from './embeds.js?v=20261111075608';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111075608';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111075608';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111075608';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111082944';
+import * as CONFIG from '../config.js?v=20261111082944';
+import * as E2E from './crypto.js?v=20261111082944';
+import { createNet } from './net.js?v=20261111082944';
+import { qrSvg } from './qr.js?v=20261111082944';
+import { findEmbed } from './embeds.js?v=20261111082944';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111082944';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111082944';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111082944';
 
 /* =====================================================================
    Утилиты
@@ -4479,7 +4479,7 @@ function openSettings() {
     callsHelpSection(),
     donateSection(msg),
     section('Оформление',
-      segmented([['classic', 'Обычный'], ['dot', 'Dot']], prefs.style, (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })),
+      segmented([['classic', 'Обычный'], ['dot', 'Dot'], ['aurora', 'Аврора']], prefs.style, (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })),
       segmented([['light', 'Светлая'], ['dark', 'Тёмная'], ['auto', 'Авто']], prefs.mode, (v) => { prefs.mode = v; savePrefs(); applyTheme(); })),
     section('Уведомления',
       pushBlock(standalone, pushToggle, msg),
@@ -4580,7 +4580,7 @@ function perksSection(msg) {
       h('div', { class: 'row-text' }, h('b', { text: 'Рамка аватарки' }), h('small', { text: 'Видна всем, пока у вас есть Плюс' })), frames,
       h('div', { class: 'row-text' }, h('b', { text: 'Цвет акцента' }), h('small', { text: 'Кнопки и ваши сообщения' })), accents,
       h('div', { class: 'row-text' }, h('b', { text: 'Темы' })),
-      segmented([['classic', 'Обычная'], ['dot', 'Dot'], ['paper', 'Бумага'], ['neon', 'Неон']], prefs.style,
+      segmented([['classic', 'Обычная'], ['dot', 'Dot'], ['aurora', 'Аврора'], ['paper', 'Бумага'], ['neon', 'Неон']], prefs.style,
         (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })));
   }
 
