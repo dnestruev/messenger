@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111185209';
-import * as CONFIG from '../config.js?v=20261111185209';
-import * as E2E from './crypto.js?v=20261111185209';
-import { createNet } from './net.js?v=20261111185209';
-import { qrSvg } from './qr.js?v=20261111185209';
-import { findEmbed } from './embeds.js?v=20261111185209';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111185209';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111185209';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111185209';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111185619';
+import * as CONFIG from '../config.js?v=20261111185619';
+import * as E2E from './crypto.js?v=20261111185619';
+import { createNet } from './net.js?v=20261111185619';
+import { qrSvg } from './qr.js?v=20261111185619';
+import { findEmbed } from './embeds.js?v=20261111185619';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111185619';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111185619';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111185619';
 
 /* =====================================================================
    Утилиты
@@ -553,7 +553,7 @@ function badgeEl(kind, compact = false, extra = {}) {
 }
 /** «Абсолют синема»: из значка разлетаются хлопушки, плёнка, попкорн и звёзды (свои рисунки, только transform/opacity) */
 function cinemaBurst(from) {
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches || !from?.getBoundingClientRect) return;
+  if (!from?.getBoundingClientRect) return;   // человек сам нажал — показываем и при «уменьшении движения»/экономии заряда
   const r = from.getBoundingClientRect(), x0 = r.left + r.width / 2, y0 = r.top + r.height / 2;
   const layer = h('div', { class: 'cinema-burst', 'aria-hidden': 'true' });
   const icons = ['clapper', 'film', 'popcorn', 'star', 'clapper', 'star'], colors = ['#ffd700', '#ff4d6d', '#ffffff', '#3ab0ff', '#ff9f1c', '#9b5cff'];
