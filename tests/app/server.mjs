@@ -14,7 +14,7 @@ const slow = { ms: 0, fail: false };
 const db = {
   users: [], profiles: [], user_keys: [], key_backups: [], conversations: [], conversation_members: [],
   conversation_keys: [], conversation_key_claims: [], messages: [], reactions: [], blocks: [], nodes: [],
-  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], bans: [], username_aliases: [], news: [], news_reactions: [], app_settings: [], turn_providers: [],
+  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], bans: [], moderators: [], mod_log: [], username_aliases: [], news: [], news_reactions: [], app_settings: [], turn_providers: [],
 };
 const files = new Map();        // bucket/path -> { bytes, owner, type }
 let msgSeq = 1;
@@ -203,6 +203,8 @@ function addMember(convId, uid) {
 }
 const blockedBetween = (a, b) => db.blocks.some((x) => (x.blocker === a && x.blocked === b) || (x.blocker === b && x.blocked === a));
 const newConv = (o) => { const c = { id: uuid(), is_group: false, title: null, is_official: false, key_version: 1, key_checks: {}, last_message_at: now(), created_at: now(), ...o }; db.conversations.push(c); return c; };
+const activeMod = (uid) => (db.moderators || []).find((m) => m.user_id === uid && (!m.until || new Date(m.until) > new Date()));
+const modLevel = (uid) => db.bans.some((b) => b.user_id === uid) ? 0 : prof(uid)?.role === 'creator' ? 3 : activeMod(uid)?.level === 'senior' ? 2 : activeMod(uid) ? 1 : 0;
 const RPC = {
   username_available: (uid, { name }) => !db.profiles.some((p) => p.username === name.toLowerCase()) && !db.username_aliases.some((a) => a.alias === name.toLowerCase()),
   set_role: (uid, { p_username, p_role }) => {
@@ -212,26 +214,58 @@ const RPC = {
     p.role = p_role; return null;
   },
   admin_users: (uid, { p_q }) => {
-    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    if (modLevel(uid) < 1) return fail('only creators');
     return db.profiles.filter((p) => !p_q || p.username.includes(p_q)).map((p) => {
-      const b = db.bans.find((x) => x.user_id === p.id);
+      const b = db.bans.find((x) => x.user_id === p.id), m = activeMod(p.id);
       return { id: p.id, username: p.username, display_name: p.display_name || null, role: p.role || null, created_at: p.created_at || now(), seen_at: now(),
         banned: !!b, ban_until: b?.until || null, ban_reason: b?.reason || null, badges: db.badge_grants.filter((g) => g.user_id === p.id).map((g) => g.kind),
-        nodes: 0, turns: db.turn_providers.filter((t) => t.owner === p.id).length, msgs: db.messages.filter((m) => m.sender_id === p.id).length, tier: null };
+        nodes: 0, turns: db.turn_providers.filter((t) => t.owner === p.id).length, msgs: db.messages.filter((m2) => m2.sender_id === p.id).length, tier: null,
+        mod: m?.level || null, mod_until: m?.until || null, banned_by: b ? prof(b.by_user)?.username || null : null };
     });
   },
-  admin_stats: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators') : ({ users: db.profiles.length, new_week: db.profiles.length, active_day: 1, active_week: 2,
+  admin_stats: (uid) => modLevel(uid) < 2 ? fail('only creators') : ({ users: db.profiles.length, new_week: db.profiles.length, active_day: 1, active_week: 2,
     messages: db.messages.length, messages_day: db.messages.length, chats: db.conversations.length, groups: db.conversations.filter((c) => c.is_group).length,
     db_bytes: 12345678, storage_bytes: 2345678, nodes_active: 0, nodes_total: 0, turn_active: 0, turn_total: db.turn_providers.length, calls_day: 0, calls_ok_day: 0, banned: db.bans.length }),
+  set_moderator: (uid, { p_username, p_level, p_minutes }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators manage moderators');
+    const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase());
+    if (!p) return fail('user not found');
+    if (p.role === 'creator') return fail('creator is already above moderators');
+    db.moderators = db.moderators.filter((m) => m.user_id !== p.id);
+    if (p_level) {
+      if (!['moderator', 'senior'].includes(p_level)) return fail('bad moderator level');
+      db.moderators.push({ user_id: p.id, level: p_level, until: p_minutes ? new Date(Date.now() + p_minutes * 60e3).toISOString() : null, by_user: uid });
+    }
+    db.mod_log.push({ id: db.mod_log.length + 1, actor: uid, action: p_level ? 'mod_on' : 'mod_off', target: p.id, details: p_level || null, created_at: now() });
+    return null;
+  },
+  mod_log_list: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators')
+    : db.mod_log.slice().reverse().map((l) => ({ ...l, actor: prof(l.actor)?.username, target: prof(l.target)?.username })),
   ban_user: (uid, { p_username, p_days, p_reason }) => {
-    if (prof(uid)?.role !== 'creator') return fail('only creators can ban');
+    const lvl = modLevel(uid);
+    if (lvl < 1) return fail('only creators can ban');
     const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase());
     if (!p) return fail('user not found');
     if (p.role === 'creator') return fail('cannot ban a creator');
-    db.bans = db.bans.filter((b) => b.user_id !== p.id).concat({ user_id: p.id, reason: p_reason, until: p_days ? new Date(Date.now() + p_days * 864e5).toISOString() : null });
+    if (p.id === uid || modLevel(p.id) >= lvl) return fail('cannot ban your level or higher');
+    if (lvl === 1 && !(p_days >= 1 && p_days <= 7)) return fail('moderators ban for 1 to 7 days');
+    const old = db.bans.find((b) => b.user_id === p.id);
+    if (old && old.by_user !== uid && modLevel(old.by_user) > lvl) return fail('ban was set by someone higher');
+    db.bans = db.bans.filter((b) => b.user_id !== p.id).concat({ user_id: p.id, reason: p_reason, until: p_days ? new Date(Date.now() + p_days * 864e5).toISOString() : null, by_user: uid });
+    db.mod_log.push({ id: db.mod_log.length + 1, actor: uid, action: 'ban', target: p.id, details: (p_days ? p_days + ' дн.' : 'навсегда') + (p_reason ? ': ' + p_reason : ''), created_at: now() });
     return null;
   },
-  unban_user: (uid, { p_username }) => { const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase()); db.bans = db.bans.filter((b) => b.user_id !== p?.id); return null; },
+  unban_user: (uid, { p_username }) => {
+    const lvl = modLevel(uid);
+    if (lvl < 1) return fail('only creators can ban');
+    const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase());
+    const old = db.bans.find((b) => b.user_id === p?.id);
+    if (!old) return null;
+    if (old.by_user !== uid && modLevel(old.by_user) > lvl) return fail('ban was set by someone higher');
+    db.bans = db.bans.filter((b) => b.user_id !== p.id);
+    db.mod_log.push({ id: db.mod_log.length + 1, actor: uid, action: 'unban', target: p.id, details: null, created_at: now() });
+    return null;
+  },
   change_username: (uid, { p_new }) => {
     const u = String(p_new).toLowerCase(), me = prof(uid);
     if (!/^[a-z0-9_]{3,24}$/.test(u)) return fail('bad username');
@@ -329,7 +363,8 @@ const RPC = {
   badges_list: () => {
     const relay = [...new Set(db.turn_providers.filter((t) => t.status === 'active').map((t) => t.owner))];
     return [...relay.map((u) => ({ user_id: u, kind: 'relay', granted: false })),
-      ...db.badge_grants.filter((g) => !(g.kind === 'relay' && relay.includes(g.user_id))).map((g) => ({ user_id: g.user_id, kind: g.kind, granted: true }))];
+      ...db.badge_grants.filter((g) => !(g.kind === 'relay' && relay.includes(g.user_id))).map((g) => ({ user_id: g.user_id, kind: g.kind, granted: true })),
+      ...db.moderators.filter((m) => activeMod(m.user_id) && modLevel(m.user_id)).map((m) => ({ user_id: m.user_id, kind: m.level, granted: true }))];
   },
   touch_seen: (uid) => { const r = db.last_seen.find((x) => x.user_id === uid); if (r) r.seen_at = now(); else db.last_seen.push({ user_id: uid, seen_at: now(), hidden: false }); return null; },
   seen_of: (uid, { p_ids }) => db.last_seen.filter((s) => p_ids.includes(s.user_id)).map((s) => ({ user_id: s.user_id, seen_at: s.seen_at, recently: true, hidden: s.hidden })),
@@ -445,6 +480,7 @@ http.createServer(async (req, res) => {
       return send(res, 200, { data: { checked: 1, results: [{ id: t.id, ok, error: t.last_error }] } });
     }
     case '/api/grant': { const p = db.profiles.find((x) => x.username === j.username); db.badge_grants.push({ user_id: p.id, kind: j.kind, since: now() }); return send(res, 200, { ok: true }); }
+    case '/api/mod': { const p = db.profiles.find((x) => x.username === j.username); db.moderators = db.moderators.filter((m) => m.user_id !== p.id); if (j.level) db.moderators.push({ user_id: p.id, level: j.level, until: j.seconds ? new Date(Date.now() + j.seconds * 1000).toISOString() : null, by_user: null }); return send(res, 200, { ok: true }); }
     case '/api/role': { const p = db.profiles.find((x) => x.username === j.username); p.role = j.role; return send(res, 200, { ok: true }); }
     case '/api/partner': {   // тест: сделать человека партнёром (узел)
       const p = db.profiles.find((x) => x.username === j.username);

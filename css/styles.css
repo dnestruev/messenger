@@ -171,7 +171,7 @@ body {
 }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
-input, textarea {
+input, textarea, select {
   font: inherit;
   font-size: 16px;              /* меньше 16px — iPhone приближает страницу при вводе */
   color: var(--text);
@@ -185,7 +185,7 @@ input, textarea {
   transition: border-color .15s, background .15s;
 }
 input::placeholder, textarea::placeholder { color: var(--muted); }
-input:focus, textarea:focus { border-color: var(--accent); background: var(--surface); }
+input:focus, textarea:focus, select:focus { border-color: var(--accent); background: var(--surface); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input:focus-visible, textarea:focus-visible { outline: none; }
 .i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
@@ -481,6 +481,8 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 /* Значки статусов: у каждого свой цвет и иконка — подделать «на вид» нельзя, нажатие проверяет статус на сервере */
 .role.creator { background: linear-gradient(135deg, #7c4dff, #e0457b); color: #fff; box-shadow: 0 1px 4px rgba(124, 77, 255, .35); }
 .role.tester { background: linear-gradient(135deg, #2f80ed, #26c6da); color: #fff; }
+.role.moderator { background: linear-gradient(135deg, #1f9d6b, #2bb673); color: #fff; }
+.role.moderator.senior { background: linear-gradient(135deg, #e8590c, #f08c00); color: #fff; box-shadow: 0 1px 4px rgba(232, 89, 12, .35); }
 .role.donor { background: linear-gradient(135deg, #ff5f8f, #ff9a6b); color: #fff; }
 .role.relay { background: linear-gradient(135deg, #12b886, #0ca5c6); color: #fff; }
 /* «Реальный бро» — единственный: радуга плывёт (двигаем слой transform'ом — без перерисовки), искра мерцает */
@@ -1262,7 +1264,12 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .admin-user.banned { opacity: .55; }
 @media (hover: hover) { .admin-user:hover { background: var(--surface-2); } }
 .ban-box { display: grid; gap: 8px; }
+.log-row { display: grid; gap: 2px; padding: 8px; border-radius: var(--radius); background: var(--surface-2); font-size: 14px; overflow-wrap: anywhere; }
+.log-row small { color: var(--muted); font-size: 12px; }
+.mod-mine { margin: 0 0 4px; font-size: 13px; }
 .ban-box .inline { display: flex; gap: 6px; flex-wrap: wrap; }
+.ban-box input, .ban-box select, .ban-box .btn:not(.btn-primary) { background: var(--surface); }
+.ban-box select { width: 100%; }
 
 /* ---------- Значки: компактно на телефонах, «+N», выбор показа ---------- */
 .role.more { padding: 1px 6px; background: var(--surface-3); color: var(--muted); cursor: pointer; font-variant-numeric: tabular-nums; }

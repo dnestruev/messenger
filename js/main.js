@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111082944';
-import * as CONFIG from '../config.js?v=20261111082944';
-import * as E2E from './crypto.js?v=20261111082944';
-import { createNet } from './net.js?v=20261111082944';
-import { qrSvg } from './qr.js?v=20261111082944';
-import { findEmbed } from './embeds.js?v=20261111082944';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111082944';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111082944';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111082944';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111125051';
+import * as CONFIG from '../config.js?v=20261111125051';
+import * as E2E from './crypto.js?v=20261111125051';
+import { createNet } from './net.js?v=20261111125051';
+import { qrSvg } from './qr.js?v=20261111125051';
+import { findEmbed } from './embeds.js?v=20261111125051';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111125051';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111125051';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111125051';
 
 /* =====================================================================
    Утилиты
@@ -119,7 +119,12 @@ function humanError(err) {
     [/bad turn urls/i, 'Адрес TURN должен выглядеть так: turn:сервер:порт'],
     [/too many turn servers/i, 'Можно добавить не больше 2 TURN-серверов'],
     [/empty turn login/i, 'Укажите логин и пароль TURN'],
-    [/user is banned|banned/i, 'Аккаунт заблокирован создателем'],
+    [/moderators ban for/i, 'Модератор может банить только на срок от 1 до 7 дней'],
+    [/cannot ban your level/i, 'Нельзя банить себя и тех, кто равен или старше по правам'],
+    [/cannot ban a creator/i, 'Создателя забанить нельзя'],
+    [/ban was set by someone higher/i, 'Этот бан поставил старший — снять или изменить его может только он или создатель'],
+    [/only creators/i, 'Недостаточно прав (или срок прав модератора закончился)'],
+    [/user is banned|banned/i, 'Аккаунт заблокирован'],
     [/username taken/i, 'Этот ник занят'],
     [/bad username/i, 'Ник: латиница, цифры и _, от 3 до 24 символов'],
     [/username change too soon: ([\d.]+)/i, 'Ник можно менять раз в 30 дней — следующий раз с $1'],
@@ -349,6 +354,8 @@ const TIER_RANK = { bronze: 1, silver: 2, gold: 3 };
 const BADGE = {
   creator: { icon: 'crown', label: 'Создатель' },
   tester: { icon: 'flask', label: 'Тестер' },
+  senior: { icon: 'shield', label: 'Ст. модератор', cls: 'moderator senior' },
+  moderator: { icon: 'shield', label: 'Модератор' },
   bronze: { icon: 'medal', label: 'Бронза', cls: 'partner tier-bronze' },
   silver: { icon: 'medal', label: 'Серебро', cls: 'partner tier-silver' },
   gold: { icon: 'medal', label: 'Золото', cls: 'partner tier-gold' },
@@ -368,6 +375,18 @@ const STATUS_INFO = {
     label: 'Тестер',
     description: 'Участник команды тестирования мессенджера.',
     benefits: ['Значок тестера у имени', 'Возможность писать в официальных чатах', 'Участие в тестировании новых функций'],
+  },
+  senior: {
+    label: 'Старший модератор',
+    description: 'Старший в команде модерации: следит за порядком и за работой модераторов.',
+    benefits: ['Бан на любой срок, в том числе навсегда', 'Может забанить модератора', 'Видит статистику мессенджера', 'Список людей и снятие банов'],
+    how: 'Назначает только создатель.',
+  },
+  moderator: {
+    label: 'Модератор',
+    description: 'Следит за порядком в мессенджере: может временно заблокировать нарушителя.',
+    benefits: ['Список людей с поиском', 'Бан на срок от 1 до 7 дней', 'Снятие своих банов и банов других модераторов'],
+    how: 'Назначает только создатель.',
   },
   bronze: {
     label: 'Партнёр · Бронза',
@@ -504,6 +523,7 @@ function badgeKinds(id, all = false) {
   for (const t of ['bronze', 'silver', 'gold']) if (b.has(t) && (TIER_RANK[t] > (TIER_RANK[tier] || 0))) tier = t;   // выданный создателем уровень
   return [
     r && BADGE[r] ? r : null,
+    r === 'creator' ? null : b.has('senior') ? 'senior' : b.has('moderator') ? 'moderator' : null,
     b.has('bro') ? 'bro' : null,
     r !== 'tester' && b.has('tester') ? 'tester' : null,
     tier || (k === 'plus' || b.has('plus') ? 'plus' : null),
@@ -511,6 +531,8 @@ function badgeKinds(id, all = false) {
     b.has('donor') ? 'donor' : null,
   ].filter((x) => x && !hidden.includes(x));
 }
+/** Права в админке: 3 — создатель, 2 — старший модератор, 1 — модератор, 0 — нет. Решает сервер; это только для показа кнопок */
+const modLevel = (id = state.me?.id) => roleOf(id) === 'creator' ? 3 : badgesOf(id).has('senior') ? 2 : badgesOf(id).has('moderator') ? 1 : 0;
 /** Значки у имени. max — сколько показать; остальные сворачиваются в «+N» (по нажатию — весь список) */
 function roleBadge(id, compact = false, max = compact ? 2 : 99) {
   const kinds = badgeKinds(id);
@@ -4492,7 +4514,7 @@ function openSettings() {
       isDesktop() ? h('p', { class: 'muted', text: 'Горячие клавиши: Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+E (код), Ctrl+Shift+X (зачеркнуть), Ctrl+Shift+P (спойлер).' }) : null),
     section('Приложение', appBlock),
     teamSection,
-    roleOf(state.me.id) === 'creator' ? adminSection() : null,
+    modLevel() ? adminSection() : null,
     roleOf(state.me.id) === 'creator' ? donateAdmin(msg) : null,
     roleOf(state.me.id) === 'creator' ? ownBadgesAdmin(msg) : null,
     section('Шифрование',
@@ -4821,22 +4843,40 @@ function changeNickDialog() {
 
 /* ---------- Админка (только создатель): люди, роли, значки, бан, статистика ---------- */
 function adminSection() {
-  return section('Админка (видно только вам)',
+  const lvl = modLevel();
+  return section(lvl === 3 ? 'Админка (видно только вам)' : 'Модерация (видно только вам)',
     h('div', { class: 'row' },
-      h('div', { class: 'row-text' }, h('b', { text: 'Пользователи и статистика' }), h('small', { text: 'Роли, значки, бан, сколько людей и места' })),
+      h('div', { class: 'row-text' },
+        h('b', { text: lvl === 3 ? 'Пользователи и статистика' : lvl === 2 ? 'Люди, баны и статистика' : 'Люди и баны' }),
+        h('small', { text: lvl === 3 ? 'Роли, модераторы, значки, бан, сколько людей и места' : lvl === 2 ? 'Вы — старший модератор: бан на любой срок' : 'Вы — модератор: бан на 1–7 дней' })),
       h('button', { class: 'btn btn-primary', type: 'button', text: 'Открыть', onclick: () => openAdmin() })));
 }
 const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + ' ГБ' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' МБ' : Math.round(n / 1e3) + ' КБ';
 const fmtDate = (iso) => iso ? FMT_DAY.format(new Date(iso)) : '—';
-function openAdmin(tab = 'stats') {
+const fmtWhen = (iso) => { const d = new Date(iso); return fmtDate(iso) + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+const MOD_NAME = { moderator: 'Модератор', senior: 'Старший модератор' };
+const adminOld = (error, re) => re.test(error.message || '') && /function|schema cache|does not exist/i.test(error.message || '');
+function openAdmin(tab) {
+  const lvl = modLevel();
+  if (!lvl) return openSettings();
+  const allTabs = [lvl >= 2 ? ['stats', 'Статистика'] : null, ['users', 'Люди'], lvl === 3 ? ['log', 'Журнал'] : null].filter(Boolean);
+  if (!allTabs.some(([v]) => v === tab)) tab = allTabs[0][0];
   const body = h('div', { class: 'admin' });
-  const tabs = segmented([['stats', 'Статистика'], ['users', 'Люди']], tab, (v) => draw(v));
+  const tabs = allTabs.length > 1 ? segmented(allTabs, tab, (v) => draw(v)) : null;
+  const mine = h('p', { class: 'muted mod-mine' });
+  if (lvl < 3) {
+    mine.textContent = lvl === 2 ? 'Вы — старший модератор' : 'Вы — модератор';
+    sb.rpc('admin_users', { p_q: state.people.get(state.me.id)?.username || '', p_limit: 20, p_offset: 0 }).then(({ data }) => {
+      const me = (data || []).find((x) => x.id === state.me.id);
+      if (me?.mod_until) mine.textContent += ' до ' + fmtWhen(me.mod_until) + ' — потом права пропадут сами';
+    });
+  }
   const draw = async (v) => {
     tab = v;
     body.replaceChildren(h('p', { class: 'muted', text: 'Загружаю…' }));
     if (v === 'stats') {
       const { data: st, error } = await sb.rpc('admin_stats');
-      if (error) return body.replaceChildren(h('p', { class: 'muted', text: /admin_stats|function/i.test(error.message || '') ? 'Админка заработает после обновления сервера (update-15)' : humanError(error) }));
+      if (error) return body.replaceChildren(h('p', { class: 'muted', text: adminOld(error, /admin_stats/i) ? 'Админка заработает после обновления сервера (update-15)' : humanError(error) }));
       const tile = (label, value, sub) => h('div', { class: 'stat-tile' }, h('small', { text: label }), h('b', { text: String(value) }), sub ? h('small', { class: 'muted', text: sub }) : null);
       const dbPct = Math.round((st.db_bytes / 500e6) * 100), stPct = Math.round((st.storage_bytes / 1e9) * 100);
       body.replaceChildren(h('div', { class: 'stat-grid' },
@@ -4850,13 +4890,21 @@ function openAdmin(tab = 'stats') {
         tile('TURN', `${st.turn_active} / ${st.turn_total}`, 'работают / всего'),
         tile('Звонков за сутки', st.calls_day, `соединились ${st.calls_ok_day}`),
         tile('Забанено', st.banned)));
+    } else if (v === 'log') {
+      const { data, error } = await sb.rpc('mod_log_list', { p_limit: 100 });
+      if (error) return body.replaceChildren(h('p', { class: 'muted', text: adminOld(error, /mod_log_list/i) ? 'Журнал заработает после обновления сервера (update-18)' : humanError(error) }));
+      const ACT = { ban: 'забанил', unban: 'разбанил', mod_on: 'назначил модератором', mod_off: 'снял модератора' };
+      body.replaceChildren(h('div', { class: 'admin-list' }, ...(data || []).map((l) => h('div', { class: 'log-row' },
+        h('span', {}, h('b', { text: '@' + (l.actor || '—') }), ' ' + (ACT[l.action] || l.action) + ' ', h('b', { text: '@' + (l.target || '—') })),
+        h('small', { text: fmtWhen(l.created_at) + (l.details ? ' · ' + l.details : '') })))
+        .concat(data?.length ? [] : [h('p', { class: 'muted', text: 'Пока пусто: здесь будет видно, кто кого банил и разбанивал' })])));
     } else {
       const q = h('input', { placeholder: 'Ник или имя', autocapitalize: 'off', spellcheck: 'false' });
       const list = h('div', { class: 'admin-list' });
       let timer = null;
       const load = async () => {
         const { data, error } = await sb.rpc('admin_users', { p_q: q.value.trim().replace(/^@/, ''), p_limit: 100, p_offset: 0 });
-        if (error) return list.replaceChildren(h('p', { class: 'muted', text: /admin_users|function/i.test(error.message || '') ? 'Админка заработает после обновления сервера (update-15)' : humanError(error) }));
+        if (error) return list.replaceChildren(h('p', { class: 'muted', text: adminOld(error, /admin_users/i) ? 'Админка заработает после обновления сервера (update-15)' : humanError(error) }));
         for (const u of data || []) if (!state.people.has(u.id)) state.people.set(u.id, { id: u.id, username: u.username, display_name: u.display_name, role: u.role });
         list.replaceChildren(...(data || []).map((u) => h('button', { class: 'admin-user' + (u.banned ? ' banned' : ''), type: 'button', onclick: () => openAdminUser(u) },
           userAvatar(u.id, 'sm'),
@@ -4870,13 +4918,15 @@ function openAdmin(tab = 'stats') {
       load();
     }
   };
-  openModal({ title: 'Админка' }, tabs, body,
+  openModal({ title: lvl === 3 ? 'Админка' : 'Модерация' }, lvl < 3 ? mine : null, tabs, body,
     h('button', { class: 'btn btn-block', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
   draw(tab);
 }
 function openAdminUser(u) {
   const msg = note();
+  const lvl = modLevel();
   const isMe = u.id === state.me.id;
+  const theirLvl = u.role === 'creator' ? 3 : u.mod === 'senior' ? 2 : u.mod === 'moderator' ? 1 : 0;
   const refresh = async () => {
     const { data } = await sb.rpc('admin_users', { p_q: u.username, p_limit: 5, p_offset: 0 });
     const fresh = (data || []).find((x) => x.id === u.id);
@@ -4900,20 +4950,38 @@ function openAdminUser(u) {
     h('div', { class: 'row-text' }, h('b', { text: 'Роль «Тестер»' }), h('small', { text: 'Видят все у ника; даёт доступ к тестовым функциям' })),
     toggle(u.role === 'tester', (e) => run(() => sb.rpc('set_role', { p_username: u.username, p_role: e.target.checked ? 'tester' : null }),
       e.target.checked ? 'Теперь тестер' : 'Роль снята')));
-  const reason = h('input', { placeholder: 'Причина (видно только вам)', maxLength: 200 });
+  // модератор: выдаёт только создатель, можно на время
+  let modBlock = null;
+  if (lvl === 3 && u.role !== 'creator') {
+    const term = h('select', { 'aria-label': 'Срок' }, ...[[0, 'Без срока'], [30, 'На 30 минут'], [60, 'На 1 час'], [1440, 'На 1 день'], [10080, 'На 7 дней'], [43200, 'На 30 дней']]
+      .map(([m, t]) => h('option', { value: String(m), text: t })));
+    const give = (level) => run(() => sb.rpc('set_moderator', { p_username: u.username, p_level: level, p_minutes: Number(term.value) || null }),
+      level ? MOD_NAME[level] + ' назначен' : 'Права модератора сняты');
+    modBlock = h('div', { class: 'ban-box' },
+      h('small', { class: 'muted', text: u.mod ? 'Сейчас: ' + MOD_NAME[u.mod] + (u.mod_until ? ' до ' + fmtWhen(u.mod_until) : ' без срока') : 'Сейчас: не модератор' }),
+      term,
+      h('div', { class: 'inline' },
+        h('button', { class: 'btn', type: 'button', text: 'Модератор', onclick: () => give('moderator') }),
+        h('button', { class: 'btn', type: 'button', text: 'Старший', onclick: () => give('senior') }),
+        u.mod ? h('button', { class: 'btn btn-danger', type: 'button', text: 'Снять', onclick: () => give(null) }) : null),
+      h('small', { class: 'muted', text: 'Модератор: список людей, бан на 1–7 дней. Старший: ещё бан навсегда, статистика и бан модераторов.' }));
+  }
+  const reason = h('input', { placeholder: lvl === 3 ? 'Причина (видно вам и модераторам)' : 'Причина (видят создатель и модераторы)', maxLength: 200 });
   const ban = (days) => {
     if (!confirm(`Забанить @${u.username} ${days ? 'на ' + days + ' дн.' : 'навсегда'}? Он не сможет войти и писать.`)) return;
     run(() => sb.rpc('ban_user', { p_username: u.username, p_days: days, p_reason: reason.value.trim() || null }), 'Забанен');
   };
-  const banBlock = isMe || u.role === 'creator' ? null : u.banned
+  const banBlock = isMe || theirLvl >= lvl ? null : u.banned
     ? h('div', { class: 'ban-box' }, h('b', { text: 'Забанен ' + (u.ban_until ? 'до ' + fmtDate(u.ban_until) : 'навсегда') }),
+        u.banned_by ? h('small', { text: 'Забанил: @' + u.banned_by }) : null,
         u.ban_reason ? h('small', { text: 'Причина: ' + u.ban_reason }) : null,
         h('button', { class: 'btn btn-block', type: 'button', text: 'Разбанить', onclick: () => run(() => sb.rpc('unban_user', { p_username: u.username }), 'Разбанен') }))
     : h('div', { class: 'ban-box' }, reason,
         h('div', { class: 'inline' },
           h('button', { class: 'btn', type: 'button', text: '1 день', onclick: () => ban(1) }),
           h('button', { class: 'btn', type: 'button', text: '7 дней', onclick: () => ban(7) }),
-          h('button', { class: 'btn btn-danger', type: 'button', text: 'Навсегда', onclick: () => ban(0) })));
+          lvl >= 2 ? h('button', { class: 'btn', type: 'button', text: '30 дней', onclick: () => ban(30) }) : null,
+          lvl >= 2 ? h('button', { class: 'btn btn-danger', type: 'button', text: 'Навсегда', onclick: () => ban(0) }) : null));
   openModal({ title: '@' + u.username },
     h('div', { class: 'profile-head' }, userAvatar(u.id, 'lg'),
       h('div', { class: 'name-line' }, roleBadge(u.id)),
@@ -4923,9 +4991,10 @@ function openAdminUser(u) {
       h('div', { class: 'stat-tile' }, h('small', { text: 'Был(а)' }), h('b', { text: u.seen_at ? shortTime(u.seen_at) : '—' })),
       h('div', { class: 'stat-tile' }, h('small', { text: 'Сообщений' }), h('b', { text: String(u.msgs) })),
       h('div', { class: 'stat-tile' }, h('small', { text: 'Узлы / TURN' }), h('b', { text: `${u.nodes} / ${u.turns}` }))),
-    section('Роль', roleRow),
-    section('Значки (выдать вручную)', ...badgeRows),
-    banBlock ? section('Бан', banBlock) : null,
+    lvl === 3 ? section('Роль', roleRow) : null,
+    modBlock ? section('Модератор', modBlock) : null,
+    lvl === 3 ? section('Значки (выдать вручную)', ...badgeRows) : null,
+    banBlock ? section('Бан', banBlock) : !isMe && lvl < 3 ? h('p', { class: 'muted', text: 'Этого человека вы забанить не можете: он равен вам или старше по правам.' }) : null,
     msg,
     h('button', { class: 'btn btn-block', type: 'button', text: '← К списку', onclick: () => openAdmin('users') }));
 }
