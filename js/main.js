@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111075022';
-import * as CONFIG from '../config.js?v=20261111075022';
-import * as E2E from './crypto.js?v=20261111075022';
-import { createNet } from './net.js?v=20261111075022';
-import { qrSvg } from './qr.js?v=20261111075022';
-import { findEmbed } from './embeds.js?v=20261111075022';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111075022';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111075022';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111075022';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111075608';
+import * as CONFIG from '../config.js?v=20261111075608';
+import * as E2E from './crypto.js?v=20261111075608';
+import { createNet } from './net.js?v=20261111075608';
+import { qrSvg } from './qr.js?v=20261111075608';
+import { findEmbed } from './embeds.js?v=20261111075608';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111075608';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111075608';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111075608';
 
 /* =====================================================================
    Утилиты
@@ -4769,7 +4769,7 @@ function badgeVisibilitySection(msg) {
     const { error } = await sb.from('profiles').update({ hidden_badges: hidden }).eq('id', me);
     if (error) {
       prof().hidden_badges = before; draw(); refreshHeads();
-      say(msg, /hidden_badges|column|schema/i.test(error.message || '') ? 'Выбор значков заработает после обновления сервера' : humanError(error));
+      toast(/hidden_badges|column|schema/i.test(error.message || '') ? 'Выбор значков заработает после обновления сервера (update-17)' : 'Не сохранилось: ' + humanError(error));   // тост — подпись внизу настроек не видно
     }
   };
   const draw = () => {
