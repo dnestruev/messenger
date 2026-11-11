@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111130212';
-import * as CONFIG from '../config.js?v=20261111130212';
-import * as E2E from './crypto.js?v=20261111130212';
-import { createNet } from './net.js?v=20261111130212';
-import { qrSvg } from './qr.js?v=20261111130212';
-import { findEmbed } from './embeds.js?v=20261111130212';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111130212';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111130212';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111130212';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111131800';
+import * as CONFIG from '../config.js?v=20261111131800';
+import * as E2E from './crypto.js?v=20261111131800';
+import { createNet } from './net.js?v=20261111131800';
+import { qrSvg } from './qr.js?v=20261111131800';
+import { findEmbed } from './embeds.js?v=20261111131800';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111131800';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111131800';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111131800';
 
 /* =====================================================================
    Утилиты
@@ -3357,6 +3357,9 @@ async function onSignal(env) {
     cur.remoteIce.push(...list);
     if (cur.pc?.remoteDescription) await flushRemoteIce(cur);
   }
+  if (msg.t === 'screen') { cur.remoteScreen = !!msg.on; updateCallUi(); }
+  if (msg.t === 'reoffer') onReoffer(cur, msg).catch((e) => console.warn('reoffer', e));
+  if (msg.t === 'reanswer' && cur.reneg) cur.reneg(msg.sdp);
   if (msg.t === 'busy') finishCall('busy', { remote: true });
   if (msg.t === 'end') finishCall(msg.why === 'declined' ? 'declined' : cur.connectedAt ? 'ok' : cur.dir === 'in' ? 'missed' : 'cancel', { remote: true });
 }
@@ -3589,6 +3592,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   navigator.vibrate?.(0);
   if (!silent || cur.answered) sendCallReport(cur, status);
   cur.local?.getTracks().forEach((t) => t.stop());
+  cur.camTrack?.stop(); cur.screenTrack?.stop();
   try { cur.pc?.close(); } catch {}
   if (!remote && (status === 'missed' || status === 'failed')) sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: status }).catch(() => {});
   const dur = cur.connectedAt ? Math.round((Date.now() - cur.connectedAt) / 1000) : 0;
@@ -3649,8 +3653,11 @@ function updateCallUi() {
   if (!cur?.ui) return;
   const { ui } = cur;
   if (cur.local && ui.local.srcObject !== cur.local) { ui.local.srcObject = cur.local; ui.local.play?.().catch(() => {}); }
-  const hasRemoteVideo = cur.remote.getVideoTracks().some((t) => t.readyState === 'live');
+  // видео, появившееся посреди звонка (демонстрация экрана), показываем только пока она идёт
+  const hasRemoteVideo = cur.remote.getVideoTracks().some((t) => t.readyState === 'live') && (!cur.lateVideo || !!cur.remoteScreen);
   ui.root.classList.toggle('remote-video', hasRemoteVideo && !!cur.connectedAt);
+  ui.root.classList.toggle('remote-screen', hasRemoteVideo && !!cur.remoteScreen);
+  ui.root.classList.toggle('local-screen', !!cur.screenTrack);
   ui.root.classList.toggle('local-video', !!cur.local?.getVideoTracks().length);
   if (cur.connectedAt) ui.status.textContent = fmtDur((Date.now() - cur.connectedAt) / 1000);
   const mic = cur.local?.getAudioTracks()[0], cam = cur.local?.getVideoTracks()[0];
@@ -3661,10 +3668,12 @@ function updateCallUi() {
     btns.push(callButton('accept', 'phone', cur.video ? 'Без видео' : 'Принять', () => acceptCall(false)));
   } else {
     if (mic) btns.push(callButton(mic.enabled ? '' : 'off', 'mic', mic.enabled ? 'Микрофон' : 'Без звука', () => { mic.enabled = !mic.enabled; updateCallUi(); }));
-    if (cam) {
+    if (cam && !cur.screenTrack) {
       btns.push(callButton(cam.enabled ? '' : 'off', 'video', cam.enabled ? 'Камера' : 'Камера выкл.', () => { cam.enabled = !cam.enabled; updateCallUi(); }));
       btns.push(callButton('', 'flip', 'Сменить', () => flipCamera()));
     }
+    if (cur.connectedAt && cur.pc && navigator.mediaDevices?.getDisplayMedia)
+      btns.push(callButton(cur.screenTrack ? 'on' : '', 'screen', cur.screenTrack ? 'Остановить' : 'Экран', () => (cur.screenTrack ? stopScreen() : startScreen())));
     btns.push(callButton('decline', 'phone', 'Завершить', () => hangUp()));
   }
   ui.controls.replaceChildren(...btns);
@@ -3683,6 +3692,84 @@ async function flipCamera() {
     cur.local.removeTrack(old); old.stop(); cur.local.addTrack(track);
     cur.ui.local.srcObject = null; updateCallUi();
   } catch { cur.facing = cur.facing === 'environment' ? 'user' : 'environment'; toast('Другой камеры нет'); }
+}
+
+/* ---------- Демонстрация экрана. Соединение звонка не трогает: в видеозвонке просто подменяет картинку камеры
+   (replaceTrack), в аудиозвонке один раз добавляет видеодорожку отдельными сигналами reoffer/reanswer —
+   если собеседник их не понял (старая версия), всё откатывается и звонок идёт как шёл. ---------- */
+async function startScreen() {
+  const cur = call;
+  if (!cur?.pc || !cur.connectedAt || cur.screenTrack || cur.screenBusy) return;
+  cur.screenBusy = true;
+  let track = null;
+  try {
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false });
+    track = s.getVideoTracks()[0];
+    if (call !== cur || !track) { track?.stop(); return; }
+    try { track.contentHint = 'detail'; } catch {}
+    const pc = cur.pc;
+    const cam = cur.local.getVideoTracks()[0];
+    const sender = (cam && pc.getSenders().find((x) => x.track === cam)) || cur.screenSender;
+    if (sender) await sender.replaceTrack(track);            // дорожка уже согласована — без переговоров
+    else {
+      cur.screenSender = pc.addTrack(track, cur.local);
+      try { await renegotiate(cur); }
+      catch (e) {
+        try { if (pc.signalingState === 'have-local-offer') await pc.setLocalDescription({ type: 'rollback' }); } catch {}
+        try { pc.removeTrack(cur.screenSender); } catch {}
+        cur.screenSender = null;
+        throw e;
+      }
+    }
+    if (call !== cur) { track.stop(); return; }
+    if (cam) { cur.camTrack = cam; cur.local.removeTrack(cam); }
+    if (!cur.local.getTracks().includes(track)) cur.local.addTrack(track);
+    cur.screenTrack = track;
+    track.addEventListener('ended', () => { if (cur.screenTrack === track) stopScreen(cur); });
+    tuneSenders(pc);
+    sendSignal(cur.conv, cur.peer, { t: 'screen', id: cur.id, on: true }).catch(() => {});
+    cur.ui.local.srcObject = null; updateCallUi();
+  } catch (e) {
+    track?.stop();
+    if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') toast(e?.message === 'no-reanswer' ? 'Не получилось показать экран: собеседнику нужно обновить приложение' : 'Не получилось показать экран');
+  } finally { cur.screenBusy = false; }
+}
+async function stopScreen(cur = call) {
+  const track = cur?.screenTrack;
+  if (!track) return;
+  cur.screenTrack = null;
+  try {
+    const sender = cur.pc?.getSenders().find((x) => x.track === track);
+    await sender?.replaceTrack(cur.camTrack || null);
+  } catch {}
+  cur.local.removeTrack(track); track.stop();
+  if (cur.camTrack) { cur.local.addTrack(cur.camTrack); cur.camTrack = null; }
+  if (call !== cur) return;
+  if (cur.pc) tuneSenders(cur.pc);
+  sendSignal(cur.conv, cur.peer, { t: 'screen', id: cur.id, on: false }).catch(() => {});
+  cur.ui.local.srcObject = null; updateCallUi();
+}
+/** Досогласовать новую дорожку посреди звонка. Ждём ответ 8 с */
+async function renegotiate(cur) {
+  const pc = cur.pc;
+  if (pc.signalingState !== 'stable') throw new Error('busy');
+  await pc.setLocalDescription(await pc.createOffer());
+  const sdp = await new Promise((res, rej) => {
+    const t = setTimeout(() => { cur.reneg = null; rej(new Error('no-reanswer')); }, 8000);
+    cur.reneg = (v) => { clearTimeout(t); cur.reneg = null; res(v); };
+    sendSignal(cur.conv, cur.peer, { t: 'reoffer', id: cur.id, sdp: pc.localDescription.sdp }).catch(() => {});
+  });
+  if (call !== cur) throw new Error('ended');
+  await pc.setRemoteDescription({ type: 'answer', sdp });
+}
+async function onReoffer(cur, msg) {
+  const pc = cur.pc;
+  if (!pc || !cur.connectedAt || pc.signalingState !== 'stable') return;   // заняты своим — тот попробует ещё раз
+  if (!cur.remote.getVideoTracks().some((t) => t.readyState === 'live')) cur.lateVideo = true;
+  await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+  await pc.setLocalDescription(await pc.createAnswer());
+  if (call !== cur) return;
+  await sendSignal(cur.conv, cur.peer, { t: 'reanswer', id: cur.id, sdp: pc.localDescription.sdp });
 }
 
 /** Мигающий заголовок вкладки, пока звонят */

@@ -1429,3 +1429,4 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   [data-style="aurora"] .sidebar, [data-style="aurora"] .chat { border: 0; -webkit-backdrop-filter: none; backdrop-filter: none; background: transparent; }
   [data-style="aurora"] body::before { animation-duration: 40s; }
 }
+.call-ctl.on .call-ctl-ic { background: var(--accent, #3b82f6); color: #fff; }
