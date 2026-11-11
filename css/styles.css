@@ -1445,9 +1445,12 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .shop-actions .btn { flex: 1 1 auto; }
 .shop-steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; }
 .order-proof { padding: 8px; border-radius: 8px; background: var(--surface); font-size: 13.5px; }
-.role.bee { color: #2a2100; padding-left: 20px; padding-right: 20px;
-  background: linear-gradient(90deg, #2a2100 0 5px, #ffd23f 5px 9px, #2a2100 9px 13px, #ffd23f 13px calc(100% - 13px), #2a2100 calc(100% - 13px) calc(100% - 9px), #ffd23f calc(100% - 9px) calc(100% - 5px), #2a2100 calc(100% - 5px)); }
-.role.bee.mini, #chatTitle .role.bee { padding: 0; background: #ffd23f; }
+.role.bee { position: relative; overflow: hidden; isolation: isolate; color: #241a00; font-weight: 700; background: #ffc928; box-shadow: 0 0 0 1.5px #ffe27a, 0 0 8px rgba(255, 201, 40, .55); }
+.role.bee::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 300%; z-index: -1; pointer-events: none;
+  background: linear-gradient(90deg, #ffb300, #ffe27a 10%, #ff9f1c 20%, #fff3b0 30%, #ffc928 40%, #ffb300 50%, #ffe27a 60%, #ff9f1c 70%, #fff3b0 80%, #ffc928 90%, #ffb300);
+  animation: bro-flow 3.5s linear infinite; }
+.role.bee::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 35%; z-index: -1; pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .75), transparent); transform: translateX(-120%); animation: ltd-shine 2.8s ease-in-out infinite; }
 .role.bee > .i { animation: bee-buzz 1.2s ease-in-out infinite; }
 @keyframes bee-buzz { 25% { transform: translate(1px, -1px) rotate(8deg); } 75% { transform: translate(-1px, 1px) rotate(-8deg); } }
 .role.ltd { position: relative; overflow: hidden; isolation: isolate; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .4); background: var(--l-bg, #555); }
@@ -1482,4 +1485,4 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .role.l-absolute::after { width: 300%; transform: none; opacity: .85; mix-blend-mode: screen;
   background: linear-gradient(90deg, #ff004c, #ff9f1c, #ffe14d, #2bff88, #2bd9ff, #9b5cff, #ff004c, #ff9f1c, #ffe14d, #2bff88, #2bd9ff, #9b5cff, #ff004c); animation: bro-flow 2.5s linear infinite; -webkit-mask: linear-gradient(#000, #000) content-box; }
 .role.l-absolute { color: #fff; text-shadow: 0 0 4px #000, 0 1px 2px #000; }
-@media (prefers-reduced-motion: reduce) { .role.ltd::after, .role.ltd > .i, .role.ltd > span, .role.bee > .i { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .role.ltd::after, .role.ltd > .i, .role.ltd > span, .role.bee > .i, .role.bee::before, .role.bee::after { animation: none; } }

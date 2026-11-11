@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111180741';
-import * as CONFIG from '../config.js?v=20261111180741';
-import * as E2E from './crypto.js?v=20261111180741';
-import { createNet } from './net.js?v=20261111180741';
-import { qrSvg } from './qr.js?v=20261111180741';
-import { findEmbed } from './embeds.js?v=20261111180741';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111180741';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111180741';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111180741';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111181816';
+import * as CONFIG from '../config.js?v=20261111181816';
+import * as E2E from './crypto.js?v=20261111181816';
+import { createNet } from './net.js?v=20261111181816';
+import { qrSvg } from './qr.js?v=20261111181816';
+import { findEmbed } from './embeds.js?v=20261111181816';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111181816';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111181816';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111181816';
 
 /* =====================================================================
    Утилиты
