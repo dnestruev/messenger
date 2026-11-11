@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111183815';
-import * as CONFIG from '../config.js?v=20261111183815';
-import * as E2E from './crypto.js?v=20261111183815';
-import { createNet } from './net.js?v=20261111183815';
-import { qrSvg } from './qr.js?v=20261111183815';
-import { findEmbed } from './embeds.js?v=20261111183815';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111183815';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111183815';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111183815';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111185209';
+import * as CONFIG from '../config.js?v=20261111185209';
+import * as E2E from './crypto.js?v=20261111185209';
+import { createNet } from './net.js?v=20261111185209';
+import { qrSvg } from './qr.js?v=20261111185209';
+import { findEmbed } from './embeds.js?v=20261111185209';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111185209';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111185209';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111185209';
 
 /* =====================================================================
    Утилиты
@@ -397,6 +397,7 @@ const LIMITED = [
   ['l_emperor', 'Император', 'crown', 'Таких на весь мессенджер единицы.'],
   ['l_hole', 'Чёрная дыра', 'spiral', 'Притягивает всё внимание.'],
   ['l_absolute', 'Абсолют', 'infinity', 'Самый редкий статус мессенджера. Выше некуда.'],
+  ['l_cinema', 'Абсолют синема', 'clapper', 'Когда всё настолько хорошо, что остаётся только встать и поднять руки. Нажми на значок.'],
 ].map(([kind, name, ic, text]) => ({ kind, name, icon: ic, text }));
 const LIMITED_BY = new Map(LIMITED.map((l) => [l.kind, l]));
 for (const l of LIMITED) BADGE[l.kind] = { icon: l.icon, label: l.name, cls: 'ltd ' + l.kind.replace('_', '-') };
@@ -550,9 +551,38 @@ function badgeEl(kind, compact = false, extra = {}) {
   const b = BADGE[kind];
   return h('span', { class: 'role ' + (b.cls || kind) + (compact ? ' mini' : ''), ...extra }, icon(b.icon), compact ? null : h('span', { text: b.label }));
 }
+/** «Абсолют синема»: из значка разлетаются хлопушки, плёнка, попкорн и звёзды (свои рисунки, только transform/opacity) */
+function cinemaBurst(from) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches || !from?.getBoundingClientRect) return;
+  const r = from.getBoundingClientRect(), x0 = r.left + r.width / 2, y0 = r.top + r.height / 2;
+  const layer = h('div', { class: 'cinema-burst', 'aria-hidden': 'true' });
+  const icons = ['clapper', 'film', 'popcorn', 'star', 'clapper', 'star'], colors = ['#ffd700', '#ff4d6d', '#ffffff', '#3ab0ff', '#ff9f1c', '#9b5cff'];
+  for (let i = 0; i < 26; i++) {
+    const p = h('span', { style: { left: x0 + 'px', top: y0 + 'px', color: colors[i % colors.length] } }, icon(icons[i % icons.length]));
+    const ang = (Math.PI * 2 * i) / 26 + Math.random() * 0.5, dist = 90 + Math.random() * 150, size = 0.8 + Math.random() * 0.9;
+    const dx = Math.cos(ang) * dist, dy = Math.sin(ang) * dist - 60, rot = (Math.random() * 720 - 360) | 0;
+    layer.append(p);
+    p.animate?.([
+      { transform: 'translate(-50%, -50%) scale(.2) rotate(0deg)', opacity: 1 },
+      { transform: `translate(calc(-50% + ${dx * 0.8}px), calc(-50% + ${dy * 0.8}px)) scale(${size}) rotate(${rot * 0.7}deg)`, opacity: 1, offset: 0.45 },
+      { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy + 170}px)) scale(${size * 0.9}) rotate(${rot}deg)`, opacity: 0 },
+    ], { duration: 1300 + Math.random() * 500, easing: 'cubic-bezier(.15, .7, .3, 1)', fill: 'forwards' });
+  }
+  const cap = h('div', { class: 'cinema-cap' }, h('small', { text: 'ABSOLUTE' }), h('b', { text: 'CINEMA' }));
+  cap.style.left = Math.min(Math.max(x0, 110), innerWidth - 110) + 'px'; cap.style.top = Math.max(y0 - 70, 60) + 'px';
+  layer.append(cap);
+  cap.animate?.([
+    { transform: 'translate(-50%, -50%) scale(.3)', opacity: 0 },
+    { transform: 'translate(-50%, -50%) scale(1.12)', opacity: 1, offset: 0.25 },
+    { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, offset: 0.75 },
+    { transform: 'translate(-50%, -80%) scale(1)', opacity: 0 },
+  ], { duration: 1800, easing: 'ease-out', fill: 'forwards' });
+  document.body.append(layer);
+  setTimeout(() => layer.remove(), 2000);
+}
 function clickableBadge(id, kind, compact = false) {
   const label = STATUS_INFO[kind]?.label || BADGE[kind].label;
-  const open = (e) => { e.preventDefault(); e.stopPropagation(); openStatusInfo(id, kind); };
+  const open = (e) => { e.preventDefault(); e.stopPropagation(); if (kind === 'l_cinema') cinemaBurst(e.currentTarget || e.target); openStatusInfo(id, kind); };
   const el = badgeEl(kind, compact, {
     role: 'button', tabindex: 0,
     title: label + ' — нажмите, чтобы проверить',
@@ -5054,7 +5084,7 @@ function openShop(tab = 'shop') {
   const body = h('div', { class: 'shop' });
   const tabsList = [['shop', 'Витрина'], ['market', 'С рук'], ['mine', 'Мои'], creator ? ['orders', 'Заявки'] : null].filter(Boolean);
   const fail = (error) => body.replaceChildren(h('p', { class: 'muted', text: shopOld(error) ? 'Магазин заработает после обновления сервера (update-19)' : humanError(error) }));
-  const card = (kind, ...rest) => h('div', { class: 'shop-card' }, h('div', { class: 'shop-badge' }, badgeEl(kind)), ...rest.filter(Boolean));
+  const card = (kind, ...rest) => h('div', { class: 'shop-card' }, h('div', { class: 'shop-badge' }, kind === 'l_cinema' ? badgeEl(kind, false, { role: 'button', onclick: (e) => cinemaBurst(e.currentTarget) }) : badgeEl(kind)), ...rest.filter(Boolean));
   const draw = async (v) => {
     tab = v;
     body.replaceChildren(h('p', { class: 'muted', text: 'Загружаю…' }));
@@ -5062,7 +5092,7 @@ function openShop(tab = 'shop') {
       const { data, error } = await sb.rpc('limited_catalog');
       if (error) return fail(error);
       body.replaceChildren(h('p', { class: 'muted shop-hint', text: 'Статус — это украшение к нику, прав он не даёт. Оплата — донатом, выдаёт создатель после проверки. Возврата нет.' }),
-        ...(data || []).slice().reverse().filter((r) => LIMITED_BY.has(r.kind)).map((r) => {
+        ...(data || []).filter((r) => LIMITED_BY.has(r.kind)).sort((x, y) => y.price - x.price).map((r) => {
           const l = LIMITED_BY.get(r.kind), left = Math.max(0, r.total - r.sold - r.pending);
           return card(r.kind,
             h('small', { text: l.text }),

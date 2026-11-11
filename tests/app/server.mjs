@@ -26,7 +26,7 @@ const conv = (id) => db.conversations.find((c) => c.id === id);
 const prof = (id) => db.profiles.find((p) => p.id === id);
 const fail = (message, code = 400) => ({ error: { message, code }, status: code });
 /** магазин лимиток: создаётся заново после сброса базы */
-const LTD = () => (db.limited?.kinds ? db.limited : db.limited = { kinds: [['l_spark', 700, 100], ['l_owl', 900, 90], ['l_coffee', 1200, 80], ['l_pond', 1500, 70], ['l_bug', 1800, 60], ['l_vibe', 2200, 50], ['l_neon', 2700, 45], ['l_comet', 3200, 40], ['l_storm', 3800, 35], ['l_ice', 4500, 30], ['l_flame', 5200, 25], ['l_ghost', 6000, 20], ['l_diamond', 7000, 15], ['l_eclipse', 8000, 12], ['l_legend', 9500, 10], ['l_astro', 11000, 8], ['l_phoenix', 13000, 6], ['l_emperor', 15000, 5], ['l_hole', 17500, 3], ['l_absolute', 20000, 1]].map(([kind, price, total]) => ({ kind, price, total })), items: [], orders: [] });
+const LTD = () => (db.limited?.kinds ? db.limited : db.limited = { kinds: [['l_spark', 700, 100], ['l_owl', 900, 90], ['l_coffee', 1200, 80], ['l_pond', 1500, 70], ['l_bug', 1800, 60], ['l_vibe', 2200, 50], ['l_neon', 2700, 45], ['l_comet', 3200, 40], ['l_storm', 3800, 35], ['l_ice', 4500, 30], ['l_flame', 5200, 25], ['l_ghost', 6000, 20], ['l_diamond', 7000, 15], ['l_eclipse', 8000, 12], ['l_legend', 9500, 10], ['l_astro', 11000, 8], ['l_phoenix', 13000, 6], ['l_emperor', 15000, 5], ['l_hole', 17500, 3], ['l_absolute', 20000, 1], ['l_cinema', 10000, 10]].map(([kind, price, total]) => ({ kind, price, total })), items: [], orders: [] });
 
 /* ---------- события ---------- */
 function push(cid, ev) {

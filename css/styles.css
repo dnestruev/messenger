@@ -1493,3 +1493,14 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .donate-pill a { color: var(--accent); font-weight: 600; text-decoration: underline; }
 .donate-pill .icon-btn { flex: none; width: 32px; height: 32px; }
 @keyframes donate-in { from { opacity: 0; transform: translateY(-8px); } }
+
+.role.l-cinema { --l-bg: linear-gradient(135deg, #0d0d0d, #2b2110 60%, #0d0d0d); color: #ffd700; box-shadow: inset 0 0 0 1.5px #ffd700, 0 0 10px rgba(255, 215, 0, .55); --l-shine: rgba(255, 236, 150, .7); --l-speed: 2.4s; cursor: pointer; }
+.role.l-cinema > .i { animation: cinema-clap 1.8s ease-in-out infinite; transform-origin: 20% 60%; }
+@keyframes cinema-clap { 0%, 70%, 100% { transform: rotate(0); } 80% { transform: rotate(-16deg) scale(1.15); } 88% { transform: rotate(4deg); } }
+.cinema-burst { position: fixed; inset: 0; z-index: 9999; pointer-events: none; overflow: hidden; }
+.cinema-burst > span { position: absolute; width: 26px; height: 26px; transform: translate(-50%, -50%) scale(.2); will-change: transform, opacity; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .45)); }
+.cinema-burst .i { width: 100%; height: 100%; stroke-width: 2; }
+@media (prefers-reduced-motion: reduce) { .role.l-cinema > .i { animation: none; } }
+.cinema-cap { position: absolute; display: grid; justify-items: center; line-height: 1; color: #fff; font-weight: 800; letter-spacing: .04em; text-shadow: 0 2px 10px rgba(0, 0, 0, .8), 0 0 2px #000; opacity: 0; white-space: nowrap; }
+.cinema-cap small { font-size: 15px; }
+.cinema-cap b { font-size: 32px; }

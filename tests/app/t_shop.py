@@ -1,5 +1,5 @@
 # Магазин лимиток: витрина, заявка, выдача создателем, значок у ника, перепродажа напрямую (без комиссии), правка цены/тиража
-import os, sys, time
+import os, sys, time, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import *
 
@@ -15,7 +15,7 @@ def shop(p, tab=None):
     p.wait_for_selector('.shop')
     if tab: p.locator('.segmented button', has_text=tab).click()
     time.sleep(0.7)
-def card(p, name): return p.locator('.shop-card', has=p.locator('.role', has_text=name))
+def card(p, name): return p.locator('.shop-card', has=p.locator('.role > span', has_text=re.compile('^' + name + '$')))
 
 with sync_playwright() as pw:
     br = pw.chromium.launch(executable_path='/usr/bin/google-chrome', args=ARGS)
@@ -30,7 +30,11 @@ with sync_playwright() as pw:
     a.open_dm('bobby'); a.send('привет'); time.sleep(1)
 
     shop(b.page)
-    check('витрина: 20 статусов', b.page.locator('.shop-card').count() == 20)
+    check('витрина: 21 статус', b.page.locator('.shop-card').count() == 21)
+    card(b.page, 'Абсолют синема').locator('.role').click(); time.sleep(0.25)
+    check('«Абсолют синема»: по нажатию разлетаются картинки', b.page.locator('.cinema-burst span').count() == 26)
+    b.shot('cinema_burst'); time.sleep(2.2)
+    check('картинки убрались', b.page.locator('.cinema-burst').count() == 0)
     check('самый дорогой первым, 20 000 ₽, тираж 1', 'Абсолют' in b.page.locator('.shop-card').first.inner_text() and '20 000 ₽' in b.page.locator('.shop-card').first.inner_text() and 'осталось 1 из 1' in b.page.locator('.shop-card').first.inner_text())
     check('обычный человек не видит «Заявки» и «Изменить»', b.page.locator('.segmented button', has_text='Заявки').count() == 0 and b.page.locator('.shop-card button', has_text='Изменить').count() == 0)
     b.shot('shop_phone')
