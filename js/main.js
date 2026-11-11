@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111082944';
-import * as CONFIG from '../config.js?v=20261111082944';
-import * as E2E from './crypto.js?v=20261111082944';
-import { createNet } from './net.js?v=20261111082944';
-import { qrSvg } from './qr.js?v=20261111082944';
-import { findEmbed } from './embeds.js?v=20261111082944';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111082944';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111082944';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111082944';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111100053';
+import * as CONFIG from '../config.js?v=20261111100053';
+import * as E2E from './crypto.js?v=20261111100053';
+import { createNet } from './net.js?v=20261111100053';
+import { qrSvg } from './qr.js?v=20261111100053';
+import { findEmbed } from './embeds.js?v=20261111100053';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111100053';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111100053';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111100053';
 
 /* =====================================================================
    Утилиты
@@ -336,7 +336,21 @@ function avatar(label, hue, size = '', badge = null, extra = '', photo = null) {
       onerror: (e) => { e.target.parentNode?.classList.remove('has-photo'); e.target.remove(); } }) : null,
     badge ? h('span', { class: 'badge' }, icon(badge)) : null);
 }
-const roleOf = (id) => state.people.get(id)?.role || null;
+let moderationRoles = new Map();
+async function loadModerationRoles() {
+  const me = state.me?.id;
+  if (!me) { moderationRoles.clear(); return; }
+  const { data, error } = await sb.from('moderation_roles').select('user_id, role, expires_at');
+  if (state.me?.id !== me) return;
+  moderationRoles = new Map(error ? [] : (data || []).map(r => [r.user_id, r]));
+}
+const roleOf = (id) => {
+  const base = state.people.get(id)?.role || null, staff = moderationRoles.get(id);
+  if (base === 'creator') return base;
+  return staff && (!staff.expires_at || Date.parse(staff.expires_at) > Date.now()) ? staff.role : base;
+};
+const staffRank = (id = state.me?.id) => ({ creator: 3, senior_moderator: 2, moderator: 1 }[roleOf(id)] || 0);
+setInterval(() => { if (state.me) loadModerationRoles().catch(() => {}); }, 60000);
 const perkOf = (id) => state.perks.get(id) || null;
 const hasPlus = (id = state.me?.id) => !!perkOf(id);
 /** Уровень партнёра: бронза — узел, серебро — узел + TURN, золото — серебро 30 дней */
@@ -349,6 +363,8 @@ const TIER_RANK = { bronze: 1, silver: 2, gold: 3 };
 const BADGE = {
   creator: { icon: 'crown', label: 'Создатель' },
   tester: { icon: 'flask', label: 'Тестер' },
+  moderator: { icon: 'shield', label: 'Модератор' },
+  senior_moderator: { icon: 'shield', label: 'Старший модератор' },
   bronze: { icon: 'medal', label: 'Бронза', cls: 'partner tier-bronze' },
   silver: { icon: 'medal', label: 'Серебро', cls: 'partner tier-silver' },
   gold: { icon: 'medal', label: 'Золото', cls: 'partner tier-gold' },
@@ -359,6 +375,8 @@ const BADGE = {
 };
 /** Информация о подтверждённых статусах пользователя. Права определяет база, не значок. */
 const STATUS_INFO = {
+  moderator: { label: 'Модератор', description: 'Помогает следить за порядком.', benefits: ['Список пользователей и статистика', 'Бан и разбан обычных пользователей'] },
+  senior_moderator: { label: 'Старший модератор', description: 'Управляет модерацией в пределах своей роли.', benefits: ['Права модератора', 'Назначение модераторов и тестеров', 'Настройки приложения; создатель и другие старшие защищены'] },
   creator: {
     label: 'Создатель',
     description: 'Создатель проекта и участник команды мессенджера.',
@@ -451,6 +469,9 @@ async function openStatusInfo(uid, kind) {
       const { data, error } = await sb.from('profiles').select('role').eq('id', uid).maybeSingle();
       if (error) throw error;
       confirmed = data?.role === kind;
+    } else if (kind === 'moderator' || kind === 'senior_moderator') {
+      await loadModerationRoles();
+      confirmed = roleOf(uid) === kind;
     } else if (kind === 'plus' || TIER_RANK[kind]) {
       const { data, error } = await sb.rpc('perks_list');
       if (error) throw error;
@@ -562,7 +583,7 @@ async function loadPerks() {
 /** Имя + значок роли (или галочка официального чата) с обрезкой длинного текста */
 const nameLine = (text, ...after) => h('span', { class: 'name-line' }, h('span', { class: 't', text }), ...after);
 const userAvatar = (id, size) => avatar(nameOf(id), hueOfUser(id), size, null, [roleOf(id), frameOf(id) && 'frame frame-' + frameOf(id)].filter(Boolean).join(' '), photoOf(id));
-const isStaffMe = () => !!roleOf(state.me.id);
+const isStaffMe = () => !!state.people.get(state.me.id)?.role;
 const isSaved = (c) => !!c && c.id === state.savedId;
 const otherOf = (c) => (c.member_ids || []).find((id) => id !== state.me.id);
 const titleOf = (c) => (isSaved(c) ? 'Избранное' : c.is_group ? c.title || 'Группа' : nameOf(otherOf(c)));
@@ -962,6 +983,7 @@ async function startApp(user) {
   if (state.me?.id === user.id) return;
   state.me = { id: user.id, email: user.email };
   await loadPeople([user.id]);
+  await loadModerationRoles();
   if (!state.people.has(user.id)) state.people.set(user.id, { username: user.user_metadata?.username || 'me' });
 
   $('auth').hidden = true;
@@ -4356,7 +4378,9 @@ async function openChatInfo(id) {
 $('settingsBtn').onclick = openSettings;
 $('meBtn').onclick = openSettings;
 
-function openSettings() {
+async function openSettings() {
+  await loadModerationRoles();
+  if (!state.me) return;
   const p = state.people.get(state.me.id);
   let hue = p.avatar_hue ?? hueOf(p.username);
   const msg = note();
@@ -4492,8 +4516,8 @@ function openSettings() {
       isDesktop() ? h('p', { class: 'muted', text: 'Горячие клавиши: Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+E (код), Ctrl+Shift+X (зачеркнуть), Ctrl+Shift+P (спойлер).' }) : null),
     section('Приложение', appBlock),
     teamSection,
-    roleOf(state.me.id) === 'creator' ? adminSection() : null,
-    roleOf(state.me.id) === 'creator' ? donateAdmin(msg) : null,
+    staffRank() >= 1 ? adminSection() : null,
+    roleOf(state.me.id) === 'creator' ? donateAdmin(msg) : staffRank() >= 2 ? seniorSettings(msg) : null,
     roleOf(state.me.id) === 'creator' ? ownBadgesAdmin(msg) : null,
     section('Шифрование',
       h('div', { class: 'row-text' }, h('small', { text: 'Ключ этого устройства' }),
@@ -4820,15 +4844,41 @@ function changeNickDialog() {
 }
 
 /* ---------- Админка (только создатель): люди, роли, значки, бан, статистика ---------- */
+function moderationControls(u, run) {
+  if (u.role === 'creator') return null;
+  const options = [['', 'Без роли модератора'], ['moderator', 'Модератор']];
+  if (staffRank() === 3) options.push(['senior_moderator', 'Старший модератор']);
+  const select = h('select', {}, ...options.map(([value, text]) => h('option', { value, text })));
+  select.value = ['moderator', 'senior_moderator'].includes(roleOf(u.id)) ? roleOf(u.id) : '';
+  const duration = h('select', {}, h('option', { value: '', text: 'Бессрочно' }), h('option', { value: '30', text: 'На 30 минут' }));
+  const expires = moderationRoles.get(u.id)?.expires_at;
+  return h('div', {}, h('p', { class: 'muted', text: expires ? 'Назначение до ' + new Date(expires).toLocaleString('ru-RU') : 'Прежняя роль сохранится после снятия модерации.' }),
+    select, duration, h('button', { class: 'btn', text: 'Сохранить роль модерации', onclick: () => run(() => sb.rpc('set_moderation_role', {
+      p_username: u.username, p_role: select.value || null, p_minutes: duration.value ? Number(duration.value) : null,
+    }), 'Роль сохранена') }));
+}
+function seniorSettings(msg) {
+  const url = h('input', { value: state.settings.donate_url || '', placeholder: 'https://…' });
+  const text = h('textarea', { value: state.settings.donate_text || '', placeholder: 'Текст кнопки поддержки' });
+  return section('Настройки приложения', url, text, h('button', { class: 'btn', text: 'Сохранить', onclick: async () => {
+    for (const [p_key, p_value] of [['donate_url', url.value.trim()], ['donate_text', text.value.trim()]]) {
+      const { error } = await sb.rpc('set_app_setting', { p_key, p_value });
+      if (error) return say(msg, humanError(error));
+    }
+    await loadPerks(); say(msg, 'Настройки сохранены', 'ok');
+  } }));
+}
 function adminSection() {
   return section('Админка (видно только вам)',
     h('div', { class: 'row' },
-      h('div', { class: 'row-text' }, h('b', { text: 'Пользователи и статистика' }), h('small', { text: 'Роли, значки, бан, сколько людей и места' })),
+      h('div', { class: 'row-text' }, h('b', { text: 'Пользователи и статистика' }), h('small', { text: staffRank() >= 2 ? 'Пользователи, роли, бан и статистика' : 'Пользователи, бан и статистика' })),
       h('button', { class: 'btn btn-primary', type: 'button', text: 'Открыть', onclick: () => openAdmin() })));
 }
 const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + ' ГБ' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' МБ' : Math.round(n / 1e3) + ' КБ';
 const fmtDate = (iso) => iso ? FMT_DAY.format(new Date(iso)) : '—';
-function openAdmin(tab = 'stats') {
+async function openAdmin(tab = 'stats') {
+  await loadModerationRoles();
+  if (staffRank() < 1) return toast('Доступ к админке закончился');
   const body = h('div', { class: 'admin' });
   const tabs = segmented([['stats', 'Статистика'], ['users', 'Люди']], tab, (v) => draw(v));
   const draw = async (v) => {
@@ -4882,6 +4932,7 @@ function openAdminUser(u) {
     const fresh = (data || []).find((x) => x.id === u.id);
     if (fresh) Object.assign(u, fresh);
     await loadPerks().catch(() => {});
+    await loadModerationRoles();
     renderChats();
     openAdminUser(u);
   };
@@ -4905,7 +4956,7 @@ function openAdminUser(u) {
     if (!confirm(`Забанить @${u.username} ${days ? 'на ' + days + ' дн.' : 'навсегда'}? Он не сможет войти и писать.`)) return;
     run(() => sb.rpc('ban_user', { p_username: u.username, p_days: days, p_reason: reason.value.trim() || null }), 'Забанен');
   };
-  const banBlock = isMe || u.role === 'creator' ? null : u.banned
+  const banBlock = isMe || u.role === 'creator' || (staffRank() < 3 && staffRank(u.id) >= staffRank()) ? null : u.banned
     ? h('div', { class: 'ban-box' }, h('b', { text: 'Забанен ' + (u.ban_until ? 'до ' + fmtDate(u.ban_until) : 'навсегда') }),
         u.ban_reason ? h('small', { text: 'Причина: ' + u.ban_reason }) : null,
         h('button', { class: 'btn btn-block', type: 'button', text: 'Разбанить', onclick: () => run(() => sb.rpc('unban_user', { p_username: u.username }), 'Разбанен') }))
@@ -4923,8 +4974,8 @@ function openAdminUser(u) {
       h('div', { class: 'stat-tile' }, h('small', { text: 'Был(а)' }), h('b', { text: u.seen_at ? shortTime(u.seen_at) : '—' })),
       h('div', { class: 'stat-tile' }, h('small', { text: 'Сообщений' }), h('b', { text: String(u.msgs) })),
       h('div', { class: 'stat-tile' }, h('small', { text: 'Узлы / TURN' }), h('b', { text: `${u.nodes} / ${u.turns}` }))),
-    section('Роль', roleRow),
-    section('Значки (выдать вручную)', ...badgeRows),
+    staffRank() >= 2 && !isMe && (staffRank() === 3 || staffRank(u.id) < 2) ? section('Роли', roleRow, moderationControls(u, run)) : null,
+    staffRank() === 3 ? section('Значки (выдать вручную)', ...badgeRows) : null,
     banBlock ? section('Бан', banBlock) : null,
     msg,
     h('button', { class: 'btn btn-block', type: 'button', text: '← К списку', onclick: () => openAdmin('users') }));

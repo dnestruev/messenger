@@ -12,7 +12,7 @@ const uuid = () => crypto.randomUUID();
 
 const slow = { ms: 0, fail: false };
 const db = {
-  users: [], profiles: [], user_keys: [], key_backups: [], conversations: [], conversation_members: [],
+  moderation_roles: [], users: [], profiles: [], user_keys: [], key_backups: [], conversations: [], conversation_members: [],
   conversation_keys: [], conversation_key_claims: [], messages: [], reactions: [], blocks: [], nodes: [],
   partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], bans: [], username_aliases: [], news: [], news_reactions: [], app_settings: [], turn_providers: [],
 };
@@ -203,16 +203,34 @@ function addMember(convId, uid) {
 }
 const blockedBetween = (a, b) => db.blocks.some((x) => (x.blocker === a && x.blocked === b) || (x.blocker === b && x.blocked === a));
 const newConv = (o) => { const c = { id: uuid(), is_group: false, title: null, is_official: false, key_version: 1, key_checks: {}, last_message_at: now(), created_at: now(), ...o }; db.conversations.push(c); return c; };
+const rawStaffRank = (uid) => {
+  if (prof(uid)?.role === 'creator') return 3;
+  const r = db.moderation_roles.find(r => r.user_id === uid && (!r.expires_at || Date.parse(r.expires_at) > Date.now()));
+  return r ? r.role === 'senior_moderator' ? 2 : 1 : 0;
+};
+const staffRank = uid => db.bans.some(b => b.user_id === uid && (!b.until || Date.parse(b.until) > Date.now())) ? 0 : rawStaffRank(uid);
+const protectedStaff = (actor, target) => actor === target || prof(target)?.role === 'creator' || (staffRank(actor) < 3 && rawStaffRank(target) >= staffRank(actor));
 const RPC = {
+  set_moderation_role: (uid, { p_username, p_role, p_minutes }) => {
+    if (staffRank(uid) < 2) return fail('senior moderator required');
+    const p = db.profiles.find(p => p.username === String(p_username).replace(/^@/, '').trim().toLowerCase());
+    if (!p || protectedStaff(uid, p.id)) return fail('protected account or not found');
+    if (p_role != null && !['moderator','senior_moderator'].includes(p_role)) return fail('invalid role');
+    if (p_role === 'senior_moderator' && staffRank(uid) < 3) return fail('cannot assign senior');
+    if (p_minutes != null && (!Number.isInteger(p_minutes) || p_minutes < 1 || p_minutes > 525600)) return fail('invalid duration');
+    db.moderation_roles = db.moderation_roles.filter(r => r.user_id !== p.id);
+    if (p_role) db.moderation_roles.push({ user_id: p.id, role: p_role, expires_at: p_minutes ? new Date(Date.now() + p_minutes * 60000).toISOString() : null });
+    return null;
+  },
   username_available: (uid, { name }) => !db.profiles.some((p) => p.username === name.toLowerCase()) && !db.username_aliases.some((a) => a.alias === name.toLowerCase()),
   set_role: (uid, { p_username, p_role }) => {
-    if (prof(uid)?.role !== 'creator') return fail('only creators can change roles');
+    if (staffRank(uid) < 2) return fail('senior moderator required');
     const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase());
-    if (!p || p.role === 'creator') return fail('user not found or is a creator');
+    if (!p || protectedStaff(uid, p.id)) return fail('protected account');
     p.role = p_role; return null;
   },
   admin_users: (uid, { p_q }) => {
-    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    if (staffRank(uid) < 1) return fail('moderator required');
     return db.profiles.filter((p) => !p_q || p.username.includes(p_q)).map((p) => {
       const b = db.bans.find((x) => x.user_id === p.id);
       return { id: p.id, username: p.username, display_name: p.display_name || null, role: p.role || null, created_at: p.created_at || now(), seen_at: now(),
@@ -220,18 +238,18 @@ const RPC = {
         nodes: 0, turns: db.turn_providers.filter((t) => t.owner === p.id).length, msgs: db.messages.filter((m) => m.sender_id === p.id).length, tier: null };
     });
   },
-  admin_stats: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators') : ({ users: db.profiles.length, new_week: db.profiles.length, active_day: 1, active_week: 2,
+  admin_stats: (uid) => staffRank(uid) < 1 ? fail('only creators') : ({ users: db.profiles.length, new_week: db.profiles.length, active_day: 1, active_week: 2,
     messages: db.messages.length, messages_day: db.messages.length, chats: db.conversations.length, groups: db.conversations.filter((c) => c.is_group).length,
     db_bytes: 12345678, storage_bytes: 2345678, nodes_active: 0, nodes_total: 0, turn_active: 0, turn_total: db.turn_providers.length, calls_day: 0, calls_ok_day: 0, banned: db.bans.length }),
   ban_user: (uid, { p_username, p_days, p_reason }) => {
-    if (prof(uid)?.role !== 'creator') return fail('only creators can ban');
+    if (staffRank(uid) < 1) return fail('moderator required');
     const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase());
     if (!p) return fail('user not found');
-    if (p.role === 'creator') return fail('cannot ban a creator');
+    if (protectedStaff(uid, p.id)) return fail('protected account');
     db.bans = db.bans.filter((b) => b.user_id !== p.id).concat({ user_id: p.id, reason: p_reason, until: p_days ? new Date(Date.now() + p_days * 864e5).toISOString() : null });
     return null;
   },
-  unban_user: (uid, { p_username }) => { const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase()); db.bans = db.bans.filter((b) => b.user_id !== p?.id); return null; },
+  unban_user: (uid, { p_username }) => { const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase()); if (staffRank(uid) < 1 || !p || protectedStaff(uid, p.id)) return fail('protected account'); db.bans = db.bans.filter((b) => b.user_id !== p?.id); return null; },
   change_username: (uid, { p_new }) => {
     const u = String(p_new).toLowerCase(), me = prof(uid);
     if (!/^[a-z0-9_]{3,24}$/.test(u)) return fail('bad username');
@@ -311,7 +329,7 @@ const RPC = {
   },
   delete_turn: (uid, { p_id }) => { db.turn_providers = db.turn_providers.filter((t) => !(t.id === p_id && t.owner === uid)); return null; },
   set_app_setting: (uid, { p_key, p_value }) => {
-    if (prof(uid)?.role !== 'creator') return fail('only creators change settings');
+    if (staffRank(uid) < 2 || (staffRank(uid) === 2 && !['donate_url', 'donate_text'].includes(p_key))) return fail('senior moderator required');
     if (p_key === 'donate_url' && p_value && !/^https:\/\/\S{8,}$/.test(p_value)) return fail('bad donate url');
     db.app_settings = db.app_settings.filter((x) => x.key !== p_key);
     if (p_value) db.app_settings.push({ key: p_key, value: p_value });

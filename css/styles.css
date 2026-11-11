@@ -1422,3 +1422,6 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   [data-style="aurora"] .sidebar, [data-style="aurora"] .chat { border: 0; -webkit-backdrop-filter: none; backdrop-filter: none; background: transparent; }
   [data-style="aurora"] body::before { animation-duration: 40s; }
 }
+
+.role.moderator { color: #1c8b75; background: rgba(30, 170, 140, .14); }
+.role.senior_moderator { color: #9c68dc; background: rgba(150, 90, 220, .14); }
