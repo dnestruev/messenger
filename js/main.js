@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111183554';
-import * as CONFIG from '../config.js?v=20261111183554';
-import * as E2E from './crypto.js?v=20261111183554';
-import { createNet } from './net.js?v=20261111183554';
-import { qrSvg } from './qr.js?v=20261111183554';
-import { findEmbed } from './embeds.js?v=20261111183554';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111183554';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111183554';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111183554';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111183815';
+import * as CONFIG from '../config.js?v=20261111183815';
+import * as E2E from './crypto.js?v=20261111183815';
+import { createNet } from './net.js?v=20261111183815';
+import { qrSvg } from './qr.js?v=20261111183815';
+import { findEmbed } from './embeds.js?v=20261111183815';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111183815';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111183815';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111183815';
 
 /* =====================================================================
    Утилиты
@@ -4905,17 +4905,18 @@ function openCallsHelp() {
 }
 
 /* ---------- Поддержать проект ---------- */
-/** Просьба поддержать: плашка над списком чатов, один раз на аккаунт на этом устройстве */
+/** Просьба поддержать: плашка над списком чатов. Висит, пока человек сам не закроет крестиком; после этого не
+ *  показывается. Показать всем заново (по просьбе владельца) — поднять номер в ключе: donate-ask-2 и т.д. */
 function donateBanner() {
   const url = state.settings.donate_url, me = state.me?.id;
   if (!me || !/^https:\/\//i.test(url || '') || roleOf(me) === 'creator' || document.querySelector('.donate-pill')) return;
-  const key = 'donate-ask-1:' + me;
-  try { if (localStorage.getItem(key)) return; localStorage.setItem(key, '1'); } catch { return; }
+  const key = 'donate-ask-2:' + me;
+  try { if (localStorage.getItem(key)) return; } catch { return; }
   const pill = h('div', { class: 'donate-pill', role: 'status' },
     icon('heart'),
     h('span', {}, h('b', { text: 'Проекту нужна твоя помощь! ' }), 'Помоги нам, ',
       h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: 'скинув' }), ' хотя бы 100 ₽. Если закинешь — поможешь нам!'),
-    h('button', { class: 'icon-btn', type: 'button', title: 'Закрыть', onclick: () => pill.remove() }, icon('close')));
+    h('button', { class: 'icon-btn', type: 'button', title: 'Закрыть', onclick: () => { try { localStorage.setItem(key, '1'); } catch {} pill.remove(); } }, icon('close')));
   $('chatList')?.before(pill);
 }
 function donateSection(msg) {
