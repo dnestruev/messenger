@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111181816';
-import * as CONFIG from '../config.js?v=20261111181816';
-import * as E2E from './crypto.js?v=20261111181816';
-import { createNet } from './net.js?v=20261111181816';
-import { qrSvg } from './qr.js?v=20261111181816';
-import { findEmbed } from './embeds.js?v=20261111181816';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111181816';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111181816';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111181816';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111182358';
+import * as CONFIG from '../config.js?v=20261111182358';
+import * as E2E from './crypto.js?v=20261111182358';
+import { createNet } from './net.js?v=20261111182358';
+import { qrSvg } from './qr.js?v=20261111182358';
+import { findEmbed } from './embeds.js?v=20261111182358';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111182358';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111182358';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111182358';
 
 /* =====================================================================
    Утилиты
@@ -3475,7 +3475,7 @@ function makePeer(cur) {
   pc.onicecandidate = (e) => { if (e.candidate && call === cur) queueIce(cur, e.candidate.toJSON ? e.candidate.toJSON() : e.candidate); };
   pc.ontrack = (e) => {
     for (const tr of (e.streams[0]?.getTracks() || [e.track])) if (!cur.remote.getTracks().includes(tr)) cur.remote.addTrack(tr);
-    if (call === cur && cur.ui) { cur.ui.remote.srcObject = cur.remote; cur.ui.remote.play?.().catch(() => {}); updateCallUi(); }
+    if (call === cur && cur.ui) { cur.ui.remote.srcObject = cur.remote; cur.ui.remote.play?.().catch(() => {}); playCallAudio(cur); updateCallUi(); }
   };
   const onState = () => {
     if (call !== cur || cur.pc !== pc) return;
@@ -3646,6 +3646,8 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   if (!silent || cur.answered) sendCallReport(cur, status);
   cur.local?.getTracks().forEach((t) => t.stop());
   cur.camTrack?.stop(); cur.screenTrack?.stop();
+  callMediaSession(null);
+  try { if (cur.ui?.audio) { cur.ui.audio.pause(); cur.ui.audio.srcObject = null; } } catch {}
   try { cur.pc?.close(); } catch {}
   if (!remote && (status === 'missed' || status === 'failed')) sendSignal(cur.conv, cur.peer, { t: 'end', id: cur.id, why: status }).catch(() => {});
   const dur = cur.connectedAt ? Math.round((Date.now() - cur.connectedAt) / 1000) : 0;
@@ -3662,6 +3664,33 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   // итог звонка записывает тот, кто звонил (после записи «звоню…», иначе итог мог потеряться)
   if (cur.dir === 'out' && cur.logP) cur.logP.then((m) => m && updatePayload(m, { call: { id: cur.id, v: cur.video, s: status === 'ok' ? 'ok' : status, d: dur } })).catch(() => {});
 }
+
+/* ---------- Звонок в фоне: звук идёт через <audio>, на экране блокировки — карточка звонка ---------- */
+function playCallAudio(cur = call) {
+  const a = cur?.ui?.audio;
+  if (!a || call !== cur) return;
+  if (a.srcObject !== cur.remote) a.srcObject = cur.remote;
+  a.play?.().catch(() => {});
+}
+function callMediaSession(cur) {
+  try {
+    const ms = navigator.mediaSession;
+    if (!ms) return;
+    if (!cur) { ms.metadata = null; ms.playbackState = 'none'; for (const a of ['hangup', 'togglemicrophone', 'pause', 'stop']) { try { ms.setActionHandler(a, null); } catch {} } return; }
+    if (window.MediaMetadata) ms.metadata = new MediaMetadata({ title: 'Звонок: ' + nameOf(cur.peer), artist: 'Мессенджер' });
+    ms.playbackState = 'playing';
+    const set = (a, fn) => { try { ms.setActionHandler(a, fn); } catch {} };
+    set('hangup', () => hangUp());
+    set('togglemicrophone', () => { const mic = cur.local?.getAudioTracks()[0]; if (mic) { mic.enabled = !mic.enabled; try { ms.setMicrophoneActive?.(mic.enabled); } catch {} updateCallUi(); } });
+    set('pause', () => playCallAudio(cur));                 // «пауза» с гарнитуры/шторки не должна глушить собеседника
+    set('stop', () => {});
+  } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (!call?.ui) return;
+  playCallAudio(call);
+  if (!document.hidden) call.ui.remote.play?.().catch(() => {});
+});
 
 /* ---------- Экран звонка ---------- */
 function callButton(cls, ic, label, onclick) {
@@ -3682,6 +3711,10 @@ function showCallUi() {
   remote.setAttribute('playsinline', '');
   const local = h('video', { class: 'call-local', autoplay: true, playsInline: true, muted: true });
   local.setAttribute('playsinline', ''); local.muted = true;
+  // Звук собеседника — отдельным <audio>: <video> телефоны ставят на паузу, когда приложение свёрнуто или экран заблокирован
+  const audio = h('audio', { autoplay: true });
+  remote.muted = true;
+  audio.addEventListener('pause', () => { if (call === cur && cur.connectedAt) setTimeout(() => playCallAudio(cur), 300); });
   const status = h('div', { class: 'call-status' });
   const controls = h('div', { class: 'call-controls' });
   const peerBox = h('div', { class: 'call-peer' }, userAvatar(cur.peer, 'xl'), h('div', { class: 'call-name', text: nameOf(cur.peer) }), status);
@@ -3696,8 +3729,10 @@ function showCallUi() {
   addEventListener('resize', fit);
   cur.unfit = () => removeEventListener('resize', fit);
   remote.addEventListener('dblclick', () => { root.dataset.fill = '1'; root.classList.toggle('fit-contain'); });
-  cur.ui = { root, remote, local, status, controls };
+  cur.ui = { root, remote, local, status, controls, audio };
+  root.append(audio);
   document.body.append(root);
+  callMediaSession(cur);
   updateCallUi();
 }
 function setCallStatus(t) { if (call?.ui && !call.connectedAt) call.ui.status.textContent = t; }
@@ -3905,7 +3940,7 @@ function callBubble(m) {
 $('callAudioBtn').onclick = () => startCall(false);
 $('callVideoBtn').onclick = () => startCall(true);
 addEventListener('beforeunload', () => { if (call) hangUp(); });
-addEventListener('pagehide', () => { if (call) hangUp(); });
+addEventListener('pagehide', (e) => { if (call && !e.persisted) hangUp(); });   // свернули/заблокировали (страница жива) — звонок не рвём
 
 /* =====================================================================
    Голосовые сообщения
