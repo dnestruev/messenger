@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261110171346';
-import * as CONFIG from '../config.js?v=20261110171346';
-import * as E2E from './crypto.js?v=20261110171346';
-import { createNet } from './net.js?v=20261110171346';
-import { qrSvg } from './qr.js?v=20261110171346';
-import { findEmbed } from './embeds.js?v=20261110171346';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261110171346';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261110171346';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261110171346';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111075022';
+import * as CONFIG from '../config.js?v=20261111075022';
+import * as E2E from './crypto.js?v=20261111075022';
+import { createNet } from './net.js?v=20261111075022';
+import { qrSvg } from './qr.js?v=20261111075022';
+import { findEmbed } from './embeds.js?v=20261111075022';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111075022';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111075022';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111075022';
 
 /* =====================================================================
    Утилиты
@@ -269,6 +269,7 @@ function segmented(options, value, onpick) {
    ===================================================================== */
 let PROFILE_COLUMNS = 'id, username, display_name, avatar_hue, role, frame, avatar_path';
 /** Запрос профилей; если база ещё без аватарок (update-8) — повторяем без этой колонки */
+PROFILE_COLUMNS += ', hidden_badges';
 const FULL_PROFILE_COLUMNS = PROFILE_COLUMNS;
 async function selectProfiles(build) {
   if (PROFILE_COLUMNS !== FULL_PROFILE_COLUMNS) {          // база могла обновиться, пока приложение открыто
@@ -276,9 +277,11 @@ async function selectProfiles(build) {
     if (!full.error) { PROFILE_COLUMNS = FULL_PROFILE_COLUMNS; return full; }
   }
   let r = await build(sb.from('profiles').select(PROFILE_COLUMNS));
-  if (r.error && /avatar_path/.test(r.error.message || '')) {
-    PROFILE_COLUMNS = PROFILE_COLUMNS.replace(', avatar_path', '');
-    r = await build(sb.from('profiles').select(PROFILE_COLUMNS));
+  for (const col of ['hidden_badges', 'avatar_path']) {      // колонки ещё нет в базе — обходимся без неё
+    if (r.error && new RegExp(col).test(r.error.message || '')) {
+      PROFILE_COLUMNS = PROFILE_COLUMNS.replace(', ' + col, '');
+      r = await build(sb.from('profiles').select(PROFILE_COLUMNS));
+    }
   }
   return r;
 }
@@ -300,7 +303,7 @@ async function openUserProfile(uid, backTo = null) {
   const msg = note();
   openModal({ title: 'Профиль' },
     h('div', { class: 'profile-head' }, zoomAvatar(userAvatar(uid, 'lg'), uid),
-      h('div', { class: 'profile-name' }, nameLine(nameOf(uid), roleBadge(uid))), h('div', { class: 'profile-nick', text: nickOf(uid) })),
+      h('div', { class: 'profile-name', text: nameOf(uid) }), h('div', { class: 'name-line' }, roleBadge(uid)), h('div', { class: 'profile-nick', text: nickOf(uid) })),
     msg,
     h('button', { class: 'btn btn-primary btn-block', onclick: async () => { closeModal(); await openDirectByNick(state.people.get(uid)?.username); } }, icon('chat'), 'Написать'),
     backTo ? h('button', { class: 'btn btn-block', text: 'Назад к группе', onclick: () => openChatInfo(backTo) }) : null);
@@ -493,8 +496,10 @@ function clickableBadge(id, kind, compact = false) {
 }
 
 /** Все значки человека: команда, партнёрка (уровень) или Плюс, донатер. compact — только иконки. */
-function badgeKinds(id) {
+/** Значки человека. all = true — все, что у него есть; иначе без тех, что он сам скрыл (Настройки → «Значки у ника») */
+function badgeKinds(id, all = false) {
   const r = roleOf(id), k = perkOf(id), b = badgesOf(id);
+  const hidden = all ? [] : state.people.get(id)?.hidden_badges || [];
   let tier = tierOf(id);
   for (const t of ['bronze', 'silver', 'gold']) if (b.has(t) && (TIER_RANK[t] > (TIER_RANK[tier] || 0))) tier = t;   // выданный создателем уровень
   return [
@@ -504,10 +509,25 @@ function badgeKinds(id) {
     tier || (k === 'plus' || b.has('plus') ? 'plus' : null),
     b.has('relay') ? 'relay' : null,
     b.has('donor') ? 'donor' : null,
-  ].filter(Boolean);
+  ].filter((x) => x && !hidden.includes(x));
 }
-function roleBadge(id, compact = false) {
-  return badgeKinds(id).map((kind) => clickableBadge(id, kind, compact));
+/** Значки у имени. max — сколько показать; остальные сворачиваются в «+N» (по нажатию — весь список) */
+function roleBadge(id, compact = false, max = compact ? 2 : 99) {
+  const kinds = badgeKinds(id);
+  const shown = kinds.length > max ? kinds.slice(0, max) : kinds;
+  const out = shown.map((kind) => clickableBadge(id, kind, compact));
+  if (kinds.length > shown.length) out.push(h('span', {
+    class: 'role more', role: 'button', tabindex: 0, title: 'Все значки', text: '+' + (kinds.length - shown.length),
+    onclick: (e) => { e.preventDefault(); e.stopPropagation(); openBadges(id); },
+  }));
+  return out;
+}
+function openBadges(id) {
+  openModal({ title: 'Значки' },
+    h('div', { class: 'profile-head' }, userAvatar(id, 'lg'), h('div', { class: 'profile-name', text: nameOf(id) })),
+    h('div', { class: 'badge-list' }, ...badgeKinds(id).map((kind) => h('button', { class: 'badge-row', type: 'button', onclick: () => openStatusInfo(id, kind) },
+      badgeEl(kind), h('small', { text: (STATUS_INFO[kind]?.description || '').split('. ')[0] })))),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Понятно', onclick: closeModal }));
 }
 /** Рамка видна, только пока у человека есть Плюс */
 const frameOf = (id) => (hasPlus(id) && state.people.get(id)?.frame) || null;
@@ -555,7 +575,17 @@ const chatAvatar = (c, size) => {
   return el;
 };
 function verifiedIcon() { const v = icon('verified'); v.setAttribute('class', 'i verified'); return v; }
-const chatBadge = (c, compact = false) => (c.is_official ? verifiedIcon() : c.is_group || isSaved(c) ? null : roleBadge(otherOf(c), compact));
+// сколько значков влезает в шапку, зависит от ширины экрана — при её смене (поворот, первая раскладка) перерисовываем заголовок
+// (matchMedia, а не innerWidth: на телефоне innerWidth на миг «плавает», пока страница раскладывается)
+const headerBadgeMax = () => (matchMedia('(max-width: 399px)').matches ? 1 : matchMedia('(max-width: 700px)').matches ? 2 : 3);
+let headerBadgeShown = 0;
+addEventListener('resize', () => {
+  const c = state.chats?.get(state.activeId);
+  if (!c || headerBadgeMax() === headerBadgeShown) return;
+  headerBadgeShown = headerBadgeMax();
+  $('chatTitle').replaceChildren(nameLine(titleOf(c), chatBadge(c)));
+});
+const chatBadge = (c, compact = false) => (c.is_official ? verifiedIcon() : c.is_group || isSaved(c) ? null : roleBadge(otherOf(c), compact, compact ? 2 : headerBadgeMax()));
 /** Почему нельзя писать в чат (или null, если можно) */
 function writeBlock(c) {
   if (c.is_official && !isStaffMe()) return { text: 'Писать в официальный чат может только команда' };
@@ -1793,6 +1823,7 @@ function renderHeader() {
   $('searchBtn').hidden = false;
   $('callVideoBtn').hidden = !canCall;
   $('chatTitle').replaceChildren(nameLine(titleOf(c), chatBadge(c)));
+  headerBadgeShown = headerBadgeMax();
   $('chatAvatar').replaceChildren(chatAvatar(c, 'sm'));
   if (Date.now() < state.typing.until) {
     $('chatStatus').replaceChildren(h('span', { class: 'typing' }, c.is_group ? `${nameOf(state.typing.who)} печатает` : 'печатает',
@@ -2097,7 +2128,7 @@ function bubble(m, { showName, continued, fresh }) {
   const el = h('div', { class: classes.filter(Boolean).join(' '), dataset: { id: m.id } });
   if (showName) {
     el.append(h('div', { class: 'msg-from', vars: { '--h': hueOfUser(m.sender_id) }, title: 'Открыть профиль',
-      onclick: (e) => { e.stopPropagation(); openUserProfile(m.sender_id); } }, nameLine(nameOf(m.sender_id), roleBadge(m.sender_id))));
+      onclick: (e) => { e.stopPropagation(); openUserProfile(m.sender_id); } }, nameLine(nameOf(m.sender_id), roleBadge(m.sender_id, true))));
   }
   if (p?.f) el.append(h('div', { class: 'msg-fwd' }, icon('bookmark'), p.f.s === state.me.id ? 'Ваше сообщение' : 'От ' + (state.people.has(p.f.s) ? nameOf(p.f.s) : p.f.n || '…')));
   if (p?.r) {
@@ -3542,6 +3573,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   const dur = cur.connectedAt ? Math.round((Date.now() - cur.connectedAt) / 1000) : 0;
   const text = { ok: 'Звонок завершён · ' + fmtDur(dur), missed: cur.dir === 'out' ? 'Нет ответа' : 'Пропущенный звонок', declined: cur.dir === 'out' ? 'Звонок отклонён' : 'Вы отклонили звонок',
     busy: 'Собеседник занят', failed: 'Не удалось соединиться', cancel: 'Звонок отменён' }[status] || 'Звонок завершён';
+  setTimeout(() => { if (!call) lockZoom(false); }, 950);
   if (cur.ui) {
     cur.ui.root.classList.add('ending');
     setTimeout(() => cur.ui.root.remove(), 900);
@@ -3557,8 +3589,17 @@ function finishCall(status, { remote = false, silent = false } = {}) {
 function callButton(cls, ic, label, onclick) {
   return h('button', { class: 'call-ctl ' + cls, type: 'button', title: label, onclick }, h('span', { class: 'call-ctl-ic' }, icon(ic)), h('small', { text: label }));
 }
+/** На время звонка запрещаем масштаб (iPhone зумил экран звонка и страница так и оставалась увеличенной);
+ *  после звонка возвращаем как было — iOS при этом сам сбрасывает зум к обычному. */
+function lockZoom(on) {
+  const meta = document.querySelector('meta[name=viewport]');
+  if (!meta) return;
+  lockZoom.orig ||= meta.content;
+  meta.content = on ? lockZoom.orig.replace(/,?\s*maximum-scale=[^,]*/g, '') + ', maximum-scale=1' : lockZoom.orig;
+}
 function showCallUi() {
   const cur = call;
+  lockZoom(true);
   const remote = h('video', { class: 'call-remote', autoplay: true, playsInline: true });
   remote.setAttribute('playsinline', '');
   const local = h('video', { class: 'call-local', autoplay: true, playsInline: true, muted: true });
@@ -4241,7 +4282,7 @@ async function openChatInfo(id) {
     const blocked = state.blocked.has(other);
     openModal({ title: 'Профиль' },
       h('div', { class: 'profile-head' }, zoomAvatar(userAvatar(other, 'lg'), other),
-        h('div', { class: 'profile-name' }, nameLine(nameOf(other), roleBadge(other))), h('div', { class: 'profile-nick', text: nickOf(other) })),
+        h('div', { class: 'profile-name', text: nameOf(other) }), h('div', { class: 'name-line' }, roleBadge(other)), h('div', { class: 'profile-nick', text: nickOf(other) })),
       section('Код безопасности', codeBox,
         h('p', { text: 'Сравните с кодом на телефоне друга — при встрече или по звонку. Совпадает — значит, переписку никто не подменяет.' })),
       msg,
@@ -4265,7 +4306,7 @@ async function openChatInfo(id) {
   const msg = note();
   const members = (c.member_ids || []).map((uid) => h('div', { class: 'member clickable', title: 'Открыть профиль', onclick: () => openUserProfile(uid, id) }, userAvatar(uid, 'xs'),
     h('div', { class: 'row-text' },
-      h('b', {}, nameLine(nameOf(uid) + (uid === state.me.id ? ' (вы)' : ''), roleBadge(uid))),
+      h('b', {}, nameLine(nameOf(uid) + (uid === state.me.id ? ' (вы)' : ''), roleBadge(uid, true))),
       h('small', { text: nickOf(uid) + (keys.pub.get(uid)?.fp ? '' : ' · ещё не включил шифрование') }))));
 
   const officialRow = roleOf(state.me.id) === 'creator'
@@ -4401,7 +4442,7 @@ function openSettings() {
       for (const pp of data || []) state.people.set(pp.id, pp);
       teamList.replaceChildren(...(data || []).map((pp) => h('div', { class: 'member' },
         userAvatar(pp.id, 'xs'),
-        h('div', { class: 'row-text', style: { flex: '1' } }, h('b', {}, nameLine(nameOf(pp.id), roleBadge(pp.id))), h('small', { text: nickOf(pp.id) })),
+        h('div', { class: 'row-text', style: { flex: '1' } }, h('b', {}, nameLine(nameOf(pp.id), roleBadge(pp.id, true))), h('small', { text: nickOf(pp.id) })),
         pp.role === 'tester' ? h('button', { class: 'btn', text: 'Убрать', onclick: async () => {
           const { error } = await sb.rpc('set_role', { p_username: pp.username, p_role: null });
           if (error) return say(msg, humanError(error));
@@ -4424,6 +4465,7 @@ function openSettings() {
 
   openModal({ title: 'Настройки' },
     h('div', { class: 'profile-head' }, avatarSlot, h('div', { class: 'name-line' }, roleBadge(state.me.id)), h('div', { class: 'profile-nick', text: '@' + p.username })),
+    badgeVisibilitySection(msg),
     section('Профиль', name, nickRow(msg), swatches, photoControls(msg, drawAvatar), h('button', { class: 'btn btn-primary btn-block', text: 'Сохранить', onclick: async () => {
       const display_name = name.value.trim() || null;
       const { error } = await sb.from('profiles').update({ display_name, avatar_hue: hue }).eq('id', state.me.id);
@@ -4708,6 +4750,41 @@ function donateAdmin(msg) {
       nick.value = ''; say(msg, `@${u} получил значок «Донатер»`, 'ok');
       await loadPerks(); drawDonors(); renderChats();
     } })));
+}
+
+/** Какие значки показывать у ника: видно всем. Скрытый значок не пропадает — его можно вернуть в любой момент */
+function badgeVisibilitySection(msg) {
+  const me = state.me.id;
+  const prof = () => state.people.get(me);                // объект профиля могут подменить свежим — берём каждый раз
+  const all = badgeKinds(me, true);
+  if (!all.length) return null;
+  const box = h('div', { class: 'badge-vis' });
+  const refreshHeads = () => {
+    document.querySelectorAll('.modal .profile-head .name-line').forEach((el) => el.replaceWith(h('div', { class: 'name-line' }, roleBadge(me))));
+    renderMe(); renderChats();
+  };
+  const save = async (hidden) => {
+    const before = prof().hidden_badges || [];
+    prof().hidden_badges = hidden; draw(); refreshHeads();
+    const { error } = await sb.from('profiles').update({ hidden_badges: hidden }).eq('id', me);
+    if (error) {
+      prof().hidden_badges = before; draw(); refreshHeads();
+      say(msg, /hidden_badges|column|schema/i.test(error.message || '') ? 'Выбор значков заработает после обновления сервера' : humanError(error));
+    }
+  };
+  const draw = () => {
+    const hidden = prof().hidden_badges || [];
+    box.replaceChildren(
+      ...all.map((kind) => h('div', { class: 'row' + (hidden.includes(kind) ? ' off' : '') },
+        h('div', { class: 'row-text' }, h('span', { class: 'name-line' }, badgeEl(kind))),
+        toggle(!hidden.includes(kind), (e) => save(e.target.checked ? hidden.filter((x) => x !== kind) : [...hidden, kind])))),
+      h('div', { class: 'inline' },
+        h('button', { class: 'btn', type: 'button', text: 'Показать все', disabled: !hidden.length, onclick: () => save([]) }),
+        h('button', { class: 'btn', type: 'button', text: 'Скрыть все', disabled: hidden.length >= all.length, onclick: () => save([...all]) })));
+  };
+  draw();
+  return section('Значки у ника',
+    h('small', { class: 'muted', text: 'Выберите, какие значки видят все рядом с вашим именем. Скрытые остаются вашими.' }), box);
 }
 
 /** Ник: менять раз в 30 дней, старый ещё 30 дней ведёт сюда */

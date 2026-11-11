@@ -983,10 +983,11 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   display: grid; grid-template-rows: 1fr auto; place-items: center;
   padding: max(24px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
   background: radial-gradient(120% 80% at 50% 20%, hsl(230 40% 22%), #07070c 70%);
-  color: #fff; overflow: hidden;
+  color: #fff; overflow: hidden; touch-action: manipulation;   /* двойной тап по кнопкам не зумит */
   animation: call-in .35s var(--ease-out);
 }
-@keyframes call-in { from { opacity: 0; transform: scale(1.04); } }
+/* только уменьшение: увеличенный (scale > 1) экран на iPhone расширял страницу и она «залипала» в зуме */
+@keyframes call-in { from { opacity: 0; transform: scale(.97); } }
 .call-screen.ending { animation: call-out .8s ease forwards; }
 @keyframes call-out { 60% { opacity: 1; } to { opacity: 0; } }
 .call-remote { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .4s; background: #000; }
@@ -1181,6 +1182,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .tier-ladder { display: grid; gap: 8px; }
 .tier-step { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
 .tier-step.done { box-shadow: inset 0 0 0 1px var(--ok); }
+.tier-step > .btn { grid-column: 1 / -1; justify-self: start; min-height: 34px; padding: 6px 14px; background: var(--accent); color: #fff; border: 0; }   /* кнопка под текстом, а не в узкой колонке значка */
 .tier-step .row-text small { color: var(--muted); }
 .tier-mark { font-size: 13px; font-weight: 700; color: var(--muted); }
 .tier-step.done .tier-mark { color: var(--ok); }
@@ -1261,3 +1263,45 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 @media (hover: hover) { .admin-user:hover { background: var(--surface-2); } }
 .ban-box { display: grid; gap: 8px; }
 .ban-box .inline { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- Значки: компактно на телефонах, «+N», выбор показа ---------- */
+.role.more { padding: 1px 6px; background: var(--surface-3); color: var(--muted); cursor: pointer; font-variant-numeric: tabular-nums; }
+.role.mini + .role.more, .role.more { letter-spacing: 0; }
+.profile-head .name-line { flex-wrap: wrap; justify-content: center; row-gap: 5px; max-width: 100%; }
+.profile-head .name-line:empty { display: none; }
+.profile-head .name-line .role { animation: badge-pop .34s var(--spring) both; }
+.profile-head .name-line .role:nth-child(2) { animation-delay: .05s; }
+.profile-head .name-line .role:nth-child(3) { animation-delay: .1s; }
+.profile-head .name-line .role:nth-child(4) { animation-delay: .15s; }
+.profile-head .name-line .role:nth-child(n+5) { animation-delay: .2s; }
+@keyframes badge-pop { from { opacity: 0; transform: scale(.6); } }
+@media (max-width: 700px) {
+  /* в шапке чата, списках и сообщениях — только иконки; подписи остаются в профиле */
+  #chatTitle .role.more { width: auto; min-width: 18px; padding: 0 4px; font-size: 10px; }
+  #chatTitle .name-line { gap: 4px; }
+  #chatTitle .name-line .role + .role { margin-left: 1px; }
+  #chatTitle .name-line > .t { min-width: 2em; }
+  .profile-head .name-line .role { font-size: 10px; padding: 1px 6px 1px 4px; }
+  .profile-head .name-line .role > .i { width: 11px; height: 11px; }
+}
+.badge-list { display: grid; gap: 6px; }
+.badge-row { display: grid; justify-items: start; gap: 4px; padding: 10px 12px; border-radius: var(--radius); background: var(--surface-2); text-align: left; transition: transform .15s var(--spring); }
+.badge-row small { color: var(--muted); font-size: 12px; }
+.badge-row:active { transform: scale(.98); }
+.badge-vis { display: grid; gap: 4px; }
+.badge-vis .row { transition: opacity .2s; }
+.badge-vis .row.off .role { filter: grayscale(1); opacity: .5; }
+.badge-vis .inline { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.badge-vis .inline .btn { min-height: 34px; padding: 0 12px; font-size: 13px; }
+
+/* ---------- Чуть больше жизни (только transform/opacity) ---------- */
+.switch span::before { transition: transform .28s var(--spring); }
+.switch input:active + span::before { transform: scale(.9); }
+.switch input:checked:active + span::before { transform: translateX(18px) scale(.9); }
+.menu { animation: menu-pop .16s var(--ease-out); transform-origin: top left; }
+@keyframes menu-pop { from { opacity: 0; transform: scale(.94); } }
+.modal > .section, .modal > .profile-head { animation: rise .34s var(--spring) both; }
+.modal > .section:nth-of-type(2) { animation-delay: .03s; }
+.modal > .section:nth-of-type(3) { animation-delay: .06s; }
+.modal > .section:nth-of-type(n+4) { animation-delay: .09s; }
+.stat-tile { animation: rise .3s var(--spring) both; }

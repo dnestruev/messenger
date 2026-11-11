@@ -93,7 +93,7 @@ with sync_playwright() as pw:
     check('создатель: у себя корона + тестер + золото', a.page.locator('.profile-head .role.creator').count() == 1 and a.page.locator('.profile-head .role.tester').count() == 1 and a.page.locator('.profile-head .role.tier-gold').count() == 1)
     a.page.keyboard.press('Escape'); time.sleep(0.3)
     relog(b); b.open_chat('alice'); time.sleep(0.4)
-    b.page.locator('#chatTitle .role.tier-gold').first.click()
+    b.page.locator('#chatTitle .role.more').click(); b.page.locator('.badge-row', has=b.page.locator('.role.tier-gold')).click()   # на телефоне лишние значки свёрнуты в «+N»
     b.page.wait_for_selector('.status-check.is-ok', timeout=5000)
     check('карточка: «выдан создателем»', 'выдан создателем' in b.page.inner_text('.status-check'))
     b.page.keyboard.press('Escape')
