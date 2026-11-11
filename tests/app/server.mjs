@@ -250,7 +250,6 @@ const RPC = {
     if (p.id === uid || modLevel(p.id) >= lvl) return fail('cannot ban your level or higher');
     if (lvl === 1 && !(p_days >= 1 && p_days <= 7)) return fail('moderators ban for 1 to 7 days');
     const old = db.bans.find((b) => b.user_id === p.id);
-    if (old && old.by_user !== uid && modLevel(old.by_user) > lvl) return fail('ban was set by someone higher');
     db.bans = db.bans.filter((b) => b.user_id !== p.id).concat({ user_id: p.id, reason: p_reason, until: p_days ? new Date(Date.now() + p_days * 864e5).toISOString() : null, by_user: uid });
     db.mod_log.push({ id: db.mod_log.length + 1, actor: uid, action: 'ban', target: p.id, details: (p_days ? p_days + ' дн.' : 'навсегда') + (p_reason ? ': ' + p_reason : ''), created_at: now() });
     return null;
@@ -261,7 +260,6 @@ const RPC = {
     const p = db.profiles.find((x) => x.username === String(p_username).toLowerCase());
     const old = db.bans.find((b) => b.user_id === p?.id);
     if (!old) return null;
-    if (old.by_user !== uid && modLevel(old.by_user) > lvl) return fail('ban was set by someone higher');
     db.bans = db.bans.filter((b) => b.user_id !== p.id);
     db.mod_log.push({ id: db.mod_log.length + 1, actor: uid, action: 'unban', target: p.id, details: null, created_at: now() });
     return null;

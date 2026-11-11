@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111125157';
-import * as CONFIG from '../config.js?v=20261111125157';
-import * as E2E from './crypto.js?v=20261111125157';
-import { createNet } from './net.js?v=20261111125157';
-import { qrSvg } from './qr.js?v=20261111125157';
-import { findEmbed } from './embeds.js?v=20261111125157';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111125157';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111125157';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111125157';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111130212';
+import * as CONFIG from '../config.js?v=20261111130212';
+import * as E2E from './crypto.js?v=20261111130212';
+import { createNet } from './net.js?v=20261111130212';
+import { qrSvg } from './qr.js?v=20261111130212';
+import { findEmbed } from './embeds.js?v=20261111130212';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111130212';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111130212';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111130212';
 
 /* =====================================================================
    Утилиты
@@ -122,7 +122,6 @@ function humanError(err) {
     [/moderators ban for/i, 'Модератор может банить только на срок от 1 до 7 дней'],
     [/cannot ban your level/i, 'Нельзя банить себя и тех, кто равен или старше по правам'],
     [/cannot ban a creator/i, 'Создателя забанить нельзя'],
-    [/ban was set by someone higher/i, 'Этот бан поставил старший — снять или изменить его может только он или создатель'],
     [/only creators/i, 'Недостаточно прав (или срок прав модератора закончился)'],
     [/user is banned|banned/i, 'Аккаунт заблокирован'],
     [/username taken/i, 'Этот ник занят'],
@@ -385,7 +384,7 @@ const STATUS_INFO = {
   moderator: {
     label: 'Модератор',
     description: 'Следит за порядком в мессенджере: может временно заблокировать нарушителя.',
-    benefits: ['Список людей с поиском', 'Бан на срок от 1 до 7 дней', 'Снятие своих банов и банов других модераторов'],
+    benefits: ['Список людей с поиском', 'Бан на срок от 1 до 7 дней', 'Снятие любых банов'],
     how: 'Назначает только создатель.',
   },
   bronze: {
