@@ -25,6 +25,13 @@ const isMember = (uid, conv) => db.conversation_members.some((m) => m.conversati
 const conv = (id) => db.conversations.find((c) => c.id === id);
 const prof = (id) => db.profiles.find((p) => p.id === id);
 const fail = (message, code = 400) => ({ error: { message, code }, status: code });
+const PRM = () => (db.premium?.users ? db.premium : db.premium = { users: [], orders: [] });
+const isPrem = (uid) => PRM().users.some((p) => p.user_id === uid && new Date(p.until) > new Date());
+const premExtend = (uid, days) => {
+  let p = PRM().users.find((x) => x.user_id === uid);
+  if (!p) PRM().users.push(p = { user_id: uid, until: now(), nick_color: null });
+  p.until = new Date(Math.max(Date.now(), new Date(p.until).getTime()) + days * 864e5).toISOString();
+};
 /** магазин лимиток: создаётся заново после сброса базы */
 const LTD = () => (db.limited?.kinds ? db.limited : db.limited = { kinds: [['l_spark', 700, 100], ['l_owl', 900, 90], ['l_coffee', 1200, 80], ['l_pond', 1500, 70], ['l_bug', 1800, 60], ['l_vibe', 2200, 50], ['l_neon', 2700, 45], ['l_comet', 3200, 40], ['l_storm', 3800, 35], ['l_ice', 4500, 30], ['l_flame', 5200, 25], ['l_ghost', 6000, 20], ['l_diamond', 7000, 15], ['l_eclipse', 8000, 12], ['l_legend', 9500, 10], ['l_astro', 11000, 8], ['l_phoenix', 13000, 6], ['l_emperor', 15000, 5], ['l_hole', 17500, 3], ['l_absolute', 20000, 1], ['l_cinema', 10000, 10]].map(([kind, price, total]) => ({ kind, price, total })), items: [], orders: [] });
 
@@ -362,6 +369,42 @@ const RPC = {
     if (p_on) db.badge_grants.push({ user_id: p.id, kind: p_kind, since: now() });
     return null;
   },
+  // ---- Премиум (update-21) ----
+  premium_list: () => PRM().users.filter((p) => new Date(p.until) > new Date()).map((p) => ({ user_id: p.user_id, nick_color: p.nick_color })),
+  premium_me: (uid) => { const p = PRM().users.find((x) => x.user_id === uid); return [{ until: p?.until || null, nick_color: p?.nick_color || null, price_month: 2000, price_year: 24000 }]; },
+  premium_order: (uid, { p_months, p_proof }) => {
+    const proof = String(p_proof || '').trim();
+    if (![1, 12].includes(p_months)) return fail('bad premium term');
+    if (proof.length < 5 || proof.length > 300) return fail('bad proof');
+    if (PRM().orders.some((o) => o.buyer === uid && o.status === 'pending')) return fail('order already pending');
+    PRM().orders.push({ id: PRM().orders.length + 1, buyer: uid, months: p_months, price: p_months === 12 ? 24000 : 2000, proof, status: 'pending', note: null, created_at: now() });
+    return PRM().orders.length;
+  },
+  premium_cancel: (uid, { p_id }) => { const o = PRM().orders.find((x) => x.id === p_id && x.buyer === uid && x.status === 'pending'); if (!o) return fail('order not found'); o.status = 'cancelled'; return null; },
+  premium_my_orders: (uid) => PRM().orders.filter((o) => o.buyer === uid).map(({ id, months, price, status, note, created_at }) => ({ id, months, price, status, note, created_at })).reverse(),
+  premium_orders_admin: (uid) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    return PRM().orders.filter((o) => o.status === 'pending').map((o) => ({ id: o.id, buyer: prof(o.buyer)?.username, months: o.months, price: o.price, proof: o.proof, created_at: o.created_at, has_until: PRM().users.find((x) => x.user_id === o.buyer)?.until || null }));
+  },
+  premium_decide: (uid, { p_id, p_ok, p_note }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    const o = PRM().orders.find((x) => x.id === p_id && x.status === 'pending');
+    if (!o) return fail('order not found');
+    if (p_ok) { premExtend(o.buyer, o.months * 30); o.status = 'approved'; } else { o.status = 'rejected'; o.note = p_note || null; }
+    return null;
+  },
+  premium_grant: (uid, { p_username, p_days }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    const p = db.profiles.find((x) => x.username === String(p_username).replace(/^@/, '').trim().toLowerCase());
+    if (!p) return fail('user not found');
+    if (!p_days || p_days <= 0) PRM().users = PRM().users.filter((x) => x.user_id !== p.id); else premExtend(p.id, p_days);
+    return null;
+  },
+  set_nick_color: (uid, { p_color }) => {
+    const p = PRM().users.find((x) => x.user_id === uid && new Date(x.until) > new Date());
+    if (!p) return fail('premium only');
+    p.nick_color = p_color || null; return null;
+  },
   // ---- магазин лимиток (update-19) ----
   limited_catalog: () => LTD().kinds.map((k) => ({ kind: k.kind, price: k.price, total: k.total, sold: LTD().items.filter((i) => i.kind === k.kind).length,
     pending: LTD().orders.filter((o) => o.kind === k.kind && o.status === 'pending' && !o.resale).length })),
@@ -381,7 +424,7 @@ const RPC = {
       if (!k) return fail('no such limited');
       if (L.orders.some((x) => x.buyer === uid && x.kind === k.kind && x.status === 'pending' && !x.resale)) return fail('order already pending');
       if (L.items.filter((i) => i.kind === k.kind).length + L.orders.filter((x) => x.kind === k.kind && x.status === 'pending' && !x.resale).length >= k.total) return fail('limited sold out');
-      Object.assign(o, { kind: k.kind, price: k.price });
+      Object.assign(o, { kind: k.kind, price: isPrem(uid) ? Math.round(k.price * 0.9) : k.price });
     } else {
       const it = L.items.find((i) => i.id === p_item);
       if (!it || it.sale_price == null) return fail('not for sale');
@@ -431,6 +474,7 @@ const RPC = {
     return [...relay.map((u) => ({ user_id: u, kind: 'relay', granted: false })),
       ...db.badge_grants.filter((g) => !(g.kind === 'relay' && relay.includes(g.user_id))).map((g) => ({ user_id: g.user_id, kind: g.kind, granted: true })),
       ...db.moderators.filter((m) => activeMod(m.user_id) && modLevel(m.user_id)).map((m) => ({ user_id: m.user_id, kind: m.level, granted: true })),
+      ...PRM().users.filter((p) => new Date(p.until) > new Date()).map((p) => ({ user_id: p.user_id, kind: 'premium', granted: false })),
       ...[...new Set(LTD().items.map((i) => i.owner + '|' + i.kind))].map((x) => ({ user_id: x.split('|')[0], kind: x.split('|')[1], granted: false }))];
   },
   touch_seen: (uid) => { const r = db.last_seen.find((x) => x.user_id === uid); if (r) r.seen_at = now(); else db.last_seen.push({ user_id: uid, seen_at: now(), hidden: false }); return null; },

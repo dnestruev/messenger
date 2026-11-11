@@ -30,6 +30,7 @@ python3 tests/app/t_badges.py    # значки: «+N», выбор показа
 python3 tests/app/t_mods.py      # модераторы: урезанная админка, старший, срок прав
 python3 tests/app/t_screen.py    # демонстрация экрана в аудио- и видеозвонке
 python3 tests/app/t_shop.py      # магазин лимиток: покупка, выдача, перепродажа
+python3 tests/app/t_premium.py   # Премиум: покупка, значок, цветной ник, темы, рамки, скидка
 python3 tests/app/t_partner.py # уровни партнёров, TURN партнёра, донаты, значки
 python3 tests/app/t_layout.py  # скриншоты 320×568, 375×667, 667×375, 1440×900 → /home/claude/test/shots
 ```

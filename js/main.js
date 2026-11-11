@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111185619';
-import * as CONFIG from '../config.js?v=20261111185619';
-import * as E2E from './crypto.js?v=20261111185619';
-import { createNet } from './net.js?v=20261111185619';
-import { qrSvg } from './qr.js?v=20261111185619';
-import { findEmbed } from './embeds.js?v=20261111185619';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111185619';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111185619';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111185619';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111191602';
+import * as CONFIG from '../config.js?v=20261111191602';
+import * as E2E from './crypto.js?v=20261111191602';
+import { createNet } from './net.js?v=20261111191602';
+import { qrSvg } from './qr.js?v=20261111191602';
+import { findEmbed } from './embeds.js?v=20261111191602';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111191602';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111191602';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111191602';
 
 /* =====================================================================
    Утилиты
@@ -123,6 +123,9 @@ function humanError(err) {
     [/cannot ban your level/i, 'Нельзя банить себя и тех, кто равен или старше по правам'],
     [/cannot ban a creator/i, 'Создателя забанить нельзя'],
     [/ban was set by someone higher/i, 'Этот бан поставил старший — снять или изменить его может только он или создатель'],
+    [/premium only/i, 'Это доступно только с Премиумом'],
+    [/frame needs premium/i, 'Эта рамка — только с Премиумом'],
+    [/bad premium term/i, 'Премиум оформляется на месяц или на год'],
     [/limited sold out/i, 'Этот статус уже разобрали — посмотрите во вкладке «С рук»'],
     [/order already pending/i, 'Ваша заявка на этот статус уже ждёт проверки'],
     [/too many pending orders/i, 'У вас уже 3 заявки на проверке — дождитесь ответа'],
@@ -170,6 +173,7 @@ const state = {
   more: new Map(),          // id чата -> есть ли более ранние сообщения
   typing: { channel: null, until: 0, sentAt: 0, timer: null },
   perks: new Map(),         // id -> 'partner' | 'plus' (награды за узел-партнёр)
+  premium: new Map(),       // id -> цвет ника: у кого сейчас Премиум
   tiers: new Map(),         // id партнёра -> 'bronze' | 'silver' | 'gold'
   badges: new Map(),        // id → Map(значок → выдан вручную): «Связь», донатер, значки от создателя
   settings: {},             // общие настройки: donate_url, donate_text
@@ -204,10 +208,11 @@ const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 const resolvedMode = () => (prefs.mode === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : prefs.mode);
 
 const PLUS_STYLES = ['paper', 'neon'];
+const PREMIUM_STYLES = ['sunset', 'abyss'];
 function applyTheme() {
   const root = document.documentElement;
   const plus = prefs.plus;                                  // запоминаем, чтобы тема не мигала при запуске
-  root.dataset.style = !plus && PLUS_STYLES.includes(prefs.style) ? 'classic' : prefs.style;
+  root.dataset.style = (!plus && PLUS_STYLES.includes(prefs.style)) || (!prefs.premium && PREMIUM_STYLES.includes(prefs.style)) ? 'classic' : prefs.style;
   root.dataset.mode = resolvedMode();
   if (plus && prefs.accent != null) {
     const dark = resolvedMode() === 'dark';
@@ -352,7 +357,10 @@ function avatar(label, hue, size = '', badge = null, extra = '', photo = null) {
     badge ? h('span', { class: 'badge' }, icon(badge)) : null);
 }
 const roleOf = (id) => state.people.get(id)?.role || null;
-const perkOf = (id) => state.perks.get(id) || null;
+/** Премиум: Map id -> цвет ника (или null). Премиум включает всё из Плюса */
+const isPremium = (id = state.me?.id) => state.premium.has(id);
+const nickColorOf = (id) => state.premium.get(id) || null;
+const perkOf = (id) => state.perks.get(id) || (state.premium.has(id) ? 'plus' : null);
 const hasPlus = (id = state.me?.id) => !!perkOf(id);
 /** Уровень партнёра: бронза — узел, серебро — узел + TURN, золото — серебро 30 дней */
 const tierOf = (id) => (perkOf(id) === 'partner' ? state.tiers.get(id) || 'bronze' : null);
@@ -374,6 +382,7 @@ const BADGE = {
   relay: { icon: 'relay', label: 'Связь' },
   bro: { icon: 'sparkle', label: 'Реальный бро' },
   bee: { icon: 'bee', label: 'Любитель пчёлок' },
+  premium: { icon: 'premium', label: 'Премиум' },
 };
 /** Лимитированные статусы из магазина: от дешёвого к дорогому. Цена и тираж — в базе (limited_kinds) */
 const LIMITED = [
@@ -455,6 +464,12 @@ const STATUS_INFO = {
     description: 'Уникальный значок — такой есть только у одного человека во всём мессенджере. Он поверил в проект одним из первых, поднял узлы и серверы для звонков и тестировал всё подряд.',
     benefits: ['Единственный в мире значок «Реальный бро»', 'Вечный — его нельзя снять', 'Респект от создателя 🤝'],
     how: 'Никак: он выпущен в одном экземпляре и уже занят.',
+  },
+  premium: {
+    label: 'Премиум',
+    description: 'Платная подписка: человек поддерживает проект деньгами и получает сверху красивые штуки.',
+    benefits: ['Всё из Плюса: темы «Бумага» и «Неон», альбомы, большие группы', 'Эксклюзивные темы «Закат» и «Бездна», анимированные рамки', 'Цветной ник', 'Файлы до 25 МБ', 'Демонстрация экрана в высоком качестве', 'Скидка 10% на лимитки в магазине'],
+    how: 'Настройки → «Магазин» → карточка «Премиум»: 2 000 ₽ за месяц или 24 000 ₽ за год.',
   },
   bee: {
     label: 'Любитель пчёлок',
@@ -604,11 +619,12 @@ function badgeKinds(id, all = false) {
   return [
     r && BADGE[r] ? r : null,
     r === 'creator' ? null : b.has('senior') ? 'senior' : b.has('moderator') ? 'moderator' : null,
+    state.premium.has(id) || b.has('premium') ? 'premium' : null,
     b.has('bro') ? 'bro' : null,
     b.has('bee') ? 'bee' : null,
     ...LIMITED.filter((l) => b.has(l.kind)).map((l) => l.kind).reverse(),   // дорогие первыми
     r !== 'tester' && b.has('tester') ? 'tester' : null,
-    tier || (k === 'plus' || b.has('plus') ? 'plus' : null),
+    tier || (!state.premium.has(id) && (k === 'plus' || b.has('plus')) ? 'plus' : b.has('plus') && !state.premium.has(id) ? 'plus' : null),
     b.has('relay') ? 'relay' : null,
     b.has('donor') ? 'donor' : null,
   ].filter((x) => x && !hidden.includes(x));
@@ -634,7 +650,7 @@ function openBadges(id) {
     h('button', { class: 'btn btn-block', type: 'button', text: 'Понятно', onclick: closeModal }));
 }
 /** Рамка видна, только пока у человека есть Плюс */
-const frameOf = (id) => (hasPlus(id) && state.people.get(id)?.frame) || null;
+const frameOf = (id) => { const f = hasPlus(id) && state.people.get(id)?.frame; return f && (isPremium(id) || !PREMIUM_FRAMES.some(([x]) => x === f)) ? f : null; };
 async function loadPerks() {
   const { data, error } = await sb.rpc('perks_list');
   if (error) return;                                        // база ещё без update-7
@@ -645,7 +661,13 @@ async function loadPerks() {
   state.perks = next;
   state.tiers = tiers;
   // донатеры и ссылка «Поддержать» (таблицы появятся с update-14; до этого просто пусто)
-  const [bl, st] = await Promise.all([sb.rpc('badges_list'), sb.from('app_settings').select('key, value')]);
+  const [bl, st, pl] = await Promise.all([sb.rpc('badges_list'), sb.from('app_settings').select('key, value'), sb.rpc('premium_list')]);
+  if (!pl.error) {                                          // до update-21 функции нет — Премиума просто ни у кого нет
+    const prem = new Map((pl.data || []).map((r) => [r.user_id, r.nick_color || null]));
+    if (prem.size !== state.premium.size || [...prem].some(([k, v]) => !state.premium.has(k) || state.premium.get(k) !== v)) changed = true;
+    state.premium = prem;
+    premiumReminder();
+  }
   if (!bl.error) {
     const badges = new Map();
     for (const r of bl.data || []) {
@@ -658,14 +680,21 @@ async function loadPerks() {
   }
   if (!st.error) state.settings = Object.fromEntries((st.data || []).map((r) => [r.key, r.value]));
   donateBanner();
-  const plus = hasPlus();
-  if (plus !== prefs.plus) { prefs.plus = plus; savePrefs(); applyTheme(); }
+  const plus = hasPlus(), prem = isPremium();
+  if (plus !== prefs.plus || prem !== !!prefs.premium) { prefs.plus = plus; prefs.premium = prem; savePrefs(); applyTheme(); }
   if (await refreshPeople().catch(() => false)) changed = true;
   if (changed) { renderMe(); renderChats(); if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); } }
   $('fileInput').multiple = true;                       // файлов можно сколько угодно; фото альбомом — с Плюсом
 }
 /** Имя + значок роли (или галочка официального чата) с обрезкой длинного текста */
 const nameLine = (text, ...after) => h('span', { class: 'name-line' }, h('span', { class: 't', text }), ...after);
+/** То же для человека: с Премиумом ник может быть цветным */
+const nickLine = (uid, text, ...after) => {
+  const el = nameLine(text, ...after), c = uid && nickColorOf(uid);
+  if (c) el.firstChild.classList.add('nick-c', 'nick-' + c);
+  return el;
+};
+const dmPeer = (c) => (c && !c.is_group && !isSaved(c) ? otherOf(c) : null);
 const userAvatar = (id, size) => avatar(nameOf(id), hueOfUser(id), size, null, [roleOf(id), frameOf(id) && 'frame frame-' + frameOf(id)].filter(Boolean).join(' '), photoOf(id));
 const isStaffMe = () => !!roleOf(state.me.id);
 const isSaved = (c) => !!c && c.id === state.savedId;
@@ -688,7 +717,7 @@ addEventListener('resize', () => {
   const c = state.chats?.get(state.activeId);
   if (!c || headerBadgeMax() === headerBadgeShown) return;
   headerBadgeShown = headerBadgeMax();
-  $('chatTitle').replaceChildren(nameLine(titleOf(c), chatBadge(c)));
+  $('chatTitle').replaceChildren(nickLine(dmPeer(c), titleOf(c), chatBadge(c)));
 });
 const chatBadge = (c, compact = false) => (c.is_official ? verifiedIcon() : c.is_group || isSaved(c) ? null : roleBadge(otherOf(c), compact, compact ? 2 : headerBadgeMax()));
 /** Почему нельзя писать в чат (или null, если можно) */
@@ -1208,7 +1237,7 @@ function stopApp() {
   state.activeId = null;
   state.people.clear(); state.chats.clear(); state.history.clear(); state.blocked.clear(); state.reads.clear();
   state.showArchive = false;
-  clearInterval(state.perksTimer); state.perks.clear(); state.tiers.clear(); state.badges.clear(); state.settings = {}; state.seen.clear(); state.savedId = null;
+  clearInterval(state.perksTimer); state.perks.clear(); state.premium.clear(); state.tiers.clear(); state.badges.clear(); state.settings = {}; state.seen.clear(); state.savedId = null;
   stopPresence(); state.lastSeen.clear(); state.reactions.clear(); state.shown.clear();
   stopCalls();
   stopNews();
@@ -1237,7 +1266,7 @@ async function loadBlocks() {
 
 function renderMe() {
   const p = state.people.get(state.me.id);
-  $('meName').replaceChildren(nameLine(p.display_name || p.username, roleBadge(state.me.id, true)));
+  $('meName').replaceChildren(nickLine(state.me.id, p.display_name || p.username, roleBadge(state.me.id, true)));
   $('meNick').textContent = '@' + p.username;
   $('meAvatar').replaceChildren(userAvatar(state.me.id, 'sm'));
 }
@@ -1346,7 +1375,7 @@ function renderChats() {
       chatAvatar(c),
       h('span', { class: 'chat-item-body' },
         h('span', { class: 'chat-item-row' },
-          h('span', { class: 'chat-item-name' }, nameLine(titleOf(c), chatBadge(c, true))),
+          h('span', { class: 'chat-item-name' }, nickLine(dmPeer(c), titleOf(c), chatBadge(c, true))),
           h('span', { class: 'chat-item-time', text: c.last_sender ? shortTime(c.last_message_at) : '' })),
         h('span', { class: 'chat-item-row' },
           h('span', { class: 'chat-item-last', text: previewOf(c) }),
@@ -1927,7 +1956,7 @@ function renderHeader() {
   $('callAudioBtn').hidden = !canCall;
   $('searchBtn').hidden = false;
   $('callVideoBtn').hidden = !canCall;
-  $('chatTitle').replaceChildren(nameLine(titleOf(c), chatBadge(c)));
+  $('chatTitle').replaceChildren(nickLine(dmPeer(c), titleOf(c), chatBadge(c)));
   headerBadgeShown = headerBadgeMax();
   $('chatAvatar').replaceChildren(chatAvatar(c, 'sm'));
   if (Date.now() < state.typing.until) {
@@ -2233,7 +2262,7 @@ function bubble(m, { showName, continued, fresh }) {
   const el = h('div', { class: classes.filter(Boolean).join(' '), dataset: { id: m.id } });
   if (showName) {
     el.append(h('div', { class: 'msg-from', vars: { '--h': hueOfUser(m.sender_id) }, title: 'Открыть профиль',
-      onclick: (e) => { e.stopPropagation(); openUserProfile(m.sender_id); } }, nameLine(nameOf(m.sender_id), roleBadge(m.sender_id, true))));
+      onclick: (e) => { e.stopPropagation(); openUserProfile(m.sender_id); } }, nickLine(m.sender_id, nameOf(m.sender_id), roleBadge(m.sender_id, true))));
   }
   if (p?.f) el.append(h('div', { class: 'msg-fwd' }, icon('bookmark'), p.f.s === state.me.id ? 'Ваше сообщение' : 'От ' + (state.people.has(p.f.s) ? nameOf(p.f.s) : p.f.n || '…')));
   if (p?.r) {
@@ -2701,7 +2730,7 @@ async function shrinkImage(file) {
 /* =====================================================================
    Файлы: любые до 5 МБ, шифруются и хранятся у партнёров, как фото
    ===================================================================== */
-const FILE_MAX = 5 * 1024 * 1024;
+const FILE_MAX = 5 * 1024 * 1024, FILE_MAX_PREMIUM = 25 * 1024 * 1024;
 const fmtSize = (n) => (n < 1024 ? n + ' Б' : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0).replace('.', ',') + ' КБ' : (n / 1048576).toFixed(1).replace('.', ',') + ' МБ');
 function fileKind(name, mime) {
   const ext = (name.split('.').pop() || '').toLowerCase();
@@ -2718,7 +2747,7 @@ function fileKind(name, mime) {
 async function sendFile(file, target = null, extra = null) {
   const chatId = target || state.activeId;
   if (!chatId) return;
-  if (file.size > FILE_MAX) return inlineError(`«${file.name}» больше 5 МБ — так много места у партнёров нет`);
+  if (file.size > (isPremium() ? FILE_MAX_PREMIUM : FILE_MAX)) return inlineError(isPremium() ? `«${file.name}» больше 25 МБ` : `«${file.name}» больше 5 МБ. С Премиумом можно до 25 МБ`);
   if (!file.size) return inlineError(`«${file.name}» пустой`);
   if (!(await canSend(chatId))) return;
   $('uploading').hidden = false;
@@ -3826,7 +3855,8 @@ async function startScreen() {
   cur.screenBusy = true;
   let track = null;
   try {
-    const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 30 } }, audio: false });
+    const hq = isPremium();                                 // Премиум: 1080p и 60 кадров, остальным — обычное качество
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: hq ? { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, max: 60 } } : { frameRate: { ideal: 15, max: 30 } }, audio: false });
     track = s.getVideoTracks()[0];
     if (call !== cur || !track) { track?.stop(); return; }
     try { track.contentHint = 'detail'; } catch {}
@@ -3849,7 +3879,13 @@ async function startScreen() {
     if (!cur.local.getTracks().includes(track)) cur.local.addTrack(track);
     cur.screenTrack = track;
     track.addEventListener('ended', () => { if (cur.screenTrack === track) stopScreen(cur); });
-    tuneSenders(pc);
+    await tuneSenders(pc);
+    if (hq) try {                                           // только дорожка экрана; остальное в звонке не трогаем
+      const snd = pc.getSenders().find((x) => x.track === track), prm = snd.getParameters();
+      if (!prm.encodings?.length) prm.encodings = [{}];
+      prm.encodings[0].maxBitrate = 8_000_000; prm.encodings[0].maxFramerate = 60;
+      await snd.setParameters(prm);
+    } catch {}
     sendSignal(cur.conv, cur.peer, { t: 'screen', id: cur.id, on: true }).catch(() => {});
     cur.ui.local.srcObject = null; updateCallUi();
   } catch (e) {
@@ -4538,7 +4574,7 @@ async function openChatInfo(id) {
   const msg = note();
   const members = (c.member_ids || []).map((uid) => h('div', { class: 'member clickable', title: 'Открыть профиль', onclick: () => openUserProfile(uid, id) }, userAvatar(uid, 'xs'),
     h('div', { class: 'row-text' },
-      h('b', {}, nameLine(nameOf(uid) + (uid === state.me.id ? ' (вы)' : ''), roleBadge(uid, true))),
+      h('b', {}, nickLine(uid, nameOf(uid) + (uid === state.me.id ? ' (вы)' : ''), roleBadge(uid, true))),
       h('small', { text: nickOf(uid) + (keys.pub.get(uid)?.fp ? '' : ' · ещё не включил шифрование') }))));
 
   const officialRow = roleOf(state.me.id) === 'creator'
@@ -4710,6 +4746,7 @@ function openSettings() {
     perksSection(msg),
     callsHelpSection(),
     donateSection(msg),
+    premiumSection(msg),
     shopSection(),
     section('Оформление',
       segmented([['classic', 'Обычный'], ['dot', 'Dot'], ['aurora', 'Аврора']], prefs.style, (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })),
@@ -4756,6 +4793,7 @@ function openSettings() {
    Награды партнёрам: «Партнёр» и «Плюс»
    ===================================================================== */
 const FRAMES = [[null, 'Нет'], ['gold', 'Золото'], ['aurora', 'Сияние'], ['neon', 'Неон'], ['dots', 'Точки']];
+const PREMIUM_FRAMES = [['fire', 'Огонь'], ['prism', 'Призма']];
 const PERKS = [
   'Значок у ника — его видят все',
   'Фото в высоком качестве и альбомы до 10 фото',
@@ -4772,7 +4810,7 @@ function perksSection(msg) {
   const status = kind === 'partner'
     ? h('div', { class: 'perk-card on' }, h('b', {}, 'Вы партнёр сети ', badgeEl(tier)), h('small', { text: 'Ваш узел в сети — все награды включены. Спасибо!' }))
     : kind === 'plus'
-      ? h('div', { class: 'perk-card on' }, h('b', { text: 'У вас Плюс' }), h('small', { text: 'Подарок от партнёра. Действует, пока его узел в сети.' }))
+      ? h('div', { class: 'perk-card on' }, h('b', { text: 'У вас Плюс' }), h('small', { text: state.perks.get(me) ? 'Подарок от партнёра. Действует, пока его узел в сети.' : 'Входит в ваш Премиум.' }))
       : h('div', { class: 'perk-card' }, h('b', { text: 'Обычный аккаунт' }),
         h('small', { text: 'Всё общение бесплатно и без ограничений. Партнёры сети получают сверху:' }));
   const list = h('ul', { class: 'perk-list' }, ...PERKS.map((t) => h('li', { class: kind ? 'on' : '' }, kind ? '✓ ' : '· ', t)));
@@ -4785,7 +4823,7 @@ function perksSection(msg) {
   } else {
     // Рамка
     const frames = h('div', { class: 'frames' });
-    const drawFrames = () => frames.replaceChildren(...FRAMES.map(([f, label]) => h('button', {
+    const drawFrames = () => frames.replaceChildren(...[...FRAMES, ...(isPremium() ? PREMIUM_FRAMES : [])].map(([f, label]) => h('button', {
       class: 'frame-pick' + ((state.people.get(me)?.frame || null) === f ? ' on' : ''), title: label, type: 'button',
       onclick: async () => {
         const { error } = await sb.from('profiles').update({ frame: f }).eq('id', me);
@@ -5070,13 +5108,77 @@ function changeNickDialog() {
 /* ---------- Магазин лимитированных статусов. Деньги приложение не видит: человек платит донатом,
    присылает подтверждение, создатель проверяет и выдаёт. Перепродажа — напрямую между людьми: продавец сам
    подтверждает, что получил деньги, и статус переходит. Комиссии нет. ---------- */
+/* ---------- Премиум: платная подписка. Оплата как у лимиток — донатом, выдаёт создатель ---------- */
+const NICK_COLORS = [[null, 'Обычный'], ['gold', 'Золото'], ['fire', 'Огонь'], ['ocean', 'Океан'], ['mint', 'Мята'], ['violet', 'Фиалка'], ['rose', 'Роза'], ['rainbow', 'Радуга']];
+const PREMIUM_PERKS = ['Значок «Премиум» у ника', 'Всё из Плюса: темы, альбомы, большие группы, рамки', 'Темы «Закат» и «Бездна», рамки «Огонь» и «Призма»', 'Цветной ник', 'Файлы до 25 МБ', 'Демонстрация экрана 1080p, 60 кадров', 'Скидка 10% на лимитки'];
+/** За 3 дня до конца подписки — напоминание раз в сутки */
+async function premiumReminder() {
+  if (!isPremium()) return;
+  try {
+    const key = 'premium-remind:' + state.me.id, today = new Date().toISOString().slice(0, 10);
+    if (localStorage.getItem(key) === today) return;
+    const { data } = await sb.rpc('premium_me');
+    const until = data?.[0]?.until && new Date(data[0].until);
+    if (!until || until - Date.now() > 3 * 864e5) return;
+    localStorage.setItem(key, today);
+    toast('Премиум закончится ' + fmtDate(until.toISOString()) + '. Продлить — в магазине');
+  } catch {}
+}
+function premiumSection(msg) {
+  const me = state.me.id, on = isPremium();
+  const body = h('div', { style: { display: 'grid', gap: '12px' } });
+  const info = h('small', { text: on ? 'Спасибо, что поддерживаете проект!' : '2 000 ₽ за месяц или 24 000 ₽ за год' });
+  body.append(h('div', { class: 'perk-card' + (on ? ' on' : '') }, h('b', {}, on ? 'У вас ' : '', badgeEl('premium')), info),
+    h('ul', { class: 'perk-list' }, ...PREMIUM_PERKS.map((t) => h('li', { class: on ? 'on' : '' }, on ? '✓ ' : '· ', t))));
+  if (on) {
+    sb.rpc('premium_me').then(({ data }) => { if (data?.[0]?.until) info.textContent = 'Действует до ' + fmtDate(data[0].until) + '. Спасибо за поддержку!'; });
+    const colors = h('div', { class: 'nick-colors' });
+    const drawColors = () => colors.replaceChildren(...NICK_COLORS.map(([c, label]) => h('button', {
+      type: 'button', class: 'nick-pick' + ((nickColorOf(me) || null) === c ? ' on' : ''),
+      onclick: async () => {
+        const { error } = await sb.rpc('set_nick_color', { p_color: c });
+        if (error) return say(msg, humanError(error));
+        state.premium.set(me, c); drawColors(); renderMe(); renderChats();
+        if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); }
+      },
+    }, h('span', { class: c ? 'nick-c nick-' + c : '', text: label }))));
+    drawColors();
+    body.append(h('div', { class: 'row-text' }, h('b', { text: 'Цвет ника' }), h('small', { text: 'Так ваше имя видят все' })), colors,
+      h('div', { class: 'row-text' }, h('b', { text: 'Темы Премиума' })),
+      segmented([['sunset', 'Закат'], ['abyss', 'Бездна']], prefs.style, (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })),
+      h('small', { class: 'muted', text: 'Рамки «Огонь» и «Призма» — ниже, в разделе наград, рядом с обычными.' }));
+  }
+  body.append(h('button', { class: 'btn btn-primary btn-block', type: 'button', text: on ? 'Продлить' : 'Оформить Премиум', onclick: () => openShop('shop') }));
+  return section('Премиум', body);
+}
+function premiumBuyDialog(months, price) {
+  const url = state.settings.donate_url, msg = note();
+  const proof = h('textarea', { rows: 3, maxLength: 300, placeholder: 'Ссылка на донат или: имя в донате, сумма и время' });
+  openModal({ title: 'Премиум на ' + (months === 12 ? 'год' : 'месяц') },
+    h('div', { class: 'shop-card' }, h('div', { class: 'shop-badge' }, badgeEl('premium')), h('div', { class: 'shop-line' }, h('b', { text: rub(price) }), h('small', { text: months === 12 ? '12 месяцев' : '1 месяц' }))),
+    h('ol', { class: 'shop-steps' },
+      h('li', {}, `Отправьте донат на ${rub(price)} — ровно эту сумму. `, url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Открыть страницу оплаты' }) : 'Ссылку на оплату спросите у @deltaofishal.'),
+      h('li', { text: 'В сообщении к донату напишите свой ник в мессенджере.' }),
+      h('li', { text: 'Вставьте сюда ссылку или опишите донат, чтобы создатель его нашёл.' }),
+      h('li', { text: 'Создатель проверит оплату и включит Премиум. Если он уже есть — срок прибавится.' })),
+    proof, msg,
+    h('small', { class: 'muted', text: 'Возврата нет. Подписка сама выключится, когда срок закончится, — деньги автоматически не списываются.' }),
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Я оплатил — отправить заявку', onclick: async (e) => {
+      e.target.disabled = true;
+      const { error } = await sb.rpc('premium_order', { p_months: months, p_proof: proof.value.trim() });
+      e.target.disabled = false;
+      if (error) return say(msg, humanError(error));
+      toast('Заявка отправлена — ждите проверки'); openShop('mine');
+    } }),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: () => openShop('shop') }));
+}
 const shopOld = (error) => /limited_/i.test(error?.message || '') && /function|schema cache|does not exist/i.test(error?.message || '');
 function shopSection() {
-  return section('Магазин лимиток',
+  return section('Магазин',
     h('div', { class: 'row' },
       h('div', { class: 'row-text' },
         h('b', {}, icon('gem'), ' Лимитированные статусы'),
-        h('small', { text: '20 редких значков к нику. Тираж ограничен: разберут — останется только с рук.' })),
+        h('small', { text: 'Премиум и редкие значки к нику. Тираж лимиток ограничен: разберут — останется только с рук.' })),
       h('button', { class: 'btn btn-primary', type: 'button', text: 'Открыть', onclick: () => openShop() })));
 }
 function openShop(tab = 'shop') {
@@ -5089,17 +5191,36 @@ function openShop(tab = 'shop') {
     tab = v;
     body.replaceChildren(h('p', { class: 'muted', text: 'Загружаю…' }));
     if (v === 'shop') {
-      const { data, error } = await sb.rpc('limited_catalog');
+      const [{ data, error }, pm] = await Promise.all([sb.rpc('limited_catalog'), sb.rpc('premium_me')]);
       if (error) return fail(error);
-      body.replaceChildren(h('p', { class: 'muted shop-hint', text: 'Статус — это украшение к нику, прав он не даёт. Оплата — донатом, выдаёт создатель после проверки. Возврата нет.' }),
+      const prem = isPremium(), off = (n) => (prem ? Math.round(n * 0.9) : n), pme = pm.data?.[0];
+      const premCard = pm.error ? null : h('div', { class: 'shop-card premium-card' },
+        h('div', { class: 'shop-badge' }, badgeEl('premium')),
+        h('small', { text: pme?.until && new Date(pme.until) > new Date() ? 'У вас действует до ' + fmtDate(pme.until) + '. Купите ещё — срок прибавится.' : 'Темы, рамки, цветной ник, файлы до 25 МБ, экран в 1080p и скидка 10% на лимитки.' }),
+        h('div', { class: 'shop-actions' },
+          h('button', { class: 'btn btn-primary', type: 'button', text: 'Месяц — ' + rub(pme.price_month), onclick: () => premiumBuyDialog(1, pme.price_month) }),
+          h('button', { class: 'btn btn-primary', type: 'button', text: 'Год — ' + rub(pme.price_year), onclick: () => premiumBuyDialog(12, pme.price_year) })),
+        creator ? (() => {
+          const nick = h('input', { placeholder: 'Ник — подарить или снять Премиум', autocapitalize: 'off', spellcheck: 'false' });
+          const give = async (days) => {
+            const { error: e } = await sb.rpc('premium_grant', { p_username: nick.value.trim(), p_days: days });
+            if (e) return toast(humanError(e));
+            toast(days ? 'Премиум выдан на ' + days + ' дн.' : 'Премиум снят'); await loadPerks().catch(() => {}); renderChats();
+          };
+          return h('div', { class: 'premium-gift' }, nick, h('div', { class: 'shop-actions' },
+            h('button', { class: 'btn', type: 'button', text: '+30 дней', onclick: () => give(30) }),
+            h('button', { class: 'btn', type: 'button', text: '+365 дней', onclick: () => give(365) }),
+            h('button', { class: 'btn', type: 'button', text: 'Снять', onclick: () => give(0) })));
+        })() : null);
+      body.replaceChildren(...[premCard].filter(Boolean), h('p', { class: 'muted shop-hint', text: 'Статус — это украшение к нику, прав он не даёт. Оплата — донатом, выдаёт создатель после проверки. Возврата нет.' + (prem ? ' Ваша скидка Премиума 10% уже учтена.' : '') }),
         ...(data || []).filter((r) => LIMITED_BY.has(r.kind)).sort((x, y) => y.price - x.price).map((r) => {
           const l = LIMITED_BY.get(r.kind), left = Math.max(0, r.total - r.sold - r.pending);
           return card(r.kind,
             h('small', { text: l.text }),
-            h('div', { class: 'shop-line' }, h('b', { text: rub(r.price) }),
+            h('div', { class: 'shop-line' }, h('b', {}, rub(off(r.price)), prem ? h('s', { class: 'old-price', text: ' ' + rub(r.price) }) : null),
               h('small', { class: left ? '' : 'sold-out', text: left ? `осталось ${left} из ${r.total}` : r.sold >= r.total ? `все ${r.total} разобраны` : 'все в заявках' })),
             h('div', { class: 'shop-actions' },
-              left ? h('button', { class: 'btn btn-primary', type: 'button', text: 'Купить', onclick: () => buyDialog({ kind: r.kind, price: r.price }, () => openShop('mine')) })
+              left ? h('button', { class: 'btn btn-primary', type: 'button', text: 'Купить', onclick: () => buyDialog({ kind: r.kind, price: off(r.price) }, () => openShop('mine')) })
                 : h('button', { class: 'btn', type: 'button', text: 'Искать с рук', onclick: () => draw('market') }),
               creator ? h('button', { class: 'btn', type: 'button', text: 'Изменить', onclick: () => editLimited(r, () => openShop('shop')) }) : null));
         }));
@@ -5115,7 +5236,7 @@ function openShop(tab = 'shop') {
             : h('button', { class: 'btn btn-primary', type: 'button', text: 'Купить', onclick: () => buyDialog({ kind: r.kind, price: r.price, item: r.item_id, serial: r.serial, seller: r.seller }, () => openShop('mine')) })))
           .concat(data?.length ? [] : [h('p', { class: 'muted', text: 'Пока никто ничего не продаёт' })]));
     } else if (v === 'mine') {
-      const [it, od, rq] = await Promise.all([sb.rpc('limited_mine'), sb.rpc('limited_my_orders'), sb.rpc('limited_requests')]);
+      const [it, od, rq, po] = await Promise.all([sb.rpc('limited_mine'), sb.rpc('limited_my_orders'), sb.rpc('limited_requests'), sb.rpc('premium_my_orders')]);
       if (it.error || od.error || rq.error) return fail(it.error || od.error || rq.error);
       await loadPeople((rq.data || []).map((r) => r.buyer));
       const decide = async (id, ok) => {
@@ -5147,6 +5268,14 @@ function openShop(tab = 'shop') {
             } }) : null)))
           .concat(it.data?.length ? [] : [h('p', { class: 'muted', text: 'Пока ни одного. Загляните на витрину.' })]),
         h('b', { text: 'Мои заявки' }),
+        ...(po.data || []).map((o) => h('div', { class: 'log-row' },
+          h('span', {}, h('b', { text: 'Премиум на ' + (o.months === 12 ? 'год' : 'месяц') }), ` · ${rub(o.price)} · ${ST[o.status] || o.status}` + (o.note ? ` (${o.note})` : '')),
+          h('small', { text: fmtWhen(o.created_at) }),
+          o.status === 'pending' ? h('button', { class: 'btn', type: 'button', text: 'Отменить заявку', onclick: async () => {
+            const { error } = await sb.rpc('premium_cancel', { p_id: o.id });
+            if (error) return toast(humanError(error));
+            draw('mine');
+          } }) : null)),
         ...(od.data || []).map((o) => h('div', { class: 'log-row' },
           h('span', {}, h('b', { text: LIMITED_BY.get(o.kind)?.name || o.kind }), ` · ${rub(o.price)}${o.resale ? ' · с рук' : ''} · ${ST[o.status] || o.status}` + (o.note ? ` (${o.note})` : '')),
           h('small', { text: fmtWhen(o.created_at) }),
@@ -5155,9 +5284,9 @@ function openShop(tab = 'shop') {
             if (error) return toast(humanError(error));
             draw('mine');
           } }) : null))
-          .concat(od.data?.length ? [] : [h('p', { class: 'muted', text: 'Заявок нет' })]));
+          .concat(od.data?.length || po.data?.length ? [] : [h('p', { class: 'muted', text: 'Заявок нет' })]));
     } else {
-      const { data, error } = await sb.rpc('limited_orders_admin', { p_all: false });
+      const [{ data, error }, pa] = await Promise.all([sb.rpc('limited_orders_admin', { p_all: false }), sb.rpc('premium_orders_admin')]);
       if (error) return fail(error);
       const act = async (fn, args) => {
         const { error: e } = await sb.rpc(fn, args);
@@ -5165,6 +5294,13 @@ function openShop(tab = 'shop') {
         await loadPerks().catch(() => {}); renderChats(); draw('orders');
       };
       body.replaceChildren(h('p', { class: 'muted shop-hint', text: 'Проверьте, что донат на эту сумму действительно пришёл, и только потом выдавайте. Сделки «с рук» сюда не попадают — их подтверждает продавец.' }),
+        ...(pa.data || []).map((o) => h('div', { class: 'order-card' },
+          h('div', {}, h('b', { text: `Премиум на ${o.months === 12 ? 'год' : 'месяц'} · ${rub(o.price)}` })),
+          h('small', { text: `покупатель @${o.buyer || '—'} · ${fmtWhen(o.created_at)}` + (o.has_until && new Date(o.has_until) > new Date() ? ' · уже есть до ' + fmtDate(o.has_until) : '') }),
+          h('div', { class: 'order-proof' }, /^https:\/\/[^\s]+$/i.test(o.proof) ? h('a', { href: o.proof, target: '_blank', rel: 'noopener noreferrer', text: o.proof }) : h('span', { text: o.proof })),
+          h('div', { class: 'shop-actions' },
+            h('button', { class: 'btn btn-primary', type: 'button', text: 'Деньги пришли — включить', onclick: () => act('premium_decide', { p_id: o.id, p_ok: true, p_note: null }) }),
+            h('button', { class: 'btn', type: 'button', text: 'Отклонить', onclick: () => act('premium_decide', { p_id: o.id, p_ok: false, p_note: null }) })))),
         ...(data || []).map((o) => {
           const link = /^https:\/\/[^\s]+$/i.test(o.proof) ? h('a', { href: o.proof, target: '_blank', rel: 'noopener noreferrer', text: o.proof }) : h('span', { text: o.proof });
           return h('div', { class: 'order-card' },
@@ -5179,10 +5315,10 @@ function openShop(tab = 'shop') {
                   h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Отклонить', onclick: async () => { await act('limited_decide', { p_id: o.id, p_ok: false, p_note: why.value.trim() || null }); openShop('orders'); } }),
                   h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: () => openShop('orders') }));
               } })));
-        }).concat(data?.length ? [] : [h('p', { class: 'muted', text: 'Новых заявок нет' })]));
+        }).concat(data?.length || pa.data?.length ? [] : [h('p', { class: 'muted', text: 'Новых заявок нет' })]));
     }
   };
-  openModal({ title: 'Магазин лимиток' }, segmented(tabsList, tab, (v) => draw(v)), body,
+  openModal({ title: 'Магазин' }, segmented(tabsList, tab, (v) => draw(v)), body,
     h('button', { class: 'btn btn-block', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
   draw(tab);
 }

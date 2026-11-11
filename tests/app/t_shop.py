@@ -11,7 +11,7 @@ def check(name, cond):
 def shop(p, tab=None):
     if not p.locator('.shop').count():
         if not p.locator('.modal').count(): p.click('#settingsBtn')
-        p.locator('.section', has_text='Магазин лимиток').locator('button', has_text='Открыть').click()
+        p.locator('.section', has_text='Лимитированные статусы').locator('button', has_text='Открыть').click()
     p.wait_for_selector('.shop')
     if tab: p.locator('.segmented button', has_text=tab).click()
     time.sleep(0.7)
@@ -30,12 +30,12 @@ with sync_playwright() as pw:
     a.open_dm('bobby'); a.send('привет'); time.sleep(1)
 
     shop(b.page)
-    check('витрина: 21 статус', b.page.locator('.shop-card').count() == 21)
+    check('витрина: 21 статус', b.page.locator('.shop-card:not(.premium-card)').count() == 21)
     card(b.page, 'Абсолют синема').locator('.role').click(); time.sleep(0.25)
     check('«Абсолют синема»: по нажатию разлетаются картинки', b.page.locator('.cinema-burst span').count() == 26)
     b.shot('cinema_burst'); time.sleep(2.2)
     check('картинки убрались', b.page.locator('.cinema-burst').count() == 0)
-    check('самый дорогой первым, 20 000 ₽, тираж 1', 'Абсолют' in b.page.locator('.shop-card').first.inner_text() and '20 000 ₽' in b.page.locator('.shop-card').first.inner_text() and 'осталось 1 из 1' in b.page.locator('.shop-card').first.inner_text())
+    check('самый дорогой первым, 20 000 ₽, тираж 1', all(x in b.page.locator('.shop-card:not(.premium-card)').first.inner_text() for x in ('Абсолют', '20 000 ₽', 'осталось 1 из 1')))
     check('обычный человек не видит «Заявки» и «Изменить»', b.page.locator('.segmented button', has_text='Заявки').count() == 0 and b.page.locator('.shop-card button', has_text='Изменить').count() == 0)
     b.shot('shop_phone')
     card(b.page, 'Абсолют').locator('button', has_text='Купить').click()

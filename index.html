@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Doto:wght@600;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/styles.css?v=20261111185619">
+<link rel="stylesheet" href="css/styles.css?v=20261111191602">
 <script>
   // Тема применяется до отрисовки, чтобы не было «вспышки»
   try {
@@ -22,8 +22,8 @@
     const mode = p.mode === 'auto' || !p.mode
       ? (p.theme === 'dark' ? 'dark' : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
       : p.mode;
-    const plusOnly = p.style === 'paper' || p.style === 'neon';
-    document.documentElement.dataset.style = plusOnly && !p.plus ? 'classic' : p.style || 'classic';
+    const plusOnly = p.style === 'paper' || p.style === 'neon', premOnly = p.style === 'sunset' || p.style === 'abyss';
+    document.documentElement.dataset.style = (plusOnly && !p.plus) || (premOnly && !p.premium) ? 'classic' : p.style || 'classic';
     document.documentElement.dataset.mode = mode;
   } catch {}
 </script>
@@ -95,6 +95,7 @@
     <symbol id="i-clapper" viewBox="0 0 24 24"><rect x="3" y="10" width="18" height="11" rx="2"/><path d="M3.300 10 2.500 6.200l17-3.600.800 3.800zM7 5.200l2.200 3.600M11.500 4.300l2.200 3.600M16 3.300l2.200 3.600"/></symbol>
     <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7.500 3v18M16.500 3v18M3 8h4.500M3 12h4.500M3 16h4.500M16.500 8H21M16.500 12H21M16.500 16H21"/></symbol>
     <symbol id="i-popcorn" viewBox="0 0 24 24"><path d="M6 10.500 7.800 21h8.400L18 10.500zM10 10.500l.700 10.500M14 10.500l-.700 10.500"/><path d="M6.200 10.500a2.600 2.600 0 0 1 1.500-4.800 3 3 0 0 1 5.300-1.600 2.800 2.800 0 0 1 4.300 2.300 2.400 2.400 0 0 1 .500 4.100"/></symbol>
+    <symbol id="i-premium" viewBox="0 0 24 24"><path d="M12 2.500 14.300 9l6.700.300-5.300 4.200 1.900 6.500L12 16.200 6.400 20l1.900-6.500L3 9.300 9.700 9z" fill="currentColor"/></symbol>
     <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 2.5l2.2 6.3 6.3 2.2-6.3 2.2L12 19.5l-2.2-6.3L3.5 11l6.3-2.2z" fill="currentColor"/><path d="M19 15.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" fill="currentColor"/></symbol>
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
 <symbol id="i-verified" viewBox="0 0 24 24"><path d="M12 2.5l2.4 1.8 3-.2.9 2.9 2.4 1.8-1 2.8 1 2.8-2.4 1.8-.9 2.9-3-.2L12 21.5l-2.4-1.8-3 .2-.9-2.9-2.4-1.8 1-2.8-1-2.8 2.4-1.8.9-2.9 3 .2Z"/><path d="m8.5 12 2.4 2.4 4.6-4.8"/></symbol>
@@ -216,6 +217,6 @@
   <p>Откройте файл <b>config.js</b> и вставьте туда адрес проекта и ключ из Supabase. Подробно — в README.md.</p>
 </div>
 
-<script type="module" src="js/main.js?v=20261111185619"></script>
+<script type="module" src="js/main.js?v=20261111191602"></script>
 </body>
 </html>

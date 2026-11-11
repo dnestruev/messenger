@@ -153,6 +153,22 @@
   --avatar-light: 50%;
   --avatar-sat: 85%;
 }
+[data-style="sunset"] {
+  --bg: #1a0f1f; --surface: #25142b; --surface-2: #331b38; --surface-3: #44244a; --line: #3c2143;
+  --text: #ffeef2; --muted: #c9a2b4; --accent: #ff7a59; --accent-text: #2a0d05; --accent-soft: #4a1f24;
+  --mine-text: #2a0d05; --theirs-bg: #331b38; --theirs-text: #ffeef2; --chat-bg: #1a0f1f;
+  --pattern: radial-gradient(rgba(255, 170, 110, .09) 1px, transparent 1.2px);
+  --shadow: none; --avatar-light: 55%; --avatar-sat: 80%;
+}
+[data-style="sunset"] body { background: linear-gradient(160deg, #2b1036, #1a0f1f 45%, #3a1a14); }
+[data-style="abyss"] {
+  --bg: #04121c; --surface: #0a1d2b; --surface-2: #10293b; --surface-3: #17384f; --line: #143247;
+  --text: #e3f6ff; --muted: #7fa9bf; --accent: #2ee6c8; --accent-text: #00201b; --accent-soft: #0b3a3a;
+  --mine-text: #00201b; --theirs-bg: #10293b; --theirs-text: #e3f6ff; --chat-bg: #04121c;
+  --pattern: radial-gradient(rgba(46, 230, 200, .08) 1px, transparent 1.2px);
+  --shadow: none; --avatar-light: 52%; --avatar-sat: 80%;
+}
+[data-style="abyss"] body { background: linear-gradient(180deg, #06202f, #04121c 55%, #020a12); }
 [data-style="paper"] .chat-title, [data-style="paper"] h1, [data-style="paper"] .modal-title { font-family: var(--font-display); }
 
 /* ---------- База ---------- */
@@ -1504,3 +1520,32 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .cinema-cap { position: absolute; display: grid; justify-items: center; line-height: 1; color: #fff; font-weight: 800; letter-spacing: .04em; text-shadow: 0 2px 10px rgba(0, 0, 0, .8), 0 0 2px #000; opacity: 0; white-space: nowrap; }
 .cinema-cap small { font-size: 15px; }
 .cinema-cap b { font-size: 32px; }
+
+/* Премиум: значок, цветной ник, рамки */
+.role.premium { position: relative; overflow: hidden; isolation: isolate; color: #2a1a00; background: linear-gradient(110deg, #ffd86b, #ff9f43 55%, #ffd86b); box-shadow: 0 0 8px rgba(255, 176, 67, .55); }
+.role.premium::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; z-index: -1; pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .8), transparent); transform: translateX(-120%); animation: ltd-shine 3s ease-in-out infinite; }
+.role.premium > .i { animation: bro-twinkle 2s ease-in-out infinite; }
+.nick-c { -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; font-weight: 700; }
+.nick-gold { background-image: linear-gradient(90deg, #e0a21e, #ffd86b, #e0a21e); }
+.nick-fire { background-image: linear-gradient(90deg, #ff3d00, #ffb300); }
+.nick-ocean { background-image: linear-gradient(90deg, #2563eb, #22d3ee); }
+.nick-mint { background-image: linear-gradient(90deg, #10b981, #a3e635); }
+.nick-violet { background-image: linear-gradient(90deg, #8b5cf6, #ec4899); }
+.nick-rose { background-image: linear-gradient(90deg, #f43f5e, #fb923c); }
+.nick-rainbow { background-image: linear-gradient(90deg, #ff4d6d, #ff9f1c, #e6c800, #22c55e, #3ab0ff, #9b5cff); }
+.nick-colors { display: flex; flex-wrap: wrap; gap: 6px; }
+.nick-pick { padding: 6px 12px; border-radius: 999px; background: var(--surface-2); font-size: 14px; font-weight: 600; }
+.nick-pick.on { box-shadow: inset 0 0 0 2px var(--accent); }
+.avatar.frame-fire::before, .avatar.frame-prism::before {
+  content: ""; position: absolute; inset: -5px; border-radius: 50%; pointer-events: none;
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 3px));
+  animation: aurora 3s linear infinite;
+}
+.avatar.frame-fire::before { background: conic-gradient(#ff3d00, #ffb300, #fff3b0, #ffb300, #ff3d00, #7a1500, #ff3d00); }
+.avatar.frame-prism::before { background: conic-gradient(#fff, #7dd3fc, #c4b5fd, #fff, #f9a8d4, #fde68a, #fff); animation-duration: 4.5s; }
+.premium-card { box-shadow: inset 0 0 0 1.5px #ffb043; }
+.premium-gift { display: grid; gap: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.old-price { font-size: 12px; font-weight: 500; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .role.premium::after, .role.premium > .i, .avatar.frame-fire::before, .avatar.frame-prism::before { animation: none; } }
