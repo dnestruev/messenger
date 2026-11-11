@@ -1430,3 +1430,4 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   [data-style="aurora"] body::before { animation-duration: 40s; }
 }
 .call-ctl.on .call-ctl-ic { background: var(--accent, #3b82f6); color: #fff; }
+.call-ctl.dim .call-ctl-ic { opacity: .45; }

@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111131800';
-import * as CONFIG from '../config.js?v=20261111131800';
-import * as E2E from './crypto.js?v=20261111131800';
-import { createNet } from './net.js?v=20261111131800';
-import { qrSvg } from './qr.js?v=20261111131800';
-import { findEmbed } from './embeds.js?v=20261111131800';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111131800';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111131800';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111131800';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111132400';
+import * as CONFIG from '../config.js?v=20261111132400';
+import * as E2E from './crypto.js?v=20261111132400';
+import { createNet } from './net.js?v=20261111132400';
+import { qrSvg } from './qr.js?v=20261111132400';
+import { findEmbed } from './embeds.js?v=20261111132400';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111132400';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261111132400';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111132400';
 
 /* =====================================================================
    Утилиты
@@ -122,6 +122,7 @@ function humanError(err) {
     [/moderators ban for/i, 'Модератор может банить только на срок от 1 до 7 дней'],
     [/cannot ban your level/i, 'Нельзя банить себя и тех, кто равен или старше по правам'],
     [/cannot ban a creator/i, 'Создателя забанить нельзя'],
+    [/ban was set by someone higher/i, 'Этот бан поставил старший — снять или изменить его может только он или создатель'],
     [/only creators/i, 'Недостаточно прав (или срок прав модератора закончился)'],
     [/user is banned|banned/i, 'Аккаунт заблокирован'],
     [/username taken/i, 'Этот ник занят'],
@@ -384,7 +385,7 @@ const STATUS_INFO = {
   moderator: {
     label: 'Модератор',
     description: 'Следит за порядком в мессенджере: может временно заблокировать нарушителя.',
-    benefits: ['Список людей с поиском', 'Бан на срок от 1 до 7 дней', 'Снятие любых банов'],
+    benefits: ['Список людей с поиском', 'Бан на срок от 1 до 7 дней', 'Снятие своих банов и банов других модераторов'],
     how: 'Назначает только создатель.',
   },
   bronze: {
@@ -3672,8 +3673,12 @@ function updateCallUi() {
       btns.push(callButton(cam.enabled ? '' : 'off', 'video', cam.enabled ? 'Камера' : 'Камера выкл.', () => { cam.enabled = !cam.enabled; updateCallUi(); }));
       btns.push(callButton('', 'flip', 'Сменить', () => flipCamera()));
     }
-    if (cur.connectedAt && cur.pc && navigator.mediaDevices?.getDisplayMedia)
-      btns.push(callButton(cur.screenTrack ? 'on' : '', 'screen', cur.screenTrack ? 'Остановить' : 'Экран', () => (cur.screenTrack ? stopScreen() : startScreen())));
+    if (cur.connectedAt && cur.pc) {
+      // показать экран умеют не все браузеры (на Android — ни один); кнопку оставляем везде, чтобы было понятно почему
+      const can = !!navigator.mediaDevices?.getDisplayMedia;
+      btns.push(callButton(cur.screenTrack ? 'on' : can ? '' : 'dim', 'screen', cur.screenTrack ? 'Остановить' : 'Экран',
+        () => (cur.screenTrack ? stopScreen() : can ? startScreen() : toast('Этот браузер не умеет показывать экран. Получится с компьютера или с iPhone на новой iOS в Safari. Смотреть чужой экран можно и отсюда.'))));
+    }
     btns.push(callButton('decline', 'phone', 'Завершить', () => hangUp()));
   }
   ui.controls.replaceChildren(...btns);
@@ -3731,7 +3736,8 @@ async function startScreen() {
     cur.ui.local.srcObject = null; updateCallUi();
   } catch (e) {
     track?.stop();
-    if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') toast(e?.message === 'no-reanswer' ? 'Не получилось показать экран: собеседнику нужно обновить приложение' : 'Не получилось показать экран');
+    if (e?.name === 'NotAllowedError' && !navigator.userActivation?.isActive && /Android|iPhone|iPad/i.test(navigator.userAgent)) toast('Этот браузер не дал показать экран');
+    else if (e?.name !== 'NotAllowedError' && e?.name !== 'AbortError') toast(e?.message === 'no-reanswer' ? 'Не получилось показать экран: собеседнику нужно обновить приложение' : 'Не получилось показать экран');
   } finally { cur.screenBusy = false; }
 }
 async function stopScreen(cur = call) {

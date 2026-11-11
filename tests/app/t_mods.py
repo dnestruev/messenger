@@ -85,7 +85,7 @@ with sync_playwright() as pw:
     # модератор не снимает бан старшего
     open_panel(mp, 'Модерация'); open_user(mp, 'victim')
     mp.locator('.ban-box button', has_text='Разбанить').click(); time.sleep(1)
-    check('модератор снял бан старшего', 'Забанен' not in mp.inner_text('.modal .ban-box'))
+    check('модератор не снимает бан старшего', 'поставил старший' in mp.inner_text('.modal') and 'Забанен навсегда' in mp.inner_text('.modal'))
     mp.keyboard.press('Escape')
     # журнал у создателя
     open_panel(p, 'Админка')
