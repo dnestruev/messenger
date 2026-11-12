@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261111191602';
-import * as CONFIG from '../config.js?v=20261111191602';
-import * as E2E from './crypto.js?v=20261111191602';
-import { createNet } from './net.js?v=20261111191602';
-import { qrSvg } from './qr.js?v=20261111191602';
-import { findEmbed } from './embeds.js?v=20261111191602';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261111191602';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261111191602';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261111191602';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261112050857';
+import * as CONFIG from '../config.js?v=20261112050857';
+import * as E2E from './crypto.js?v=20261112050857';
+import { createNet } from './net.js?v=20261112050857';
+import { qrSvg } from './qr.js?v=20261112050857';
+import { findEmbed } from './embeds.js?v=20261112050857';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261112050857';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261112050857';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261112050857';
 
 /* =====================================================================
    Утилиты
@@ -566,37 +566,42 @@ function badgeEl(kind, compact = false, extra = {}) {
   const b = BADGE[kind];
   return h('span', { class: 'role ' + (b.cls || kind) + (compact ? ' mini' : ''), ...extra }, icon(b.icon), compact ? null : h('span', { text: b.label }));
 }
-/** «Абсолют синема»: из значка разлетаются хлопушки, плёнка, попкорн и звёзды (свои рисунки, только transform/opacity) */
+/** «Абсолют синема»: из значка разлетаются картинки-«конфетти» (скин Пятёрочки, сам разрешил), одна большая выпрыгивает
+ *  по центру. Только transform/opacity. Картинку грузим заранее, чтобы при первом нажатии не было пустых квадратов */
+const CINEMA_IMG = 'img/cinema.jpg?v=1';
+let cinemaPreloaded = false;
 function cinemaBurst(from) {
   if (!from?.getBoundingClientRect) return;   // человек сам нажал — показываем и при «уменьшении движения»/экономии заряда
   const r = from.getBoundingClientRect(), x0 = r.left + r.width / 2, y0 = r.top + r.height / 2;
   const layer = h('div', { class: 'cinema-burst', 'aria-hidden': 'true' });
-  const icons = ['clapper', 'film', 'popcorn', 'star', 'clapper', 'star'], colors = ['#ffd700', '#ff4d6d', '#ffffff', '#3ab0ff', '#ff9f1c', '#9b5cff'];
-  for (let i = 0; i < 26; i++) {
-    const p = h('span', { style: { left: x0 + 'px', top: y0 + 'px', color: colors[i % colors.length] } }, icon(icons[i % icons.length]));
-    const ang = (Math.PI * 2 * i) / 26 + Math.random() * 0.5, dist = 90 + Math.random() * 150, size = 0.8 + Math.random() * 0.9;
-    const dx = Math.cos(ang) * dist, dy = Math.sin(ang) * dist - 60, rot = (Math.random() * 720 - 360) | 0;
+  const N = innerWidth < 500 ? 12 : 18;
+  for (let i = 0; i < N; i++) {
+    const p = h('img', { src: CINEMA_IMG, alt: '', class: 'cinema-bit', style: { left: x0 + 'px', top: y0 + 'px' } });
+    const ang = (Math.PI * 2 * i) / N + Math.random() * 0.5, dist = 100 + Math.random() * 160, size = 0.7 + Math.random() * 0.7;
+    const dx = Math.cos(ang) * dist, dy = Math.sin(ang) * dist - 70, rot = (Math.random() * 540 - 270) | 0;
     layer.append(p);
     p.animate?.([
-      { transform: 'translate(-50%, -50%) scale(.2) rotate(0deg)', opacity: 1 },
-      { transform: `translate(calc(-50% + ${dx * 0.8}px), calc(-50% + ${dy * 0.8}px)) scale(${size}) rotate(${rot * 0.7}deg)`, opacity: 1, offset: 0.45 },
-      { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy + 170}px)) scale(${size * 0.9}) rotate(${rot}deg)`, opacity: 0 },
-    ], { duration: 1300 + Math.random() * 500, easing: 'cubic-bezier(.15, .7, .3, 1)', fill: 'forwards' });
+      { transform: 'translate(-50%, -50%) scale(.15) rotate(0deg)', opacity: 1 },
+      { transform: `translate(calc(-50% + ${dx * 0.8}px), calc(-50% + ${dy * 0.8}px)) scale(${size}) rotate(${rot * 0.6}deg)`, opacity: 1, offset: 0.45 },
+      { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy + 190}px)) scale(${size * 0.9}) rotate(${rot}deg)`, opacity: 0 },
+    ], { duration: 1500 + Math.random() * 500, easing: 'cubic-bezier(.15, .7, .3, 1)', fill: 'forwards' });
   }
-  const cap = h('div', { class: 'cinema-cap' }, h('small', { text: 'ABSOLUTE' }), h('b', { text: 'CINEMA' }));
-  cap.style.left = Math.min(Math.max(x0, 110), innerWidth - 110) + 'px'; cap.style.top = Math.max(y0 - 70, 60) + 'px';
-  layer.append(cap);
-  cap.animate?.([
-    { transform: 'translate(-50%, -50%) scale(.3)', opacity: 0 },
-    { transform: 'translate(-50%, -50%) scale(1.12)', opacity: 1, offset: 0.25 },
-    { transform: 'translate(-50%, -50%) scale(1)', opacity: 1, offset: 0.75 },
-    { transform: 'translate(-50%, -80%) scale(1)', opacity: 0 },
-  ], { duration: 1800, easing: 'ease-out', fill: 'forwards' });
+  const big = h('img', { src: CINEMA_IMG, alt: '', class: 'cinema-big', style: { left: '50%', top: '42%' } });
+  layer.append(big);
+  big.animate?.([
+    { transform: 'translate(-50%, -50%) scale(.2) rotate(-8deg)', opacity: 0 },
+    { transform: 'translate(-50%, -50%) scale(1.06) rotate(2deg)', opacity: 1, offset: 0.2 },
+    { transform: 'translate(-50%, -50%) scale(1) rotate(0deg)', opacity: 1, offset: 0.8 },
+    { transform: 'translate(-50%, -60%) scale(.96)', opacity: 0 },
+  ], { duration: 2000, easing: 'ease-out', fill: 'forwards' });
   document.body.append(layer);
-  setTimeout(() => layer.remove(), 2000);
+  setTimeout(() => layer.remove(), 2200);
 }
+/** подгрузить картинку, как только где-то появился значок «Абсолют синема» */
+function preloadCinema() { if (!cinemaPreloaded) { cinemaPreloaded = true; const i = new Image(); i.src = CINEMA_IMG; } }
 function clickableBadge(id, kind, compact = false) {
   const label = STATUS_INFO[kind]?.label || BADGE[kind].label;
+  if (kind === 'l_cinema') preloadCinema();
   const open = (e) => { e.preventDefault(); e.stopPropagation(); if (kind === 'l_cinema') cinemaBurst(e.currentTarget || e.target); openStatusInfo(id, kind); };
   const el = badgeEl(kind, compact, {
     role: 'button', tabindex: 0,
@@ -5186,7 +5191,7 @@ function openShop(tab = 'shop') {
   const body = h('div', { class: 'shop' });
   const tabsList = [['shop', 'Витрина'], ['market', 'С рук'], ['mine', 'Мои'], creator ? ['orders', 'Заявки'] : null].filter(Boolean);
   const fail = (error) => body.replaceChildren(h('p', { class: 'muted', text: shopOld(error) ? 'Магазин заработает после обновления сервера (update-19)' : humanError(error) }));
-  const card = (kind, ...rest) => h('div', { class: 'shop-card' }, h('div', { class: 'shop-badge' }, kind === 'l_cinema' ? badgeEl(kind, false, { role: 'button', onclick: (e) => cinemaBurst(e.currentTarget) }) : badgeEl(kind)), ...rest.filter(Boolean));
+  const card = (kind, ...rest) => h('div', { class: 'shop-card' }, h('div', { class: 'shop-badge' }, kind === 'l_cinema' ? (preloadCinema(), badgeEl(kind, false, { role: 'button', onclick: (e) => cinemaBurst(e.currentTarget) })) : badgeEl(kind)), ...rest.filter(Boolean));
   const draw = async (v) => {
     tab = v;
     body.replaceChildren(h('p', { class: 'muted', text: 'Загружаю…' }));
