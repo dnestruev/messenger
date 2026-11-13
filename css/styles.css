@@ -1548,3 +1548,16 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 @media (prefers-reduced-motion: reduce) { .role.premium::after, .role.premium > .i, .avatar.frame-fire::before, .avatar.frame-prism::before { animation: none; } }
 
 .code-error { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); z-index: 10000; padding: 10px 12px; border-radius: 12px; background: #7a1010; color: #fff; font: 12.5px/1.35 var(--mono, monospace); overflow-wrap: anywhere; box-shadow: 0 6px 24px rgba(0, 0, 0, .5); }
+
+/* «События» (только создателю) */
+.events-avatar { display: grid; place-items: center; background: linear-gradient(135deg, #f5a524, #ff5f5f); color: #fff; }
+.events-avatar .i { width: 22px; height: 22px; }
+.unread-dot.events-count { width: auto; height: auto; min-width: 20px; padding: 1px 6px; border-radius: 10px; font-size: 12px; font-weight: 700; line-height: 18px; text-align: center; color: #fff; }
+.events-list { display: flex; flex-direction: column; gap: 6px; max-height: min(65vh, 560px); overflow-y: auto; }
+.event-row { display: flex; gap: 10px; align-items: flex-start; text-align: left; width: 100%; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); border: 1px solid transparent; color: inherit; font: inherit; cursor: default; }
+.event-row.link { cursor: pointer; }
+.event-row.link:hover { border-color: var(--accent); }
+.event-row.new { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.event-ico { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--surface-3); }
+.event-ico .i { width: 18px; height: 18px; }
+.event-text { display: block; overflow-wrap: anywhere; }

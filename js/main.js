@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113204431';
-import * as CONFIG from '../config.js?v=20261113204431';
-import * as E2E from './crypto.js?v=20261113204431';
-import { createNet } from './net.js?v=20261113204431';
-import { qrSvg } from './qr.js?v=20261113204431';
-import { findEmbed } from './embeds.js?v=20261113204431';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113204431';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261113204431';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113204431';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113205347';
+import * as CONFIG from '../config.js?v=20261113205347';
+import * as E2E from './crypto.js?v=20261113205347';
+import { createNet } from './net.js?v=20261113205347';
+import { qrSvg } from './qr.js?v=20261113205347';
+import { findEmbed } from './embeds.js?v=20261113205347';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113205347';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261113205347';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113205347';
 
 /* =====================================================================
    Утилиты
@@ -1157,6 +1157,7 @@ async function startApp(user) {
   await ensureSaved();
   if (!alive()) return;
   startNews();
+  startEvents();
   setTimeout(() => { if (alive()) syncStickers(); }, 4000);   // «Мои стикеры» с других устройств
   scheduleCleanup();
   setTimeout(() => $('chatList').classList.remove('list-enter'), 600);
@@ -1281,6 +1282,7 @@ function stopApp() {
   stopPresence(); state.lastSeen.clear(); state.reactions.clear(); state.shown.clear();
   stopCalls();
   stopNews();
+  stopEvents();
   setCompose(null);
   leaveTyping();
   for (const url of state.images.values()) URL.revokeObjectURL(url);
@@ -1399,7 +1401,7 @@ function renderChats() {
       h('span', { class: 'avatar sm' }, icon('archive')), 'Архив',
       h('span', { class: 'count', text: archivedUnread ? `${archived.length} · ${archivedUnread} новых` : String(archived.length) })));
   }
-  if (!state.showArchive && !q) { const nr = newsRow(); if (nr) head.push(nr); }
+  if (!state.showArchive && !q) { const nr = newsRow(); if (nr) head.push(nr); const er = eventsRow(); if (er) head.push(er); }
   if (!items.length) {
     $('chatList').replaceChildren(...head, h('div', { class: 'list-empty', text: 'Чатов пока нет. Найдите друга по нику или создайте группу.' }));
     return;
@@ -1433,6 +1435,80 @@ const news = { list: [], reacts: new Map(), off: true, ch: null, ui: null };
 const newsSeenKey = () => 'news-seen-' + (state.me?.id || '');
 const newsSeen = () => { try { return Number(localStorage.getItem(newsSeenKey()) || 0); } catch { return 0; } };
 const lastNews = () => news.list[news.list.length - 1];
+/* =====================================================================
+   «События» — только создателю: заявки, узлы, TURN, новые люди, баны модераторов
+   (таблица admin_events, пишут триггеры в базе, update-23)
+   ===================================================================== */
+const events = { list: [], off: true, ch: null, open: false };
+const eventsSeenKey = () => 'events-seen-' + (state.me?.id || '');
+const eventsSeen = () => { try { return Number(localStorage.getItem(eventsSeenKey()) || 0); } catch { return 0; } };
+const EVENT_ICON = { order_limited: 'gem', order_premium: 'premium', resale: 'gem', node_new: 'screen', node_down: 'warn', node_up: 'screen', turn_new: 'relay', user_new: 'users', ban: 'shield', unban: 'shield' };
+async function startEvents() {
+  const me = state.me?.id;
+  if (!me || roleOf(me) !== 'creator') return;
+  const { data, error } = await sb.from('admin_events').select('id, kind, text, go, created_at').order('id', { ascending: false }).limit(100);
+  if (error || state.me?.id !== me) { events.off = true; return; }   // до update-23 таблицы нет — строку не показываем
+  events.off = false;
+  events.list = data || [];
+  renderChats();
+  const ch = await freshChannel('events-' + me);
+  if (state.me?.id !== me) { dropChannel(ch); return; }
+  events.ch = ch;
+  ch.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'admin_events' }, (p) => onEvent(p.new)).subscribe();
+}
+function stopEvents() {
+  if (events.ch) dropChannel(events.ch);
+  events.ch = null; events.list = []; events.off = true; events.open = false;
+}
+function onEvent(ev) {
+  if (!ev?.id || events.list.some((e) => e.id === ev.id)) return;
+  events.list.unshift(ev);
+  if (events.open) { markEventsSeen(); drawEvents(); }
+  else { toast('🔔 ' + ev.text); if (prefs.sound) ding(); }
+  renderChats();
+}
+function unseenEvents() { const s = eventsSeen(); return events.list.filter((e) => e.id > s).length; }
+function markEventsSeen() {
+  const top = events.list[0];
+  if (top) try { localStorage.setItem(eventsSeenKey(), String(top.id)); } catch {}
+}
+function eventsRow() {
+  if (events.off) return null;
+  const last = events.list[0], n = unseenEvents();
+  return h('button', { class: 'chat-item events-item' + (n ? ' unread' : ''), type: 'button', onclick: () => openEvents() },
+    h('span', { class: 'avatar events-avatar' }, icon('bell')),
+    h('span', { class: 'chat-item-body' },
+      h('span', { class: 'chat-item-row' },
+        h('span', { class: 'chat-item-name', text: 'События' }),
+        h('span', { class: 'chat-item-time', text: last ? shortTime(last.created_at) : '' })),
+      h('span', { class: 'chat-item-row' },
+        h('span', { class: 'chat-item-last', text: last ? last.text : 'Заявки, новые узлы и люди — только вам' }),
+        n ? h('span', { class: 'unread-dot events-count', text: n > 99 ? '99+' : String(n) }) : null)));
+}
+let eventsBody = null;
+function drawEvents() {
+  if (!eventsBody) return;
+  const seen = Number(eventsBody.dataset.seen || 0);
+  eventsBody.replaceChildren(...events.list.map((e) => h('button', { class: 'event-row' + (e.id > seen ? ' new' : '') + (e.go ? ' link' : ''), type: 'button', onclick: () => goEvent(e) },
+    h('span', { class: 'event-ico' }, icon(EVENT_ICON[e.kind] || 'bell')),
+    h('span', { class: 'row-text' }, h('span', { class: 'event-text', text: e.text }), h('small', { text: fmtWhen(e.created_at) })))));
+  if (!events.list.length) eventsBody.replaceChildren(h('p', { class: 'muted', text: 'Пока тихо. Здесь появятся заявки, новые узлы и TURN, новые люди и баны модераторов.' }));
+}
+function openEvents() {
+  eventsBody = h('div', { class: 'events-list' });
+  eventsBody.dataset.seen = String(eventsSeen());
+  events.open = true;
+  markEventsSeen(); renderChats();
+  openModal({ title: 'События', onClose: () => { events.open = false; eventsBody = null; renderChats(); } }, eventsBody);
+  drawEvents();
+}
+function goEvent(e) {
+  const go = e.go || '';
+  if (go === 'orders') { events.open = false; openShop('orders'); }
+  else if (go.startsWith('user:')) { events.open = false; openAdmin('users', go.slice(5)); }
+  else if (go === 'nodes') { events.open = false; openSettings(); }
+}
+
 async function startNews() {
   const me = state.me?.id;
   const { data, error } = await sb.from('news').select('id, author, body, created_at, edited_at').order('created_at', { ascending: false }).limit(60);
@@ -5541,7 +5617,7 @@ const fmtDate = (iso) => iso ? FMT_DAY.format(new Date(iso)) : '—';
 const fmtWhen = (iso) => { const d = new Date(iso); return fmtDate(iso) + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
 const MOD_NAME = { moderator: 'Модератор', senior: 'Старший модератор' };
 const adminOld = (error, re) => re.test(error.message || '') && /function|schema cache|does not exist/i.test(error.message || '');
-function openAdmin(tab) {
+function openAdmin(tab, preset = '') {
   const lvl = modLevel();
   if (!lvl) return openSettings();
   const allTabs = [lvl >= 2 ? ['stats', 'Статистика'] : null, ['users', 'Люди'], lvl === 3 ? ['log', 'Журнал'] : null].filter(Boolean);
@@ -5584,7 +5660,7 @@ function openAdmin(tab) {
         h('small', { text: fmtWhen(l.created_at) + (l.details ? ' · ' + l.details : '') })))
         .concat(data?.length ? [] : [h('p', { class: 'muted', text: 'Пока пусто: здесь будет видно, кто кого банил и разбанивал' })])));
     } else {
-      const q = h('input', { placeholder: 'Ник или имя', autocapitalize: 'off', spellcheck: 'false' });
+      const q = h('input', { placeholder: 'Ник или имя', autocapitalize: 'off', spellcheck: 'false', value: preset });
       const list = h('div', { class: 'admin-list' });
       let timer = null;
       const load = async () => {

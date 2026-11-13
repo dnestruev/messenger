@@ -15,7 +15,7 @@ def check(name, cond):
     ok.append((name, bool(cond)))
     print(('OK  ' if cond else 'FAIL') + ' ' + name, flush=True)
 def names(u):
-    return u.page.evaluate("[...document.querySelectorAll('#chatList .chat-item:not(.news-item) .chat-item-name')].map(e => e.textContent.replace(/[^a-zа-я0-9]/gi,'').replace(/Создатель|Тестер/g,''))")
+    return u.page.evaluate("[...document.querySelectorAll('#chatList .chat-item:not(.news-item):not(.events-item) .chat-item-name')].map(e => e.textContent.replace(/[^a-zа-я0-9]/gi,'').replace(/Создатель|Тестер/g,''))")
 
 with sync_playwright() as pw:
     br = pw.chromium.launch(executable_path='/usr/bin/google-chrome', args=ARGS)

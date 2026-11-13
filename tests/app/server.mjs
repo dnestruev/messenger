@@ -14,7 +14,7 @@ const slow = { ms: 0, fail: false };
 const db = {
   users: [], profiles: [], user_keys: [], key_backups: [], conversations: [], conversation_members: [],
   conversation_keys: [], conversation_key_claims: [], messages: [], reactions: [], blocks: [], nodes: [],
-  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], bans: [], moderators: [], mod_log: [], username_aliases: [], news: [], news_reactions: [], app_settings: [], turn_providers: [],
+  partner_gifts: [], partner_state: [], push_subscriptions: [], last_seen: [], call_reports: [], badge_grants: [], bans: [], moderators: [], mod_log: [], username_aliases: [], news: [], news_reactions: [], admin_events: [], app_settings: [], turn_providers: [],
 };
 const files = new Map();        // bucket/path -> { bytes, owner, type }
 let msgSeq = 1;
@@ -43,6 +43,12 @@ function push(cid, ev) {
   if (c.wait) { const w = c.wait; c.wait = null; w(); }
 }
 /** postgres_changes: кому отправить — решает visible(uid) */
+let evSeq = 0;
+function logEvent(kind, text, go = null) {
+  const row = { id: ++evSeq, kind, text, go, created_at: now() };
+  db.admin_events.push(row);
+  change('admin_events', 'INSERT', row, null, (u) => prof(u)?.role === 'creator');
+}
 function change(table, eventType, row, old, visible) {
   for (const [cid, c] of clients) {
     if (!c.uid) continue;
@@ -78,6 +84,7 @@ function readable(uid, table, r) {
     case 'partner_gifts': return r.partner_id === uid || r.friend_id === uid;
     case 'nodes': return r.status === 'active' || r.owner === uid;
     case 'turn_providers': return r.owner === uid;
+    case 'admin_events': return prof(uid)?.role === 'creator';
     default: return true;
   }
 }
@@ -381,6 +388,7 @@ const RPC = {
     if (proof.length < 5 || proof.length > 300) return fail('bad proof');
     if (PRM().orders.some((o) => o.buyer === uid && o.status === 'pending')) return fail('order already pending');
     PRM().orders.push({ id: PRM().orders.length + 1, buyer: uid, months: p_months, price: p_months === 12 ? 24000 : 2000, proof, status: 'pending', note: null, created_at: now() });
+    logEvent('order_premium', 'Заявка на Премиум (' + (p_months === 12 ? 'год' : 'месяц') + ') от @' + prof(uid)?.username + ' — ' + (p_months === 12 ? '24 000' : '2 000') + ' ₽', 'orders');
     return PRM().orders.length;
   },
   premium_cancel: (uid, { p_id }) => { const o = PRM().orders.find((x) => x.id === p_id && x.buyer === uid && x.status === 'pending'); if (!o) return fail('order not found'); o.status = 'cancelled'; return null; },
@@ -596,6 +604,7 @@ http.createServer(async (req, res) => {
     case '/api/grant': { const p = db.profiles.find((x) => x.username === j.username); db.badge_grants.push({ user_id: p.id, kind: j.kind, since: now() }); return send(res, 200, { ok: true }); }
     case '/api/mod': { const p = db.profiles.find((x) => x.username === j.username); db.moderators = db.moderators.filter((m) => m.user_id !== p.id); if (j.level) db.moderators.push({ user_id: p.id, level: j.level, until: j.seconds ? new Date(Date.now() + j.seconds * 1000).toISOString() : null, by_user: null }); return send(res, 200, { ok: true }); }
     case '/api/avatar': { const p = db.profiles.find((x) => x.username === j.username); p.avatar_path = j.path; return send(res, 200, { ok: true }); }
+    case '/api/event': { logEvent(j.kind || 'user_new', j.text, j.go || null); return send(res, 200, { ok: true }); }
     case '/api/role': { const p = db.profiles.find((x) => x.username === j.username); p.role = j.role; return send(res, 200, { ok: true }); }
     case '/api/partner': {   // тест: сделать человека партнёром (узел)
       const p = db.profiles.find((x) => x.username === j.username);
