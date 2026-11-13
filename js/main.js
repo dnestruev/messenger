@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113170707';
-import * as CONFIG from '../config.js?v=20261113170707';
-import * as E2E from './crypto.js?v=20261113170707';
-import { createNet } from './net.js?v=20261113170707';
-import { qrSvg } from './qr.js?v=20261113170707';
-import { findEmbed } from './embeds.js?v=20261113170707';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113170707';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261113170707';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113170707';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113204431';
+import * as CONFIG from '../config.js?v=20261113204431';
+import * as E2E from './crypto.js?v=20261113204431';
+import { createNet } from './net.js?v=20261113204431';
+import { qrSvg } from './qr.js?v=20261113204431';
+import { findEmbed } from './embeds.js?v=20261113204431';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113204431';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261113204431';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113204431';
 
 /* =====================================================================
    Утилиты
@@ -350,10 +350,34 @@ const hueOfUser = (id) => { const p = state.people.get(id) || {}; return p.avata
 const AVATAR_BUCKET = 'avatars';
 const avatarUrl = (path) => (path ? `${SUPABASE_URL}/storage/v1/object/public/${AVATAR_BUCKET}/${path}` : null);
 const photoOf = (id) => avatarUrl(state.people.get(id)?.avatar_path);
+/** Картинка авы не загрузилась (сеть моргнула, приложение было в фоне) — показываем букву
+ *  и пробуем ещё: через 2, 5, 15, 30, 60 с и при возврате в приложение / появлении сети. */
+const AVATAR_RETRY = [2000, 5000, 15000, 30000, 60000];
+const avatarWaiting = new Set();
+function avatarRetry(img, url) {
+  img.hidden = true;
+  img.parentNode?.classList.remove('has-photo');
+  const n = img._tries = (img._tries || 0) + 1;
+  avatarWaiting.add(img);
+  if (n > AVATAR_RETRY.length) return;
+  setTimeout(() => avatarReload(img, url), AVATAR_RETRY[n - 1]);
+}
+function avatarReload(img, url) {
+  if (!img.isConnected) { avatarWaiting.delete(img); return; }
+  if (!img.hidden) return;
+  img._url = img._url || url;
+  img.src = img._url + (img._url.includes('?') ? '&' : '?') + 'r=' + Date.now();
+}
+function avatarRetryAll() {
+  for (const img of avatarWaiting) { if (!img.isConnected || !img.hidden) avatarWaiting.delete(img); else { img._tries = 0; avatarReload(img, img._url || img.src.replace(/[?&]r=\d+$/, '')); } }
+}
+window.addEventListener('online', avatarRetryAll);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) avatarRetryAll(); });
 function avatar(label, hue, size = '', badge = null, extra = '', photo = null) {
   return h('span', { class: ['avatar', size, extra, photo && 'has-photo'].filter(Boolean).join(' '), vars: { '--h': hue } }, (label || '?')[0].toUpperCase(),
     photo ? h('img', { class: 'avatar-img', src: photo, alt: '', decoding: 'sync', draggable: false,
-      onerror: (e) => { e.target.parentNode?.classList.remove('has-photo'); e.target.remove(); } }) : null,
+      onload: (e) => { e.target.hidden = false; e.target.parentNode?.classList.add('has-photo'); },
+      onerror: (e) => avatarRetry(e.target, photo) }) : null,
     badge ? h('span', { class: 'badge' }, icon(badge)) : null);
 }
 const roleOf = (id) => state.people.get(id)?.role || null;
