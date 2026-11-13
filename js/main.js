@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113105944';
-import * as CONFIG from '../config.js?v=20261113105944';
-import * as E2E from './crypto.js?v=20261113105944';
-import { createNet } from './net.js?v=20261113105944';
-import { qrSvg } from './qr.js?v=20261113105944';
-import { findEmbed } from './embeds.js?v=20261113105944';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113105944';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261113105944';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113105944';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113110916';
+import * as CONFIG from '../config.js?v=20261113110916';
+import * as E2E from './crypto.js?v=20261113110916';
+import { createNet } from './net.js?v=20261113110916';
+import { qrSvg } from './qr.js?v=20261113110916';
+import { findEmbed } from './embeds.js?v=20261113110916';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113110916';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261113110916';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113110916';
 
 /* =====================================================================
    Утилиты
@@ -2531,6 +2531,24 @@ function toast(text) {
   setTimeout(() => t.classList.add('out'), 1800);
   setTimeout(() => t.remove(), 2200);
 }
+/* Скрытые сбои видны команде: если у создателя, тестера или модератора в приложении случилась ошибка кода,
+   внизу на 12 секунд появляется плашка с её текстом и местом — чтобы прислать скриншот (на телефоне консоли нет).
+   Обычным людям ничего не показываем. */
+function showCodeError(what, where) {
+  try {
+    const me = state.me?.id;
+    if (!me || !(roleOf(me) || state.badges.get(me)?.size)) return;
+    const text = String(what || 'ошибка').slice(0, 220) + (where ? ' · ' + where : '');
+    if (/ResizeObserver loop|Script error\.?$/.test(text)) return;
+    document.querySelector('.code-error')?.remove();
+    const el = h('div', { class: 'code-error', role: 'alert' }, h('b', { text: 'Сбой в приложении — пришлите скриншот: ' }), text);
+    el.addEventListener('click', () => el.remove());
+    document.body.append(el);
+    setTimeout(() => el.remove(), 12000);
+  } catch {}
+}
+addEventListener('error', (e) => showCodeError(e.message, e.filename ? e.filename.split('/').pop().split('?')[0] + ':' + e.lineno : ''));
+addEventListener('unhandledrejection', (e) => showCodeError(e.reason?.message || e.reason, (e.reason?.stack || '').split('\n')[1]?.trim().split('/').pop() || ''));
 function inlineError(text) {
   const box = $('messages');
   box.append(h('div', { class: 'inline-err', text }));

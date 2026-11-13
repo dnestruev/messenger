@@ -1546,3 +1546,5 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .premium-gift { display: grid; gap: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
 .old-price { font-size: 12px; font-weight: 500; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .role.premium::after, .role.premium > .i, .avatar.frame-fire::before, .avatar.frame-prism::before { animation: none; } }
+
+.code-error { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); z-index: 10000; padding: 10px 12px; border-radius: 12px; background: #7a1010; color: #fff; font: 12.5px/1.35 var(--mono, monospace); overflow-wrap: anywhere; box-shadow: 0 6px 24px rgba(0, 0, 0, .5); }
