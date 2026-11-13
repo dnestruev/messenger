@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113105931';
-import * as CONFIG from '../config.js?v=20261113105931';
-import * as E2E from './crypto.js?v=20261113105931';
-import { createNet } from './net.js?v=20261113105931';
-import { qrSvg } from './qr.js?v=20261113105931';
-import { findEmbed } from './embeds.js?v=20261113105931';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113105931';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261113105931';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113105931';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113105944';
+import * as CONFIG from '../config.js?v=20261113105944';
+import * as E2E from './crypto.js?v=20261113105944';
+import { createNet } from './net.js?v=20261113105944';
+import { qrSvg } from './qr.js?v=20261113105944';
+import { findEmbed } from './embeds.js?v=20261113105944';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113105944';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261113105944';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113105944';
 
 /* =====================================================================
    Утилиты
@@ -123,7 +123,6 @@ function humanError(err) {
     [/cannot ban your level/i, 'Нельзя банить себя и тех, кто равен или старше по правам'],
     [/cannot ban a creator/i, 'Создателя забанить нельзя'],
     [/ban was set by someone higher/i, 'Этот бан поставил старший — снять или изменить его может только он или создатель'],
-    [/different from the old password|same_password/i, 'Новый пароль должен отличаться от старого'],
     [/premium only/i, 'Это доступно только с Премиумом'],
     [/frame needs premium/i, 'Эта рамка — только с Премиумом'],
     [/bad premium term/i, 'Премиум оформляется на месяц или на год'],
