@@ -65,6 +65,24 @@ with sync_playwright() as pw:
     shop(b.page)
     spark = b.page.locator('.shop-card', has=b.page.locator('.role > span', has_text=re.compile('^Искра$')))
     check('скидка 10% на лимитки: 630 ₽ вместо 700 ₽', '630 ₽' in spark.inner_text() and '700 ₽' in spark.inner_text())
+    # большой файл частями: 9 МБ (обычный лимит 5 МБ)
+    import hashlib
+    blob = os.urandom(9 * 1024 * 1024); open('/tmp/big.bin', 'wb').write(blob)
+    back(b.page); b.page.keyboard.press('Escape'); time.sleep(0.4)
+    if b.page.locator('.modal').count(): b.page.locator('.modal .icon-btn').first.click()
+    b.open_chat('alice'); b.page.set_input_files('#fileInput', '/tmp/big.bin')
+    try: b.page.wait_for_selector('.file-box', timeout=60000); sent = True
+    except Exception: sent = False
+    check('Премиум: файл 9 МБ отправился', sent)
+    a.page.reload(); a.page.wait_for_selector('.chat-item'); a.open_chat('bobby')
+    got = None
+    try:
+        a.page.wait_for_selector('.file-box', timeout=15000)
+        got = a.page.evaluate('''async () => { const m = [...document.querySelectorAll('.file-box')].pop(); const urls = []; const o = URL.createObjectURL; URL.createObjectURL = (b) => { const u = o(b); urls.push(b); return u; };
+          m.click(); for (let i = 0; i < 150 && !urls.length; i++) await new Promise((r) => setTimeout(r, 200)); URL.createObjectURL = o; if (!urls.length) return null;
+          const d = await crypto.subtle.digest('SHA-256', await urls[0].arrayBuffer()); return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, '0')).join(''); }''')
+    except Exception as e: print('big file', e)
+    check('получатель расшифровал тот же файл', got == hashlib.sha256(blob).hexdigest())
     a.page.reload(); a.page.wait_for_selector('.chat-item'); time.sleep(1.5)
     check('другие видят значок и цветной ник в списке чатов', a.page.locator('.chat-item .role.premium').count() >= 1 and a.page.locator('.chat-item .t.nick-rainbow').count() >= 1)
     a.shot('premium_seen_by_others')

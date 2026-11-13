@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261112050857';
-import * as CONFIG from '../config.js?v=20261112050857';
-import * as E2E from './crypto.js?v=20261112050857';
-import { createNet } from './net.js?v=20261112050857';
-import { qrSvg } from './qr.js?v=20261112050857';
-import { findEmbed } from './embeds.js?v=20261112050857';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261112050857';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261112050857';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261112050857';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113054344';
+import * as CONFIG from '../config.js?v=20261113054344';
+import * as E2E from './crypto.js?v=20261113054344';
+import { createNet } from './net.js?v=20261113054344';
+import { qrSvg } from './qr.js?v=20261113054344';
+import { findEmbed } from './embeds.js?v=20261113054344';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113054344';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261113054344';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113054344';
 
 /* =====================================================================
    Утилиты
@@ -1059,6 +1059,16 @@ $('authForm').onsubmit = async (e) => {
   }
 };
 
+// Ссылка из письма (сброс пароля, подтверждение почты) одноразовая и живёт недолго: если она уже не работает,
+// Supabase возвращает на сайт с #error=… — говорим об этом, а не молча показываем вход
+{
+  const eh = new URLSearchParams(location.hash.slice(1));
+  if (eh.get('error') || eh.get('error_code')) {
+    const expired = /expired|invalid/i.test((eh.get('error_code') || '') + ' ' + (eh.get('error_description') || ''));
+    history.replaceState(null, '', location.pathname + location.search);
+    setTimeout(() => say('authMsg', expired ? 'Ссылка из письма уже не действует: она одноразовая и живёт около часа. Запросите новое письмо.' : 'Не получилось войти по ссылке из письма. Запросите новое письмо.'), 300);
+  }
+}
 let recoveryPending = false;          // пришли по ссылке «сбросить пароль» из письма
 sb.auth.onAuthStateChange((event, session) => {
   if (event === 'PASSWORD_RECOVERY') recoveryPending = true;
@@ -2418,6 +2428,14 @@ async function deleteMessage(m) {
 /** Убрать вложение (фото, голосовое, файл) с узлов или из хранилища центра. true — получилось или нечего убирать. */
 async function dropMedia(chatId, media) {
   if (!media || media.gone) return true;
+  if (media.parts) {                                       // большой файл частями
+    let ok = true;
+    for (const pt of media.parts) {
+      if (pt.n?.length) await net.del(pt.n, `${chatId}/${pt.h}`).catch(() => {});
+      else if (pt.p) { const { error } = await sb.storage.from(BUCKET).remove([pt.p]).catch((e) => ({ error: e })); if (error) ok = false; }
+    }
+    return ok;
+  }
   if (media.hash && media.nodes?.length) { await net.del(media.nodes, `${chatId}/${media.hash}`).catch(() => {}); return true; }
   if (media.path) {                                        // старый способ: файл в хранилище центра (удалить можно после update-12)
     const { data, error } = await sb.storage.from(BUCKET).remove([media.path]).catch((e) => ({ error: e }));
@@ -2735,7 +2753,7 @@ async function shrinkImage(file) {
 /* =====================================================================
    Файлы: любые до 5 МБ, шифруются и хранятся у партнёров, как фото
    ===================================================================== */
-const FILE_MAX = 5 * 1024 * 1024, FILE_MAX_PREMIUM = 25 * 1024 * 1024;
+const FILE_MAX = 5 * 1024 * 1024, FILE_MAX_PREMIUM = 25 * 1024 * 1024, FILE_PART = 4 * 1024 * 1024;
 const fmtSize = (n) => (n < 1024 ? n + ' Б' : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0).replace('.', ',') + ' КБ' : (n / 1048576).toFixed(1).replace('.', ',') + ' МБ');
 function fileKind(name, mime) {
   const ext = (name.split('.').pop() || '').toLowerCase();
@@ -2764,6 +2782,21 @@ async function sendFile(file, target = null, extra = null) {
     const hash = await E2E.sha256hex(bytes);
     key = `${chatId}/${hash}`;
     const meta = { name: String(file.name || 'файл').slice(0, 120), size: file.size, mime: file.type || 'application/octet-stream', iv: sealed.iv, hash, kv };
+    if (bytes.length > FILE_PART) {
+      // Большой файл (Премиум): узлы и хранилище принимают куски до 6–7 МБ, поэтому шифртекст режем на части
+      meta.parts = []; key = null;
+      for (let o = 0; o < bytes.length; o += FILE_PART) {
+        const part = bytes.subarray(o, o + FILE_PART), ph = await E2E.sha256hex(part);
+        const pn = await net.put(`${chatId}/${ph}`, part).catch(() => []);
+        if (pn.length) meta.parts.push({ h: ph, n: pn });
+        else {
+          const path = `${chatId}/${uuid()}.bin`;
+          const { error } = await sb.storage.from(BUCKET).upload(path, new Blob([part], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream' });
+          if (error) { await dropMedia(chatId, meta); throw error; }
+          meta.parts.push({ h: ph, p: path });
+        }
+      }
+    } else {
     const nodes = await net.put(key, bytes).catch(() => []);
     uploadedNodes = nodes;
     if (nodes.length) meta.nodes = nodes;
@@ -2771,6 +2804,7 @@ async function sendFile(file, target = null, extra = null) {
       meta.path = `${chatId}/${uuid()}.bin`;
       const { error } = await sb.storage.from(BUCKET).upload(meta.path, new Blob([bytes], { type: 'application/octet-stream' }), { contentType: 'application/octet-stream' });
       if (error) throw error;
+    }
     }
     state.images.set('f:' + (meta.path || hash), URL.createObjectURL(file));
     const caption = extra ? extra.t || '' : '';
@@ -2790,7 +2824,23 @@ async function fileBlobUrl(m) {
   const key = chatKey(m.conversation_id, fl.kv || m.key_version || 1);
   if (!key) throw new Error('нет ключа');
   let cipher;
-  if (fl.path) {
+  if (fl.parts) {
+    const bufs = [];
+    for (const pt of fl.parts) {
+      let b;
+      if (pt.p) {
+        const { data, error } = await sb.storage.from(BUCKET).download(pt.p);
+        if (error) throw error;
+        b = await data.arrayBuffer();
+      } else b = await net.get(pt.n || [], `${m.conversation_id}/${pt.h}`, pt.h);
+      if (!b) throw new Error('missing');
+      bufs.push(new Uint8Array(b));
+    }
+    const all = new Uint8Array(bufs.reduce((n, b) => n + b.length, 0));
+    let o = 0;
+    for (const b of bufs) { all.set(b, o); o += b.length; }
+    cipher = all.buffer;
+  } else if (fl.path) {
     const { data, error } = await sb.storage.from(BUCKET).download(fl.path);
     if (error) throw error;
     cipher = await data.arrayBuffer();
