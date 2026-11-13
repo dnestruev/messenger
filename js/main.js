@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113110916';
-import * as CONFIG from '../config.js?v=20261113110916';
-import * as E2E from './crypto.js?v=20261113110916';
-import { createNet } from './net.js?v=20261113110916';
-import { qrSvg } from './qr.js?v=20261113110916';
-import { findEmbed } from './embeds.js?v=20261113110916';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113110916';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261113110916';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113110916';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113170707';
+import * as CONFIG from '../config.js?v=20261113170707';
+import * as E2E from './crypto.js?v=20261113170707';
+import { createNet } from './net.js?v=20261113170707';
+import { qrSvg } from './qr.js?v=20261113170707';
+import { findEmbed } from './embeds.js?v=20261113170707';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113170707';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261113170707';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113170707';
 
 /* =====================================================================
    Утилиты
@@ -1144,6 +1144,7 @@ async function startApp(user) {
   shareAllChatKeys();
   if (prefs.notify && 'Notification' in window && Notification.permission === 'granted') setupPush(true).catch(() => {});
 
+  nativeRegister();
   const deep = location.hash.match(/c=([0-9a-f-]{36})/);
   if (deep) { window.history.replaceState(null, '', location.pathname); openChat(deep[1]); }
   else handleProfileLink();
@@ -4432,8 +4433,46 @@ async function addMessage(m, fromServer = false) {
     if (m.sender_id !== state.me.id) markRead(c.id);
   }
   if (fromServer && isNew && m.sender_id !== state.me.id && !visible && prefs.sound && !state.blocked.has(m.sender_id)) ding();
+  if (NATIVE && fromServer && isNew && document.hidden && m.sender_id !== state.me.id && !m.p?.mst && !state.blocked.has(m.sender_id)) nativeNotify(c, m);
   if (m.sender_id !== state.me.id && state.typing.who === m.sender_id) { state.typing.until = 0; renderHeader(); }
   renderChats();
+}
+
+/* =====================================================================
+   Приложение для iPhone (TrollStore): window.webkit.messageHandlers.native
+   Само приложение в фоне спрашивает сервер (app_poll) и пишет «от кого»;
+   если страница ещё не уснула — подменяет уведомление текстом (тот же id чата).
+   ===================================================================== */
+const NATIVE = (() => { try { return window.webkit?.messageHandlers?.native || null; } catch { return null; } })();
+const nativeSay = (msg) => { try { NATIVE?.postMessage(msg); } catch {} };
+const nativeKey = () => 'app-secret:' + (state.me?.id || '');
+async function nativeRegister() {
+  if (!NATIVE || !state.me) return;
+  let secret = null;
+  try { secret = localStorage.getItem(nativeKey()); } catch {}
+  if (!secret) {
+    const { data, error } = await sb.rpc('app_register');
+    if (error || !data) return;            // до update-24 функции нет — приложение просто без фоновых уведомлений
+    secret = data;
+    try { localStorage.setItem(nativeKey(), secret); } catch {}
+  }
+  nativeSay({ t: 'device', secret, api: SUPABASE_URL, key: SUPABASE_KEY });
+}
+async function nativeUnregister() {
+  if (!NATIVE) return;
+  let secret = null;
+  try { secret = localStorage.getItem(nativeKey()); localStorage.removeItem(nativeKey()); } catch {}
+  nativeSay({ t: 'device', secret: null });
+  if (secret) await sb.rpc('app_unregister', { p_secret: secret }).then(() => {}, () => {});
+}
+function nativeNotify(c, m) {
+  const title = c.is_group ? (c.title || 'Группа') : nameOf(m.sender_id);
+  const body = (c.is_group ? nameOf(m.sender_id) + ': ' : '') + (previewText(m.p || {}) || 'Новое сообщение');
+  nativeSay({ t: 'notify', conv: c.id, title, body: String(body).slice(0, 200) });
+}
+if (NATIVE) {
+  window.nativeOpenChat = (id) => { if (state.me && /^[0-9a-f-]{36}$/.test(id)) openChat(id); };
+  document.documentElement.classList.add('native-app');
 }
 
 /* =====================================================================
@@ -5778,6 +5817,7 @@ function partnerDialog() {
 
 async function signOut() {
   await setupPush(false).catch(() => {});
+  await nativeUnregister();
   await E2E.store.del('me:' + state.me.id).catch(() => {});   // на этом устройстве при следующем входе понадобится код
   await sb.auth.signOut();
 }

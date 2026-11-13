@@ -1,0 +1,34 @@
+name: iOS app (.ipa)
+on:
+  push:
+    branches: [main]
+    paths: ['ios/**', '.github/workflows/ios.yml', 'icon-512.png']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          set -e
+          APP=build/Payload/Messenger.app
+          mkdir -p $APP
+          xcrun -sdk iphoneos swiftc -target arm64-apple-ios15.0 -O ios/main.swift -o $APP/Messenger
+          sed "s/BUILD_NUMBER/${GITHUB_RUN_NUMBER}/" ios/Info.plist > $APP/Info.plist
+          plutil -lint $APP/Info.plist
+          sips -z 120 120 icon-512.png --out $APP/AppIcon60x60@2x.png >/dev/null
+          sips -z 180 180 icon-512.png --out $APP/AppIcon60x60@3x.png >/dev/null
+          brew install ldid
+          ldid -Sios/entitlements.plist $APP/Messenger
+          cd build && zip -qry ../Messenger.ipa Payload && cd ..
+          ls -la Messenger.ipa
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete ios-latest --yes --cleanup-tag || true
+          gh release create ios-latest Messenger.ipa --title "Приложение для iPhone (сборка ${GITHUB_RUN_NUMBER})" \
+            --notes "Ставить через TrollStore: скачать Messenger.ipa на iPhone → Поделиться → TrollStore. iOS 15+." --prerelease

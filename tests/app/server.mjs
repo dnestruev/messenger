@@ -369,6 +369,9 @@ const RPC = {
     if (p_on) db.badge_grants.push({ user_id: p.id, kind: p_kind, since: now() });
     return null;
   },
+  // ---- Приложение iPhone (update-24) ----
+  app_register: (uid) => { const sec = 'sec-' + uid.slice(0, 8) + '-' + Math.random().toString(36).slice(2); (db.app_devices ||= []).push({ user_id: uid, secret: sec }); return sec; },
+  app_unregister: (uid, { p_secret }) => { db.app_devices = (db.app_devices || []).filter((d) => d.secret !== p_secret); return null; },
   // ---- Премиум (update-21) ----
   premium_list: () => PRM().users.filter((p) => new Date(p.until) > new Date()).map((p) => ({ user_id: p.user_id, nick_color: p.nick_color })),
   premium_me: (uid) => { const p = PRM().users.find((x) => x.user_id === uid); return [{ until: p?.until || null, nick_color: p?.nick_color || null, price_month: 2000, price_year: 24000 }]; },
