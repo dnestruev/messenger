@@ -36,6 +36,7 @@ with sync_playwright() as pw:
         check(name + ': у себя превью экрана', wait(a.page, "!!document.querySelector('.call-screen.local-screen')"))
         check(name + ': кнопок камеры нет, пока идёт показ', a.page.locator('.call-ctl', has_text='Сменить').count() == 0)
         a.shot('screen_' + ('v' if video else 'a') + '_sharer'); b.shot('screen_' + ('v' if video else 'a') + '_viewer')
+        if video: time.sleep(10)   # набрать замеры качества
         a.page.locator('.call-ctl', has_text='Остановить').click()
         check(name + ': показ остановлен у собеседника', wait(b.page, "!document.querySelector('.call-screen.remote-screen')"))
         if video:
@@ -50,6 +51,11 @@ with sync_playwright() as pw:
         check(name + ': у собеседника без getDisplayMedia кнопки «Экран» нет', True) if False else None
         a.page.locator('.call-ctl.decline').click()
         b.page.wait_for_selector('.call-screen', state='detached', timeout=10000); time.sleep(4)
+    reps = [r['report'] for r in api('reports', {})['data']]
+    ln = [l for r in reps for l in r.split('\n') if l.startswith('Экран:')]
+    print('   ', ln)
+    check('в отчёте о звонке есть замер экрана у показывающего', any('показывал' in l and '×' in l and 'кбит/с' in l for l in ln))
+    check('и у смотрящего', any('смотрел' in l for l in ln))
     # собеседник не отвечает на reoffer (старая версия): показ не начался, звонок цел
     a.page.click('#callAudioBtn'); b.page.wait_for_selector('.call-screen .call-ctl.accept', timeout=15000)
     b.page.locator('.call-ctl.accept').first.click()

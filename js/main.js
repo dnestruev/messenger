@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261113205347';
-import * as CONFIG from '../config.js?v=20261113205347';
-import * as E2E from './crypto.js?v=20261113205347';
-import { createNet } from './net.js?v=20261113205347';
-import { qrSvg } from './qr.js?v=20261113205347';
-import { findEmbed } from './embeds.js?v=20261113205347';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261113205347';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261113205347';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261113205347';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261114121538';
+import * as CONFIG from '../config.js?v=20261114121538';
+import * as E2E from './crypto.js?v=20261114121538';
+import { createNet } from './net.js?v=20261114121538';
+import { qrSvg } from './qr.js?v=20261114121538';
+import { findEmbed } from './embeds.js?v=20261114121538';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261114121538';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261114121538';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261114121538';
 
 /* =====================================================================
    Утилиты
@@ -3644,7 +3644,7 @@ async function onSignal(env) {
     cur.remoteIce.push(...list);
     if (cur.pc?.remoteDescription) await flushRemoteIce(cur);
   }
-  if (msg.t === 'screen') { cur.remoteScreen = !!msg.on; updateCallUi(); }
+  if (msg.t === 'screen') { cur.remoteScreen = !!msg.on; if (msg.on) screenWatch(cur, 'in'); updateCallUi(); }
   if (msg.t === 'reoffer') onReoffer(cur, msg).catch((e) => console.warn('reoffer', e));
   if (msg.t === 'reanswer' && cur.reneg) cur.reneg(msg.sdp);
   if (msg.t === 'busy') finishCall('busy', { remote: true });
@@ -3846,6 +3846,41 @@ function hangUp(why = 'hangup') {
   finishCall(why === 'declined' ? 'declined' : cur.connectedAt ? 'ok' : cur.dir === 'in' ? 'declined' : 'cancel');
 }
 
+/** Качество показа экрана — только замер для отчёта (ничего в звонке не меняет).
+ *  Каждые 3 с: разрешение, кадры, скорость и почему браузер урезал (сеть / процессор). */
+function screenWatch(cur, dir) {
+  if (cur.screenQTimer) return;
+  cur.screenQ = { dir, n: 0, w: 0, h: 0, fps: 0, kbps: 0, minKbps: Infinity, lim: {}, last: null, codec: '' };
+  cur.screenQTimer = setInterval(async () => {
+    if (call !== cur || !cur.pc) { clearInterval(cur.screenQTimer); return; }
+    if (dir === 'out' ? !cur.screenTrack : !cur.remoteScreen) return;
+    try {
+      const st = await cur.pc.getStats();
+      let r = null, codecs = {};
+      st.forEach((x) => {
+        if (x.type === 'codec') codecs[x.id] = x.mimeType;
+        if (x.type === (dir === 'out' ? 'outbound-rtp' : 'inbound-rtp') && x.kind === 'video' && (!r || (x.frameWidth || 0) > (r.frameWidth || 0))) r = x;
+      });
+      if (!r) return;
+      const q = cur.screenQ, bytes = dir === 'out' ? r.bytesSent : r.bytesReceived;
+      if (q.last) {
+        const kbps = Math.round((bytes - q.last.b) * 8 / Math.max(1, r.timestamp - q.last.t));
+        q.n++; q.w += r.frameWidth || 0; q.h += r.frameHeight || 0; q.fps += r.framesPerSecond || 0; q.kbps += kbps;
+        q.minKbps = Math.min(q.minKbps, kbps);
+        const lim = r.qualityLimitationReason || (dir === 'in' ? 'приём' : '?');
+        q.lim[lim] = (q.lim[lim] || 0) + 1;
+      }
+      q.last = { b: bytes, t: r.timestamp };
+      q.codec = (codecs[r.codecId] || '').replace('video/', '');
+    } catch {}
+  }, 3000);
+}
+function screenSummary(q) {
+  if (!q.n) return (q.dir === 'out' ? 'показывал' : 'смотрел') + ', замеров нет';
+  const a = (v) => Math.round(v / q.n);
+  const lim = Object.entries(q.lim).map(([k, v]) => k + ' ' + Math.round(v * 100 / q.n) + '%').join(', ');
+  return (q.dir === 'out' ? 'показывал' : 'смотрел') + ` ${a(q.w)}×${a(q.h)}, ${a(q.fps)} к/с, ${a(q.kbps)} кбит/с (мин ${q.minKbps}), ${q.codec || '?'}, ограничение: ${lim}, ${q.n * 3} с`;
+}
 const sdpCands = (sdp) => (sdp || '').split(/\r?\n/).filter((l) => l.startsWith('a=candidate:')).map((l) => l.slice(2));
 /** Короткий отчёт для создателя (без IP): чтобы понять, почему не соединилось */
 function sendCallReport(cur, status) {
@@ -3862,7 +3897,8 @@ function sendCallReport(cur, status) {
     'Чужие отдельно: ' + describeCandidates(cur.remoteSeen),
     'Маршрут: ' + (cur.route || 'не выбран'),
     'Ошибка: ' + (cur.err || 'нет'),
-  ].join('\n');
+    cur.screenQ ? 'Экран: ' + screenSummary(cur.screenQ) : null,
+  ].filter(Boolean).join('\n');
   sb.from('call_reports').insert({ call_id: cur.id, dir: cur.dir, status, report: report.slice(0, 4000), ua: navigator.userAgent.slice(0, 300) }).then(() => {}, () => {});
 }
 
@@ -3871,7 +3907,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   if (!cur) return;
   call = null;
   endedCalls.add(cur.id);
-  clearInterval(cur.resend); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer); clearTimeout(cur.stuckTimer); clearTimeout(cur.iceTimer);
+  clearInterval(cur.resend); clearInterval(cur.screenQTimer); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer); clearTimeout(cur.stuckTimer); clearTimeout(cur.iceTimer);
   cur.unfit?.();
   stopTone(); stopTitle();
   if (cur.dir === 'in') (swReg ? Promise.resolve(swReg) : navigator.serviceWorker?.ready)?.then((r) => r?.getNotifications({ tag: 'call' }))
@@ -4061,6 +4097,7 @@ async function startScreen() {
       await snd.setParameters(prm);
     } catch {}
     sendSignal(cur.conv, cur.peer, { t: 'screen', id: cur.id, on: true }).catch(() => {});
+    screenWatch(cur, 'out');
     cur.ui.local.srcObject = null; updateCallUi();
   } catch (e) {
     track?.stop();

@@ -604,6 +604,7 @@ http.createServer(async (req, res) => {
     case '/api/grant': { const p = db.profiles.find((x) => x.username === j.username); db.badge_grants.push({ user_id: p.id, kind: j.kind, since: now() }); return send(res, 200, { ok: true }); }
     case '/api/mod': { const p = db.profiles.find((x) => x.username === j.username); db.moderators = db.moderators.filter((m) => m.user_id !== p.id); if (j.level) db.moderators.push({ user_id: p.id, level: j.level, until: j.seconds ? new Date(Date.now() + j.seconds * 1000).toISOString() : null, by_user: null }); return send(res, 200, { ok: true }); }
     case '/api/avatar': { const p = db.profiles.find((x) => x.username === j.username); p.avatar_path = j.path; return send(res, 200, { ok: true }); }
+    case '/api/reports': return send(res, 200, { data: db.call_reports });
     case '/api/event': { logEvent(j.kind || 'user_new', j.text, j.go || null); return send(res, 200, { ok: true }); }
     case '/api/role': { const p = db.profiles.find((x) => x.username === j.username); p.role = j.role; return send(res, 200, { ok: true }); }
     case '/api/partner': {   // тест: сделать человека партнёром (узел)
