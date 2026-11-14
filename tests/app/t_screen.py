@@ -8,8 +8,8 @@ ok = []
 def check(name, cond):
     ok.append((name, bool(cond)))
     print(('OK  ' if cond else 'FAIL') + ' ' + name, flush=True)
-FAKE = """navigator.mediaDevices.getDisplayMedia = async () => { const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
-  const x = c.getContext('2d'); let n = 0; setInterval(() => { x.fillStyle = n++ % 2 ? '#0a0' : '#00a'; x.fillRect(0, 0, 1280, 720); }, 100); return c.captureStream(15); }"""
+FAKE = """navigator.mediaDevices.getDisplayMedia = async () => { const c = document.createElement('canvas'); c.width = 2560; c.height = 1440;
+  const x = c.getContext('2d'); let n = 0; setInterval(() => { x.fillStyle = n++ % 2 ? '#0a0' : '#00a'; x.fillRect(0, 0, 2560, 1440); }, 100); return c.captureStream(15); }"""
 connected = "/\\d:\\d\\d/.test(document.querySelector('.call-status')?.textContent || '')"
 def wait(p, js, t=15000):
     try: p.wait_for_function(js, timeout=t); return True
@@ -32,7 +32,8 @@ with sync_playwright() as pw:
         b.page.evaluate("document.querySelector('.call-screen audio').pause()"); time.sleep(1)
         check(name + ': звук сам возобновился после паузы', not b.page.evaluate("document.querySelector('.call-screen audio').paused"))
         a.page.locator('.call-ctl', has_text='Экран').click()
-        check(name + ': у собеседника виден экран', wait(b.page, "document.querySelector('.call-screen.remote-screen.remote-video') && document.querySelector('.call-remote').videoWidth === 1280"))
+        check(name + ': у собеседника виден экран', wait(b.page, "document.querySelector('.call-screen.remote-screen.remote-video') && document.querySelector('.call-remote').videoWidth > 0"))
+        check(name + ': экран 2560×1440 уходит не больше 1280 в ширину', wait(b.page, "document.querySelector('.call-remote').videoWidth > 0 && document.querySelector('.call-remote').videoWidth <= 1280", 10000))
         check(name + ': у себя превью экрана', wait(a.page, "!!document.querySelector('.call-screen.local-screen')"))
         check(name + ': кнопок камеры нет, пока идёт показ', a.page.locator('.call-ctl', has_text='Сменить').count() == 0)
         a.shot('screen_' + ('v' if video else 'a') + '_sharer'); b.shot('screen_' + ('v' if video else 'a') + '_viewer')

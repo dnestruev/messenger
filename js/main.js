@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261114121538';
-import * as CONFIG from '../config.js?v=20261114121538';
-import * as E2E from './crypto.js?v=20261114121538';
-import { createNet } from './net.js?v=20261114121538';
-import { qrSvg } from './qr.js?v=20261114121538';
-import { findEmbed } from './embeds.js?v=20261114121538';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261114121538';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261114121538';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261114121538';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261114122508';
+import * as CONFIG from '../config.js?v=20261114122508';
+import * as E2E from './crypto.js?v=20261114122508';
+import { createNet } from './net.js?v=20261114122508';
+import { qrSvg } from './qr.js?v=20261114122508';
+import { findEmbed } from './embeds.js?v=20261114122508';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261114122508';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261114122508';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261114122508';
 
 /* =====================================================================
    Утилиты
@@ -3474,15 +3474,34 @@ const ICE_WAIT = 2000;          // ждём сбор адресов, чтобы 
 /** Камера в HD: при слабом интернете браузер сам снизит качество, не обрывая звонок */
 const camConstraints = (facing = 'user') => ({ facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } });
 const VIDEO_BITRATE = 2_500_000;
+/** Качество показа экрана: обычным 720p/30, Премиуму 1080p/60 */
+function screenQuality(hq) { return hq ? { w: 1920, h: 1080, fps: 60, bitrate: 8_000_000 } : { w: 1280, h: 720, fps: 30, bitrate: VIDEO_BITRATE }; }
+/** Дорожка экрана: не больше 720p/1080p и без «держать резкость любой ценой» (жалоба: «фпс оч плохо») */
+async function tuneScreenSender(pc, track, Q) {
+  try {
+    const snd = pc.getSenders().find((x) => x.track === track);
+    if (!snd) return;
+    const prm = snd.getParameters();
+    if (!prm.encodings?.length) prm.encodings = [{}];
+    const w = track.getSettings().width || 0;
+    prm.encodings[0].maxBitrate = Q.bitrate;
+    prm.encodings[0].maxFramerate = Q.fps;
+    prm.encodings[0].scaleResolutionDownBy = w > Q.w ? w / Q.w : 1;   // браузер не уменьшил захват сам — уменьшит кодер
+    prm.degradationPreference = 'balanced';                           // слабая сеть — понемногу и кадры, и размер, а не 1 к/с
+    await snd.setParameters(prm);
+  } catch {}
+}
 async function tuneSenders(pc) {
   for (const sender of pc.getSenders()) {
     if (sender.track?.kind !== 'video') continue;
+    if (call?.screenTrack && sender.track === call.screenTrack) continue;   // экран настраивает tuneScreenSender
     try {
       sender.track.contentHint = 'detail';
       const prm = sender.getParameters();
       if (!prm.encodings || !prm.encodings.length) prm.encodings = [{}];
       prm.encodings[0].maxBitrate = VIDEO_BITRATE;
       prm.encodings[0].maxFramerate = 30;
+      prm.encodings[0].scaleResolutionDownBy = 1;                     // после показа экрана камера — снова в полный размер
       prm.degradationPreference = 'maintain-resolution';
       await sender.setParameters(prm);
     } catch {}
@@ -4065,11 +4084,15 @@ async function startScreen() {
   cur.screenBusy = true;
   let track = null;
   try {
-    const hq = isPremium();                                 // Премиум: 1080p и 60 кадров, остальным — обычное качество
-    const s = await navigator.mediaDevices.getDisplayMedia({ video: hq ? { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, max: 60 } } : { frameRate: { ideal: 15, max: 30 } }, audio: false });
+    const hq = isPremium();                                 // Премиум: 1080p и 60 кадров, остальным — 720p 30 кадров
+    const Q = screenQuality(hq);
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: Q.w, max: Q.w }, height: { ideal: Q.h, max: Q.h }, frameRate: { ideal: Q.fps, max: Q.fps } }, audio: false });
     track = s.getVideoTracks()[0];
     if (call !== cur || !track) { track?.stop(); return; }
-    try { track.contentHint = 'detail'; } catch {}
+    // Экран 2560×1440 при ~1 Мбит/с давал 14 к/с у показывающего и почти 0 у телефона-зрителя:
+    // ограничиваем размер (браузер мог не послушать max) и просим держать кадры, а не резкость.
+    try { if ((track.getSettings().width || 0) > Q.w) await track.applyConstraints({ width: { max: Q.w }, height: { max: Q.h }, frameRate: { max: Q.fps } }); } catch {}
+    try { track.contentHint = 'motion'; } catch {}
     const pc = cur.pc;
     const cam = cur.local.getVideoTracks()[0];
     const sender = (cam && pc.getSenders().find((x) => x.track === cam)) || cur.screenSender;
@@ -4090,12 +4113,7 @@ async function startScreen() {
     cur.screenTrack = track;
     track.addEventListener('ended', () => { if (cur.screenTrack === track) stopScreen(cur); });
     await tuneSenders(pc);
-    if (hq) try {                                           // только дорожка экрана; остальное в звонке не трогаем
-      const snd = pc.getSenders().find((x) => x.track === track), prm = snd.getParameters();
-      if (!prm.encodings?.length) prm.encodings = [{}];
-      prm.encodings[0].maxBitrate = 8_000_000; prm.encodings[0].maxFramerate = 60;
-      await snd.setParameters(prm);
-    } catch {}
+    await tuneScreenSender(pc, track, Q);
     sendSignal(cur.conv, cur.peer, { t: 'screen', id: cur.id, on: true }).catch(() => {});
     screenWatch(cur, 'out');
     cur.ui.local.srcObject = null; updateCallUi();
