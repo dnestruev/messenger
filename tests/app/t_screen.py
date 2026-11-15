@@ -31,6 +31,8 @@ with sync_playwright() as pw:
         check(name + ': звук собеседника играет отдельным <audio>, видео без звука', all(u.page.evaluate("(() => { const a = document.querySelector('.call-screen audio'), v = document.querySelector('.call-remote'); return !!a && !a.paused && a.srcObject?.getAudioTracks().length === 1 && v.muted; })()") for u in (a, b)))
         b.page.evaluate("document.querySelector('.call-screen audio').pause()"); time.sleep(1)
         check(name + ': звук сам возобновился после паузы', not b.page.evaluate("document.querySelector('.call-screen audio').paused"))
+        if video:
+            check('видео: камера — плавность важнее резкости (motion, не maintain-resolution)', a.page.evaluate("document.querySelector('.call-local').srcObject.getVideoTracks()[0].contentHint") == 'motion')
         a.page.locator('.call-ctl', has_text='Экран').click()
         check(name + ': у собеседника виден экран', wait(b.page, "document.querySelector('.call-screen.remote-screen.remote-video') && document.querySelector('.call-remote').videoWidth > 0"))
         check(name + ': экран 2560×1440 уходит не больше 1280 в ширину', wait(b.page, "document.querySelector('.call-remote').videoWidth > 0 && document.querySelector('.call-remote').videoWidth <= 1280", 10000))
@@ -55,6 +57,9 @@ with sync_playwright() as pw:
     reps = [r['report'] for r in api('reports', {})['data']]
     ln = [l for r in reps for l in r.split('\n') if l.startswith('Экран:')]
     print('   ', ln)
+    ql = [l for r in reps for l in r.split('\n') if l.startswith('Качество:')]
+    print('   ', ql[-2:])
+    check('в отчёте есть замер качества звонка (звук и видео)', any('звук' in l and 'потери' in l for l in ql) and any('видео шлю' in l and '×' in l for l in ql))
     check('в отчёте о звонке есть замер экрана у показывающего', any('показывал' in l and '×' in l and 'кбит/с' in l for l in ln))
     check('и у смотрящего', any('смотрел' in l for l in ln))
     # собеседник не отвечает на reoffer (старая версия): показ не начался, звонок цел

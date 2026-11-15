@@ -99,6 +99,7 @@
 - **Presence**: сервер режет частые track/untrack (`ClientPresenceRateLimitReached` в логах realtime) — `syncPresence()` не чаще раза в 2 с.
 - Отладка звонков: логи Supabase (`query_logs`: `function_edge_logs`, `edge_logs` с user_agent) показывают, кто кому звонил и когда закончилось; после update-13 — таблица `call_reports` (этапы, типы адресов, ошибки, без IP), читает только создатель.
 - **Адреса iceServers не трогать**: дописанный к TURN-адресу «?n=0» Chrome считает неверным и не создаёт соединение вообще (звонки с Android умерли). `newPeerConnection()` при ошибке пробует без странных адресов, потом только STUN. Тест — `t_calls3.py` (мок выдаёт TURN при `localStorage['mock-turn']`).
+- **Качество звонков**: все звонки идут через бесплатный `free.expressturn.com` (канал ~1 Мбит/с, RTT ~200 мс) — это потолок, лечится только нормальным TURN у владельца. Камера: `contentHint = 'motion'` + `degradationPreference = 'balanced'` (было detail/maintain-resolution → слайд-шоу); экран: не больше 720p30 (Премиум 1080p60), `tuneScreenSender`; звук — `priority: 'high'`. Замер в `call_reports`: строки «Качество:» (`callWatch`/`callSummary`) и «Экран:» (`screenWatch`) — сначала смотреть их, потом чинить.
 - Звонок: после завершения повторные `offer` ещё летят ~3 с — id завершённых звонков помнить (`endedCalls`), иначе звонит снова.
 
 ## Тесты

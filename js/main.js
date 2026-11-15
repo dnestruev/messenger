@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261114122508';
-import * as CONFIG from '../config.js?v=20261114122508';
-import * as E2E from './crypto.js?v=20261114122508';
-import { createNet } from './net.js?v=20261114122508';
-import { qrSvg } from './qr.js?v=20261114122508';
-import { findEmbed } from './embeds.js?v=20261114122508';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261114122508';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261114122508';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261114122508';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261115152529';
+import * as CONFIG from '../config.js?v=20261115152529';
+import * as E2E from './crypto.js?v=20261115152529';
+import { createNet } from './net.js?v=20261115152529';
+import { qrSvg } from './qr.js?v=20261115152529';
+import { findEmbed } from './embeds.js?v=20261115152529';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261115152529';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261115152529';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261115152529';
 
 /* =====================================================================
    Утилиты
@@ -3496,13 +3496,26 @@ async function tuneSenders(pc) {
     if (sender.track?.kind !== 'video') continue;
     if (call?.screenTrack && sender.track === call.screenTrack) continue;   // экран настраивает tuneScreenSender
     try {
-      sender.track.contentHint = 'detail';
+      // Камера: при узком канале (звонки идут через бесплатный TURN, ~1 Мбит/с) «держать резкость»
+      // превращало видео в слайд-шоу — пусть браузер понемногу снижает и размер, и кадры.
+      sender.track.contentHint = 'motion';
       const prm = sender.getParameters();
       if (!prm.encodings || !prm.encodings.length) prm.encodings = [{}];
       prm.encodings[0].maxBitrate = VIDEO_BITRATE;
       prm.encodings[0].maxFramerate = 30;
       prm.encodings[0].scaleResolutionDownBy = 1;                     // после показа экрана камера — снова в полный размер
-      prm.degradationPreference = 'maintain-resolution';
+      prm.degradationPreference = 'balanced';
+      await sender.setParameters(prm);
+    } catch {}
+  }
+  for (const sender of pc.getSenders()) {                             // звук важнее картинки: ему место в канале в первую очередь
+    if (sender.track?.kind !== 'audio') continue;
+    try {
+      const prm = sender.getParameters();
+      if (!prm.encodings || !prm.encodings.length) continue;
+      if (prm.encodings[0].priority === 'high') continue;
+      prm.encodings[0].priority = 'high';
+      prm.encodings[0].networkPriority = 'high';
       await sender.setParameters(prm);
     } catch {}
   }
@@ -3738,7 +3751,7 @@ function makePeer(cur) {
       clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer);
       if (!cur.connectedAt) {
         cur.connectedAt = Date.now(); cur.step = 'соединились';
-        stopTone(); cur.clock = setInterval(updateCallUi, 1000); tuneSenders(pc);
+        stopTone(); cur.clock = setInterval(updateCallUi, 1000); tuneSenders(pc); callWatch(cur);
         setTimeout(() => selectedRoute(pc).then((r) => { cur.route = r; }), 1500);
       }
       updateCallUi();
@@ -3865,6 +3878,52 @@ function hangUp(why = 'hangup') {
   finishCall(why === 'declined' ? 'declined' : cur.connectedAt ? 'ok' : cur.dir === 'in' ? 'declined' : 'cancel');
 }
 
+/** Качество самого звонка — только замер для отчёта (в звонке ничего не меняет). Каждые 3 с:
+ *  звук (потери, дрожание), видео туда и обратно (размер, кадры, скорость, причина урезания), ширина канала. */
+function callWatch(cur) {
+  if (cur.qTimer) return;
+  const q = cur.q = { n: 0, loss: 0, lossMax: 0, jit: 0, aKbps: 0, out: { n: 0, w: 0, h: 0, fps: 0, kbps: 0, lim: {} }, inn: { n: 0, w: 0, h: 0, fps: 0, kbps: 0 }, avail: 0, availN: 0, availMin: Infinity, last: {} };
+  const rate = (key, bytes, ts) => { const l = q.last[key]; q.last[key] = { b: bytes, t: ts }; return l && ts > l.t ? Math.round((bytes - l.b) * 8 / (ts - l.t)) : null; };
+  cur.qTimer = setInterval(async () => {
+    if (call !== cur || !cur.pc) { clearInterval(cur.qTimer); return; }
+    try {
+      const st = await cur.pc.getStats();
+      let aIn = null, vOut = null, vIn = null, pair = null;
+      st.forEach((x) => {
+        const kind = x.kind || x.mediaType;
+        if (x.type === 'inbound-rtp' && kind === 'audio') aIn = x;
+        if (x.type === 'outbound-rtp' && kind === 'video' && (!vOut || (x.bytesSent || 0) > (vOut.bytesSent || 0))) vOut = x;
+        if (x.type === 'inbound-rtp' && kind === 'video' && (!vIn || (x.bytesReceived || 0) > (vIn.bytesReceived || 0))) vIn = x;
+        if (x.type === 'candidate-pair' && (x.selected || (x.nominated && x.state === 'succeeded')) && x.availableOutgoingBitrate) pair = x;
+      });
+      q.n++;
+      if (aIn) {
+        const l = q.last.aLoss; q.last.aLoss = { lost: aIn.packetsLost || 0, got: aIn.packetsReceived || 0 };
+        if (l) { const lost = Math.max(0, q.last.aLoss.lost - l.lost), got = q.last.aLoss.got - l.got; const pc = lost + got > 0 ? lost * 100 / (lost + got) : 0; q.loss += pc; q.lossMax = Math.max(q.lossMax, pc); }
+        q.jit += (aIn.jitter || 0) * 1000;
+        const k = rate('a', aIn.bytesReceived || 0, aIn.timestamp); if (k != null) q.aKbps += k;
+      }
+      if (vOut && vOut.frameWidth) {
+        const k = rate('vo', vOut.bytesSent || 0, vOut.timestamp);
+        if (k != null) { const o = q.out; o.n++; o.w += vOut.frameWidth; o.h += vOut.frameHeight || 0; o.fps += vOut.framesPerSecond || 0; o.kbps += k; const lim = vOut.qualityLimitationReason || '?'; o.lim[lim] = (o.lim[lim] || 0) + 1; }
+      }
+      if (vIn && vIn.frameWidth) {
+        const k = rate('vi', vIn.bytesReceived || 0, vIn.timestamp);
+        if (k != null) { const i = q.inn; i.n++; i.w += vIn.frameWidth; i.h += vIn.frameHeight || 0; i.fps += vIn.framesPerSecond || 0; i.kbps += k; }
+      }
+      if (pair) { const k = Math.round(pair.availableOutgoingBitrate / 1000); q.avail += k; q.availN++; q.availMin = Math.min(q.availMin, k); }
+    } catch {}
+  }, 3000);
+}
+function callSummary(q) {
+  const r = (v, n) => Math.round(v / Math.max(1, n));
+  const parts = [`звук: потери ${(q.loss / Math.max(1, q.n)).toFixed(1)}% (макс ${q.lossMax.toFixed(0)}%), дрожание ${r(q.jit, q.n)} мс, ${r(q.aKbps, q.n)} кбит/с`];
+  const o = q.out, i = q.inn;
+  if (o.n) parts.push(`видео шлю ${r(o.w, o.n)}×${r(o.h, o.n)}, ${r(o.fps, o.n)} к/с, ${r(o.kbps, o.n)} кбит/с, ограничение: ${Object.entries(o.lim).map(([k, v]) => k + ' ' + Math.round(v * 100 / o.n) + '%').join(', ')}`);
+  if (i.n) parts.push(`видео принимаю ${r(i.w, i.n)}×${r(i.h, i.n)}, ${r(i.fps, i.n)} к/с, ${r(i.kbps, i.n)} кбит/с`);
+  if (q.availN) parts.push(`канал ~${r(q.avail, q.availN)} кбит/с (мин ${q.availMin})`);
+  return parts.join('; ') + `; ${q.n * 3} с`;
+}
 /** Качество показа экрана — только замер для отчёта (ничего в звонке не меняет).
  *  Каждые 3 с: разрешение, кадры, скорость и почему браузер урезал (сеть / процессор). */
 function screenWatch(cur, dir) {
@@ -3916,6 +3975,7 @@ function sendCallReport(cur, status) {
     'Чужие отдельно: ' + describeCandidates(cur.remoteSeen),
     'Маршрут: ' + (cur.route || 'не выбран'),
     'Ошибка: ' + (cur.err || 'нет'),
+    cur.q?.n ? 'Качество: ' + callSummary(cur.q) : null,
     cur.screenQ ? 'Экран: ' + screenSummary(cur.screenQ) : null,
   ].filter(Boolean).join('\n');
   sb.from('call_reports').insert({ call_id: cur.id, dir: cur.dir, status, report: report.slice(0, 4000), ua: navigator.userAgent.slice(0, 300) }).then(() => {}, () => {});
@@ -3926,7 +3986,7 @@ function finishCall(status, { remote = false, silent = false } = {}) {
   if (!cur) return;
   call = null;
   endedCalls.add(cur.id);
-  clearInterval(cur.resend); clearInterval(cur.screenQTimer); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer); clearTimeout(cur.stuckTimer); clearTimeout(cur.iceTimer);
+  clearInterval(cur.resend); clearInterval(cur.screenQTimer); clearInterval(cur.qTimer); clearInterval(cur.clock); clearTimeout(cur.giveUp); clearTimeout(cur.lostTimer); clearTimeout(cur.connectTimer); clearTimeout(cur.stuckTimer); clearTimeout(cur.iceTimer);
   cur.unfit?.();
   stopTone(); stopTitle();
   if (cur.dir === 'in') (swReg ? Promise.resolve(swReg) : navigator.serviceWorker?.ready)?.then((r) => r?.getNotifications({ tag: 'call' }))
