@@ -1561,3 +1561,50 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .event-ico { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--surface-3); }
 .event-ico .i { width: 18px; height: 18px; }
 .event-text { display: block; overflow-wrap: anywhere; }
+
+/* =====================================================================
+   Устойчивость интерфейса на узких и низких экранах.
+   Применяется ко всем темам; не меняет логику звонков и сообщений.
+   ===================================================================== */
+
+/* Центрирование не должно прятать начало длинной формы на низком экране. */
+.auth { align-items: safe center; }
+
+/* Длинные заголовки модальных окон и имена собеседников не выталкивают кнопки. */
+.modal-head h3, .call-name { min-width: 0; overflow-wrap: anywhere; }
+.call-peer { min-width: 0; max-width: 100%; }
+
+/* Несколько строк управления звонком должны оставаться достижимыми
+   даже в альбомной ориентации и при увеличенном системном шрифте. */
+.call-screen {
+  grid-template-rows: minmax(min-content, 1fr) auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.call-controls { flex-shrink: 0; }
+
+@media (max-width: 720px) {
+  /* Поля и кнопки настроек могут переходить на новую строку вместо выезда. */
+  .modal .inline { flex-wrap: wrap; }
+  .modal .inline > input,
+  .modal .inline > select,
+  .modal .inline > textarea { flex: 1 1 140px; min-width: 0; }
+
+  /* Лента наборов стикеров не раздвигает чат по горизонтали. */
+  .sticker-tabs { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+  .sticker-tabs > button { flex-shrink: 0; }
+}
+
+@media (max-height: 520px) {
+  .call-screen {
+    row-gap: 12px;
+    padding-top: max(8px, env(safe-area-inset-top));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  .call-peer { gap: 6px; }
+  .call-screen:not(.remote-video) .call-peer .avatar { --size: 64px; }
+  .call-controls { gap: 8px; }
+  .call-ctl-ic { width: 44px; height: 44px; }
+  .call-ctl small { font-size: 10px; }
+}
