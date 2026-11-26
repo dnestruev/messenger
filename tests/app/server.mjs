@@ -359,7 +359,7 @@ const RPC = {
     const c = conv(id), v = c.key_version;
     if (db.conversation_keys.some((k) => k.conversation_id === id && k.version === v)) return false;
     const cl = db.conversation_key_claims.find((k) => k.conversation_id === id && k.version === v);
-    if (cl && cl.claimed_by !== uid && Date.now() - cl.at < 30000) return false;
+    if (cl && Date.now() - cl.at < 30000) return false;      // занято (в т.ч. самим собой с другого устройства) — ждём ключ
     if (cl) { cl.claimed_by = uid; cl.at = Date.now(); } else db.conversation_key_claims.push({ conversation_id: id, version: v, claimed_by: uid, at: Date.now() });
     c.key_checks = { ...c.key_checks, [v]: p_check };
     return true;

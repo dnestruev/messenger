@@ -46,7 +46,7 @@ with sync_playwright() as pw:
     check('bobby забанен (видно в карточке)', 'Забанен до' in p.inner_text('.modal'))
     b.open_chat('alice'); b.page.fill('#text', 'я забанен?'); b.page.click('#sendBtn')
     try: b.page.wait_for_function("document.body.innerText.includes('заблокирован')", timeout=6000); banned_msg = True   # подсказка сама гаснет — ловим, а не спим
-    except Exception: banned_msg = False; print('DBG', a.errors[-5:], b.errors[-5:])
+    except Exception: banned_msg = False; d = debug()['db']; print('DBG', [(k['conversation_id'][:6], k['user_id'][:6], k['version'], k['for_fingerprint'][:6] if k.get('for_fingerprint') else None) for k in d.get('conversation_keys', [])], [(x['user_id'][:6], x['fingerprint'][:6] if x.get('fingerprint') else None) for x in d.get('user_keys', [])], [(c['id'][:6], c.get('key_version')) for c in d.get('conversations', [])], b.page.inner_text('#messages')[:200].replace(chr(10),' | '))
     check('забаненный не может отправить', banned_msg)
     p.locator('.ban-box button', has_text='Разбанить').click(); time.sleep(1)
     check('разбанен', 'Забанен до' not in p.inner_text('.modal'))

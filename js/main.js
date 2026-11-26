@@ -1,15 +1,15 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126230535';
-import * as CONFIG from '../config.js?v=20261126230535';
-import * as E2E from './crypto.js?v=20261126230535';
-import { createNet } from './net.js?v=20261126230535';
-import { qrSvg } from './qr.js?v=20261126230535';
-import { findEmbed } from './embeds.js?v=20261126230535';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126230535';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126230535';
-import { fileText } from './filetext.js?v=20261126230535';
-import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126230535';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126230535';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126234520';
+import * as CONFIG from '../config.js?v=20261126234520';
+import * as E2E from './crypto.js?v=20261126234520';
+import { createNet } from './net.js?v=20261126234520';
+import { qrSvg } from './qr.js?v=20261126234520';
+import { findEmbed } from './embeds.js?v=20261126234520';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126234520';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126234520';
+import { fileText } from './filetext.js?v=20261126234520';
+import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126234520';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126234520';
 
 /* =====================================================================
    Утилиты
@@ -1028,8 +1028,18 @@ async function loadChatKeys() {
   return [...got];
 }
 
-/** true — есть ключ текущей версии (получен или только что создан). */
-async function ensureChatKey(chatId) {
+/** true — есть ключ текущей версии (получен или только что создан).
+    Одновременные вызовы для одного чата склеиваются: иначе создавались два разных ключа, и первое сообщение
+    нового чата никто не мог прочитать (ключ у собеседника не сходился с отпечатком и удалялся). */
+const keyInFlight = new Map();
+function ensureChatKey(chatId) {
+  const k = chatId + ':' + currentVersion(chatId);
+  if (keyInFlight.has(k)) return keyInFlight.get(k);
+  const p = ensureChatKeyOnce(chatId).finally(() => keyInFlight.delete(k));
+  keyInFlight.set(k, p);
+  return p;
+}
+async function ensureChatKeyOnce(chatId) {
   const v = currentVersion(chatId);
   if (chatKey(chatId, v)) return true;
   const { data: r } = await sb.from('conversation_keys').select('conversation_id, version, for_fingerprint, wrapped')
