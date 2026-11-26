@@ -41,3 +41,14 @@ select '17 время вышло — сохранить нельзя' as t; sele
 select '18 статус timeout' as t, status from public.exam_mine();
 reset role;
 select '19 событие' as t, count(*) from public.admin_events where kind = 'exam';
+set role authenticated;
+select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
+select '20 свой тест сохраняется' as t, public.exam_template_save(null, 'Мой тест', '[{"q":"2+2?","opts":["3","4"]}]', '[1]', null, null) like 't%' as ok;
+select '21 без ответа — ошибка' as t; select public.exam_template_save(null, 'X', '[{"q":"2+2?","opts":["3","4"]}]', '[null]', null, null);
+select '22 ответ вне вариантов — ошибка' as t; select public.exam_template_save(null, 'X', '[{"q":"2+2?","opts":["3","4"]}]', '[5]', null, null);
+select '23 в списке 2 шаблона' as t, count(*) from public.exam_templates_list();
+select '24 занятый шаблон не удалить' as t; select public.exam_template_delete('python-1');
+select '25 свой удаляется' as t; select public.exam_template_delete((select code from public.exam_templates_list() where title = 'Мой тест'));
+select '26 осталось 1' as t, count(*) from public.exam_templates_list();
+select set_config('request.jwt.claim.sub', '22222222-2222-2222-2222-222222222222', false);
+select '27 не создатель — нельзя' as t; select public.exam_template_save(null, 'X', '[{"q":"a","opts":["1","2"]}]', '[0]', null, null);

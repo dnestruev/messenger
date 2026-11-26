@@ -393,7 +393,19 @@ const RPC = {
   app_register: (uid) => { const sec = 'sec-' + uid.slice(0, 8) + '-' + Math.random().toString(36).slice(2); (db.app_devices ||= []).push({ user_id: uid, secret: sec }); return sec; },
   app_unregister: (uid, { p_secret }) => { db.app_devices = (db.app_devices || []).filter((d) => d.secret !== p_secret); return null; },
   // ---- Тесты команды (update-30) ----
-  exam_templates_list: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators') : [{ code: 'python-1', title: EXM().tpl.title, questions: EXM().tpl.questions.length }],
+  exam_templates_list: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators') : [{ code: 'python-1', title: EXM().tpl.title, questions: EXM().tpl.questions.length },
+    ...(EXM().own || []).map((t) => ({ code: t.code, title: t.title, questions: t.questions.length }))],
+  exam_template_save: (uid, { p_code, p_title, p_questions, p_key, p_task, p_solution }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    if (!String(p_title || '').trim()) return fail('bad exam title');
+    if (!Array.isArray(p_questions) || !p_questions.length || p_key.length !== p_questions.length) return fail('bad exam questions');
+    const bad = p_key.findIndex((k, i) => !Number.isInteger(k) || k < 0 || k >= p_questions[i].opts.length); if (bad >= 0) return fail('exam answer missing ' + (bad + 1));
+    const X = EXM(); X.own ||= [];
+    const code = p_code || 't' + Date.now(); X.own = X.own.filter((t) => t.code !== code);
+    X.own.push({ code, title: p_title.trim(), questions: p_questions, key: p_key, task: p_task || null, solution: p_solution || null }); return code;
+  },
+  exam_template_get: (uid, { p_code }) => { const t = (EXM().own || []).find((x) => x.code === p_code); return t ? [{ code: t.code, title: t.title, questions: t.questions, answer_key: t.key, task: t.task, solution: t.solution, used: false }] : []; },
+  exam_template_delete: (uid, { p_code }) => { EXM().own = (EXM().own || []).filter((x) => x.code !== p_code); return null; },
   exam_launch: (uid, { p_template, p_hours, p_minutes }) => {
     if (prof(uid)?.role !== 'creator') return fail('only creators');
     if (!(p_hours >= 1 && p_hours <= 720)) return fail('bad exam deadline');

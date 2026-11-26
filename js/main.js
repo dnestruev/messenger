@@ -1,14 +1,14 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126211821';
-import * as CONFIG from '../config.js?v=20261126211821';
-import * as E2E from './crypto.js?v=20261126211821';
-import { createNet } from './net.js?v=20261126211821';
-import { qrSvg } from './qr.js?v=20261126211821';
-import { findEmbed } from './embeds.js?v=20261126211821';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126211821';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126211821';
-import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126211821';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126211821';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126212608';
+import * as CONFIG from '../config.js?v=20261126212608';
+import * as E2E from './crypto.js?v=20261126212608';
+import { createNet } from './net.js?v=20261126212608';
+import { qrSvg } from './qr.js?v=20261126212608';
+import { findEmbed } from './embeds.js?v=20261126212608';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126212608';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126212608';
+import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126212608';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126212608';
 
 /* =====================================================================
    Утилиты
@@ -181,6 +181,12 @@ function humanError(err) {
     [/bad badge/i, 'Такого значка нет'],
     [/missing email or phone/i, 'Впишите email'],
     [/too many call reports/i, 'Слишком много отчётов о звонках, подождите немного'],
+    [/exam answer missing (\d+)/i, 'У вопроса $1 не отмечен правильный ответ'],
+    [/bad exam question (\d+)/i, 'Вопрос $1: нужен текст и от 2 до 6 вариантов'],
+    [/bad exam questions/i, 'Нужно от 1 до 100 вопросов, у каждого 2–6 вариантов'],
+    [/bad exam title/i, 'Впишите название теста'],
+    [/exam text too long/i, 'Задача или решение слишком длинные'],
+    [/exam template in use/i, 'Этот тест уже запускали — удалить нельзя (можно изменить)'],
     [/exam missed/i, 'Срок начать тест уже прошёл'],
     [/exam time is over/i, 'Время на тест вышло — сохранено то, что успели'],
     [/exam already submitted/i, 'Тест уже сдан'],
@@ -6811,11 +6817,157 @@ async function openExamsAdmin() {
         if (error) return say(msg, humanError(error));
         toast('Тест запущен'); openExamResults(data);
       } }), msg),
+    section('Свои тесты',
+      h('small', { class: 'muted', text: 'Загрузи тест файлом Word (.docx) или вставь текст — вопросы, варианты и ответы разберутся сами. Потом проверь и отметь правильные.' }),
+      h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: () => openExamImport() }, icon('plus'), 'Загрузить тест'),
+      ...(tp.data || []).map((t) => h('div', { class: 'exam-tpl' },
+        h('span', { class: 'row-text' }, h('b', { text: t.title }), h('small', { text: t.questions + ' вопр.' })),
+        h('button', { class: 'btn', type: 'button', text: 'Изменить', onclick: async () => {
+          const { data, error } = await sb.rpc('exam_template_get', { p_code: t.code });
+          if (error || !data?.[0]) return toast(humanError(error || { message: 'exam not found' }));
+          const d = data[0];
+          openExamEditor({ code: d.code, title: d.title, questions: d.questions, key: d.answer_key, task: d.task || '', solution: d.solution || '', used: d.used });
+        } })))),
     section('Запущенные', ...(ls.data || []).map((e) => h('button', { class: 'hub-item', type: 'button', onclick: () => openExamResults(e.id) },
       h('span', { class: 'hub-ico' }, icon('flask')),
       h('span', { class: 'row-text' }, h('b', { text: e.title }), h('small', { text: `${fmtWhen(e.created_at)} · проверено ${e.done} из ${e.total}` })),
       e.waiting ? h('span', { class: 'hub-count', text: String(e.waiting) }) : null,
       h('span', { class: 'hub-arrow' }, icon('back')))).concat(ls.data?.length ? [] : [h('p', { class: 'muted', text: 'Пока ни одного' })])));
+}
+/* ---------- свои тесты: разбор файла и редактор ---------- */
+/** Текст из .docx (это zip с word/document.xml); распаковка — силами браузера */
+async function docxText(file) {
+  const buf = new Uint8Array(await file.arrayBuffer()), dv = new DataView(buf.buffer);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error('Это не похоже на файл Word (.docx)');
+  let off = dv.getUint32(eocd + 16, true);
+  const count = dv.getUint16(eocd + 10, true), dec = new TextDecoder();
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(off, true) !== 0x02014b50) break;
+    const method = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true);
+    const nlen = dv.getUint16(off + 28, true), xlen = dv.getUint16(off + 30, true), clen = dv.getUint16(off + 32, true), loc = dv.getUint32(off + 42, true);
+    const name = dec.decode(buf.subarray(off + 46, off + 46 + nlen));
+    off += 46 + nlen + xlen + clen;
+    if (name !== 'word/document.xml') continue;
+    const start = loc + 30 + dv.getUint16(loc + 26, true) + dv.getUint16(loc + 28, true);
+    let data = buf.subarray(start, start + csize);
+    if (method === 8) {
+      if (typeof DecompressionStream === 'undefined') throw new Error('Этот браузер не умеет открывать .docx — открой с компьютера или вставь текст');
+      data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+    }
+    const xml = new DOMParser().parseFromString(dec.decode(data), 'application/xml');
+    const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+    return [...xml.getElementsByTagNameNS(W, 'p')].map((p) => {
+      let t = '';
+      for (const el of p.getElementsByTagNameNS(W, '*')) {
+        if (el.localName === 't') t += el.textContent;
+        else if (el.localName === 'tab') t += '    ';
+        else if (el.localName === 'br') t += '\n';
+      }
+      return t;
+    }).join('\n');
+  }
+  throw new Error('В файле не нашли текст документа');
+}
+const OPT_LETTERS = 'abcdefабвгде';
+/** Разбор текста теста: «1. Вопрос», «a) вариант», «Ключ/Ответы: 1. b)», «Практическое задание», «Пример решения» */
+function parseExamText(text) {
+  const out = { title: '', questions: [], key: [], task: '', solution: '' };
+  let mode = 'q', cur = null;
+  const taskLines = [], solLines = [];
+  for (const raw of String(text).replace(/\r/g, '').split('\n')) {
+    const line = raw.trim();
+    if (!line) { if (mode === 'sol') solLines.push(''); else if (mode === 'task') taskLines.push(''); continue; }
+    if (/^(ответы|ключ)/i.test(line) || /ответы и решение|ключ к тесту|правильные ответы/i.test(line)) { mode = 'key'; continue; }
+    if (/^(пример решения|решение|эталон)/i.test(line)) { mode = 'sol'; continue; }
+    if (/^(часть\s*2|практическое задание|практика)/i.test(line)) { mode = 'task'; continue; }
+    if (mode === 'sol') { solLines.push(raw.replace(/\s+$/, '')); continue; }
+    if (mode === 'key') {
+      const m = line.match(/^(\d{1,3})\s*[.)]\s*([a-fа-е])(?=[).:\s]|$)/i);
+      if (m) { const i = OPT_LETTERS.indexOf(m[2].toLowerCase()); out.key[+m[1] - 1] = i >= 6 ? i - 6 : i; }
+      else if (/^(пример|решение)/i.test(line)) mode = 'sol';
+      continue;
+    }
+    const q = line.match(/^(\d{1,3})\s*[.)]\s+(.+)$/);
+    const o = line.match(/^([a-fа-е])\s*[).]\s+(.+)$/i);
+    if (mode === 'task') {
+      if (/^место для (вашего )?кода/i.test(line)) continue;
+      taskLines.push(line); continue;
+    }
+    if (o && cur) { cur.opts.push(o[2].trim()); continue; }
+    if (q) { cur = { q: q[2].trim(), opts: [] }; out.questions.push(cur); continue; }
+    if (!out.title && !out.questions.length && !/^(инструкция|фио|часть|выберите)/i.test(line)) { out.title = line.slice(0, 80); continue; }
+    if (cur && !cur.opts.length && !/^(часть|выберите)/i.test(line)) cur.q += ' ' + line;
+  }
+  out.questions = out.questions.filter((x) => x.opts.length >= 2).map((x) => ({ q: x.q.slice(0, 1000), opts: x.opts.slice(0, 6) }));
+  out.key = out.questions.map((x, i) => (Number.isInteger(out.key[i]) && out.key[i] < x.opts.length ? out.key[i] : null));
+  out.task = taskLines.join('\n').replace(/^\n+|\n+$/g, '').replace(/^Задача:\s*/i, '');
+  out.solution = solLines.join('\n').replace(/^\n+|\n+$/g, '');
+  return out;
+}
+function openExamImport() {
+  const file = h('input', { type: 'file', accept: '.docx,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain', hidden: true });
+  const text = h('textarea', { rows: 8, placeholder: '…или вставь сюда текст теста:\n\n1. Вопрос\na) вариант\nb) вариант\n\nКлюч:\n1. b)' });
+  const msg = note();
+  const go = (t) => {
+    const d = parseExamText(t);
+    if (!d.questions.length) return say(msg, 'Не нашёл вопросов. Нужны строки вида «1. Вопрос» и под ними «a) вариант».');
+    openExamEditor({ code: null, title: d.title || 'Новый тест', questions: d.questions, key: d.key, task: d.task, solution: d.solution });
+  };
+  file.onchange = async () => {
+    const f = file.files[0]; file.value = '';
+    if (!f) return;
+    say(msg, 'Читаю файл…', 'ok');
+    try { go(/\.docx$/i.test(f.name) ? await docxText(f) : await f.text()); } catch (e) { say(msg, e.message || humanError(e)); }
+  };
+  openModal({ title: 'Загрузить тест' }, file,
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: () => file.click() }, icon('file'), 'Выбрать файл .docx'),
+    text, msg,
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Разобрать текст', onclick: () => go(text.value) }),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад к тестам', onclick: () => openExamsAdmin() }));
+}
+function openExamEditor(m) {
+  const msg = note(), title = h('input', { value: m.title, maxLength: 80, placeholder: 'Название теста' });
+  const list = h('div', { class: 'exam-edit-list' });
+  const task = h('textarea', { rows: 6, maxLength: 5000, placeholder: 'Практическое задание (необязательно)', value: m.task || '' });
+  const sol = h('textarea', { class: 'exam-code', rows: 6, maxLength: 20000, spellcheck: 'false', placeholder: 'Эталонное решение (видишь только ты)', value: m.solution || '' });
+  task.value = m.task || ''; sol.value = m.solution || '';
+  const head = h('small', { class: 'muted' });
+  const draw = () => {
+    const miss = m.key.filter((k) => k == null).length;
+    head.textContent = `${m.questions.length} вопр.` + (miss ? ` · без ответа: ${miss} — нажми на правильный вариант` : ' · у всех отмечен ответ ✓');
+    list.replaceChildren(...m.questions.map((q, i) => {
+      const qt = h('textarea', { class: 'exam-edit-q', rows: 2, maxLength: 1000, value: q.q });
+      qt.value = q.q; qt.oninput = () => { q.q = qt.value; };
+      return h('div', { class: 'exam-q edit' + (m.key[i] == null ? ' none' : '') },
+        h('div', { class: 'exam-edit-head' }, h('span', { class: 'exam-q-num', text: String(i + 1) }), qt,
+          h('button', { class: 'icon-btn', type: 'button', title: 'Удалить вопрос', onclick: () => { m.questions.splice(i, 1); m.key.splice(i, 1); draw(); } }, icon('trash'))),
+        h('div', { class: 'exam-opts' }, ...q.opts.map((o, j) => h('button', { class: 'exam-opt' + (m.key[i] === j ? ' right' : ''), type: 'button', onclick: () => { m.key[i] = j; draw(); } },
+          h('span', { class: 'exam-letter', text: LETTERS[j] }), h('span', { class: 'exam-opt-text', text: o }),
+          m.key[i] === j ? h('small', { class: 'exam-mark', text: '✓ правильный' }) : null))));
+    }));
+  };
+  draw();
+  openModal({ title: m.code ? 'Изменить тест' : 'Новый тест' },
+    h('label', { class: 'field' }, h('span', { text: 'Название' }), title), head, list,
+    h('label', { class: 'field' }, h('span', { text: 'Задача с кодом' }), task),
+    h('label', { class: 'field' }, h('span', { text: 'Эталонное решение' }), sol),
+    msg,
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Сохранить тест', onclick: async () => {
+      const miss = m.key.findIndex((k) => k == null);
+      if (miss >= 0) return say(msg, `У вопроса ${miss + 1} не отмечен правильный ответ`);
+      const { error } = await sb.rpc('exam_template_save', { p_code: m.code, p_title: title.value.trim(), p_questions: m.questions, p_key: m.key, p_task: task.value, p_solution: sol.value });
+      if (error) return say(msg, humanError(error));
+      toast('Тест сохранён — его можно запускать'); openExamsAdmin();
+    } }),
+    m.code && !m.used ? h('button', { class: 'btn btn-danger btn-block', type: 'button', text: 'Удалить тест', onclick: async () => {
+      if (!confirm('Удалить тест «' + m.title + '»?')) return;
+      const { error } = await sb.rpc('exam_template_delete', { p_code: m.code });
+      if (error) return say(msg, humanError(error));
+      openExamsAdmin();
+    } }) : null,
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад к тестам', onclick: () => openExamsAdmin() }));
 }
 async function openExamResults(eid) {
   const { data, error } = await sb.rpc('exam_results', { p_exam: eid });

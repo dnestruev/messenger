@@ -212,6 +212,61 @@ grant execute on function public.exam_templates_list(), public.exam_launch(text,
   public.exam_save(bigint, jsonb, text, boolean), public.exams_list(), public.exam_results(bigint), public.exam_attempt_detail(bigint),
   public.exam_verdict(bigint, boolean, boolean, text) to authenticated;
 
+-- создателю: свои тесты (загрузка из файла / правка)
+create or replace function public.exam_template_save(p_code text, p_title text, p_questions jsonb, p_key jsonb, p_task text, p_solution text)
+returns text language plpgsql security definer set search_path = '' as $$
+declare c text := nullif(trim(coalesce(p_code, '')), ''); n int; i int; q jsonb; k int;
+begin
+  if not public.is_creator(auth.uid()) then raise exception 'only creators'; end if;
+  if char_length(trim(coalesce(p_title, ''))) not between 1 and 80 then raise exception 'bad exam title'; end if;
+  if jsonb_typeof(p_questions) <> 'array' or jsonb_typeof(p_key) <> 'array' then raise exception 'bad exam questions'; end if;
+  n := jsonb_array_length(p_questions);
+  if n < 1 or n > 100 or jsonb_array_length(p_key) <> n then raise exception 'bad exam questions'; end if;
+  for i in 0 .. n - 1 loop
+    q := p_questions -> i;
+    if jsonb_typeof(q -> 'q') <> 'string' or char_length(q ->> 'q') not between 1 and 1000
+       or jsonb_typeof(q -> 'opts') <> 'array' or jsonb_array_length(q -> 'opts') not between 2 and 6 then
+      raise exception 'bad exam question %', i + 1;
+    end if;
+    if exists (select 1 from jsonb_array_elements(q -> 'opts') o where jsonb_typeof(o) <> 'string' or char_length(o #>> '{}') not between 1 and 500) then
+      raise exception 'bad exam question %', i + 1;
+    end if;
+    if jsonb_typeof(p_key -> i) <> 'number' then raise exception 'exam answer missing %', i + 1; end if;
+    k := (p_key ->> i)::int;
+    if k < 0 or k >= jsonb_array_length(q -> 'opts') then raise exception 'exam answer missing %', i + 1; end if;
+  end loop;
+  if char_length(coalesce(p_task, '')) > 5000 or char_length(coalesce(p_solution, '')) > 20000 then raise exception 'exam text too long'; end if;
+  if c is null then c := 't' || to_char(now(), 'YYMMDDHH24MISS') || substr(md5(random()::text), 1, 4); end if;
+  if c !~ '^[a-z0-9_-]{2,32}$' then raise exception 'bad exam questions'; end if;
+  insert into public.exam_templates (code, title, questions, answer_key, task, solution)
+    values (c, trim(p_title), (select jsonb_agg(jsonb_build_object('q', x -> 'q', 'opts', x -> 'opts')) from jsonb_array_elements(p_questions) x), p_key,
+      nullif(trim(coalesce(p_task, '')), ''), nullif(trim(coalesce(p_solution, '')), ''))
+  on conflict (code) do update set title = excluded.title, questions = excluded.questions, answer_key = excluded.answer_key,
+    task = excluded.task, solution = excluded.solution;
+  return c;
+end;
+$$;
+create or replace function public.exam_template_get(p_code text)
+returns table (code text, title text, questions jsonb, answer_key jsonb, task text, solution text, used boolean)
+language plpgsql stable security definer set search_path = '' as $$
+#variable_conflict use_column
+begin
+  if not public.is_creator(auth.uid()) then raise exception 'only creators'; end if;
+  return query select t.code, t.title, t.questions, t.answer_key, t.task, t.solution,
+    exists (select 1 from public.exams e where e.template = t.code) from public.exam_templates t where t.code = p_code;
+end;
+$$;
+create or replace function public.exam_template_delete(p_code text)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.is_creator(auth.uid()) then raise exception 'only creators'; end if;
+  if exists (select 1 from public.exams e where e.template = p_code) then raise exception 'exam template in use'; end if;
+  delete from public.exam_templates where code = p_code;
+end;
+$$;
+revoke all on function public.exam_template_save(text, text, jsonb, jsonb, text, text), public.exam_template_get(text), public.exam_template_delete(text) from public, anon;
+grant execute on function public.exam_template_save(text, text, jsonb, jsonb, text, text), public.exam_template_get(text), public.exam_template_delete(text) to authenticated;
+
 -- тест «Основы Python» (из присланного файла, вариант 2); ответы проверены
 insert into public.exam_templates (code, title, questions, answer_key, task, solution) values ('python-1', 'Основы Python', $j$[
  {"q": "Какой тип данных в Python является неизменяемым (immutable)?", "opts": ["list (список)", "dict (словарь)", "tuple (кортеж)", "set (множество)"]},

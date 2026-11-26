@@ -2011,3 +2011,10 @@ body.page-on .chat { display: none; }
 .exam-mark { margin-left: auto; font-weight: 700; white-space: nowrap; }
 .exam-opt.right .exam-mark { color: #1f9d55; }
 .exam-opt.wrong .exam-mark { color: #e0453a; }
+.exam-tpl { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+.exam-tpl .row-text { flex: 1; }
+.exam-edit-list { display: grid; gap: 10px; }
+.exam-edit-head { display: flex; align-items: flex-start; gap: 8px; }
+.exam-edit-q { flex: 1; min-height: 44px; resize: vertical; font-weight: 600; }
+.exam-q.edit.none { box-shadow: inset 3px 0 0 #e8912d; }
+.exam-q.edit .exam-opt { text-align: left; width: 100%; }
