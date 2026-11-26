@@ -32,7 +32,7 @@ begin
   roll := (('x' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 8))::bit(32)::bigint % 10000)::int;
   select * into bst from public.fortune_boost b where b.user_id = me;
   if bst.user_id is not null and roll < bst.chance_bp then
-    won := bst.kind; boosted := true;                                                  -- личный буст (выдал создатель)
+    won := bst.kind;                                                                   -- личный буст (выдал создатель)
   else
     if bst.user_id is not null then roll := (('x' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 8))::bit(32)::bigint % 10000)::int; end if;
     for pr in select p.kind, p.chance_bp from public.fortune_prizes p join public.limited_kinds lk on lk.kind = p.kind order by lk.sort desc loop
