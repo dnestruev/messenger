@@ -8,6 +8,11 @@ const ROOT = process.argv[2];
 const PORT = +process.argv[3] || 8765;
 const JITTER = +(process.env.JITTER ?? 400);   // мс случайной задержки broadcast
 const now = () => new Date().toISOString();
+const EXM = () => (db.examx?.tpl ? db.examx : db.examx = { tpl: { code: 'python-1', title: 'Основы Python',
+  questions: [{ q: 'Какой тип неизменяемый?', opts: ['list', 'dict', 'tuple', 'set'] }, { q: 'type(10 / 2)?', opts: ["<class 'int'>", "<class 'float'>", 'str', 'bool'] }, { q: 'Ключевое слово функции?', opts: ['func', 'function', 'define', 'def'] }],
+  key: [2, 1, 3], task: 'Подсчёт чётных чисел', solution: 'n = int(input())' }, exams: [], att: [] });
+const exStatus = (a, e) => a.verdict || (a.submitted_at ? 'submitted' : a.started_at && Date.now() > Date.parse(a.due_at) ? 'timeout' : a.started_at ? 'in_progress' : Date.now() > Date.parse(e.deadline) ? 'missed' : 'assigned');
+const exScore = (ans) => EXM().tpl.key.filter((k, i) => (ans || [])[i] === k).length;
 const GFT = () => (db.giftsx?.kinds ? db.giftsx : db.giftsx = { kinds: [{ kind: 'whisky', name: 'Виски «Дельта»', price: 300, total: 777, active: true }], list: [] });
 const uuid = () => crypto.randomUUID();
 
@@ -387,6 +392,51 @@ const RPC = {
   // ---- Приложение iPhone (update-24) ----
   app_register: (uid) => { const sec = 'sec-' + uid.slice(0, 8) + '-' + Math.random().toString(36).slice(2); (db.app_devices ||= []).push({ user_id: uid, secret: sec }); return sec; },
   app_unregister: (uid, { p_secret }) => { db.app_devices = (db.app_devices || []).filter((d) => d.secret !== p_secret); return null; },
+  // ---- Тесты команды (update-30) ----
+  exam_templates_list: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators') : [{ code: 'python-1', title: EXM().tpl.title, questions: EXM().tpl.questions.length }],
+  exam_launch: (uid, { p_template, p_hours, p_minutes }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    if (!(p_hours >= 1 && p_hours <= 720)) return fail('bad exam deadline');
+    if (!(p_minutes >= 5 && p_minutes <= 600)) return fail('bad exam time');
+    const X = EXM(), e = { id: X.exams.length + 1, title: X.tpl.title, deadline: new Date(Date.now() + p_hours * 36e5).toISOString(), minutes: p_minutes, created_at: now() };
+    X.exams.push(e);
+    for (const p of db.profiles) if (p.role !== 'creator' && (p.role === 'tester' || activeMod(p.id)?.level === 'senior'))
+      X.att.push({ id: X.att.length + 1, exam_id: e.id, user_id: p.id, started_at: null, due_at: null, submitted_at: null, answers: [], code: null, verdict: null, note: null });
+    logEvent('exam', 'Запущен тест', 'exams'); return e.id;
+  },
+  exam_mine: (uid) => EXM().att.filter((a) => a.user_id === uid).map((a) => { const e = EXM().exams.find((x) => x.id === a.exam_id);
+    return { attempt_id: a.id, title: e.title, deadline: e.deadline, minutes: e.minutes, started_at: a.started_at, due_at: a.due_at, status: exStatus(a, e), questions: EXM().tpl.questions.length, has_task: true }; }).reverse(),
+  exam_start: (uid, { p_attempt }) => {
+    const a = EXM().att.find((x) => x.id === p_attempt && x.user_id === uid); if (!a) return fail('exam not found');
+    const e = EXM().exams.find((x) => x.id === a.exam_id);
+    if (!a.started_at) { if (Date.now() > Date.parse(e.deadline)) return fail('exam missed'); a.started_at = now(); a.due_at = new Date(Date.now() + e.minutes * 60e3).toISOString(); }
+    return [{ title: e.title, questions: EXM().tpl.questions, task: EXM().tpl.task, due_at: a.due_at, answers: a.answers, code: a.code, status: exStatus(a, e) }];
+  },
+  exam_save: (uid, { p_attempt, p_answers, p_code, p_final }) => {
+    const a = EXM().att.find((x) => x.id === p_attempt && x.user_id === uid); if (!a) return fail('exam not found');
+    const e = EXM().exams.find((x) => x.id === a.exam_id);
+    if (!a.started_at) return fail('exam not started');
+    if (a.submitted_at || a.verdict) return fail('exam already submitted');
+    if (Date.now() > Date.parse(a.due_at) + 30e3) return fail('exam time is over');
+    a.answers = p_answers || []; a.code = p_code ?? null; if (p_final) a.submitted_at = now();
+    return exStatus(a, e);
+  },
+  exams_list: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators') : EXM().exams.map((e) => { const as = EXM().att.filter((a) => a.exam_id === e.id);
+    return { ...e, total: as.length, done: as.filter((a) => a.verdict).length, waiting: as.filter((a) => !a.verdict && (a.submitted_at || (a.due_at && Date.now() > Date.parse(a.due_at)))).length }; }).reverse(),
+  exam_results: (uid, { p_exam }) => prof(uid)?.role !== 'creator' ? fail('only creators') : EXM().att.filter((a) => a.exam_id === p_exam).map((a) => { const e = EXM().exams.find((x) => x.id === a.exam_id);
+    return { attempt_id: a.id, user_id: a.user_id, username: prof(a.user_id)?.username, mod_level: activeMod(a.user_id)?.level || null, role: prof(a.user_id)?.role || null, status: exStatus(a, e), score: a.started_at ? exScore(a.answers) : null, questions: EXM().tpl.key.length, started_at: a.started_at, submitted_at: a.submitted_at, verdict: a.verdict }; }),
+  exam_attempt_detail: (uid, { p_attempt }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    const a = EXM().att.find((x) => x.id === p_attempt), e = EXM().exams.find((x) => x.id === a.exam_id), T = EXM().tpl;
+    return [{ username: prof(a.user_id)?.username, title: e.title, status: exStatus(a, e), questions: T.questions, answer_key: T.key, answers: a.answers, score: exScore(a.answers), task: T.task, code: a.code, solution: T.solution, started_at: a.started_at, submitted_at: a.submitted_at, verdict: a.verdict, note: a.note }];
+  },
+  exam_verdict: (uid, { p_attempt, p_pass, p_strip, p_note }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    const a = EXM().att.find((x) => x.id === p_attempt); if (!a) return fail('exam not found');
+    a.verdict = p_pass ? 'pass' : 'fail'; a.note = p_note || null;
+    if (!p_pass && p_strip) { const pr = prof(a.user_id); if (pr.role === 'tester') pr.role = null; db.moderators = (db.moderators || []).filter((m) => m.user_id !== a.user_id); }
+    return null;
+  },
   // ---- Подарки (update-29) ----
   gifts_catalog: () => GFT().kinds.map((k) => ({ ...k, sold: GFT().list.filter((g) => g.kind === k.kind && ['sent', 'pending'].includes(g.status)).length })),
   gift_send: (uid, { p_kind, p_to, p_message, p_anon, p_proof }) => {

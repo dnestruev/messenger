@@ -1,14 +1,14 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126205458';
-import * as CONFIG from '../config.js?v=20261126205458';
-import * as E2E from './crypto.js?v=20261126205458';
-import { createNet } from './net.js?v=20261126205458';
-import { qrSvg } from './qr.js?v=20261126205458';
-import { findEmbed } from './embeds.js?v=20261126205458';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126205458';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126205458';
-import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126205458';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126205458';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126211821';
+import * as CONFIG from '../config.js?v=20261126211821';
+import * as E2E from './crypto.js?v=20261126211821';
+import { createNet } from './net.js?v=20261126211821';
+import { qrSvg } from './qr.js?v=20261126211821';
+import { findEmbed } from './embeds.js?v=20261126211821';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126211821';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126211821';
+import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126211821';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126211821';
 
 /* =====================================================================
    Утилиты
@@ -181,6 +181,13 @@ function humanError(err) {
     [/bad badge/i, 'Такого значка нет'],
     [/missing email or phone/i, 'Впишите email'],
     [/too many call reports/i, 'Слишком много отчётов о звонках, подождите немного'],
+    [/exam missed/i, 'Срок начать тест уже прошёл'],
+    [/exam time is over/i, 'Время на тест вышло — сохранено то, что успели'],
+    [/exam already submitted/i, 'Тест уже сдан'],
+    [/exam not started/i, 'Сначала начните тест'],
+    [/exam not found|no such exam/i, 'Теста нет'],
+    [/bad exam deadline/i, 'Срок — от 1 до 720 часов'],
+    [/bad exam time/i, 'Время на тест — от 5 до 600 минут'],
     [/no such gift/i, 'Такого подарка нет'],
     [/gift sold out/i, 'Эти подарки закончились — весь тираж разобран'],
     [/gift not found/i, 'Подарок не найден'],
@@ -799,6 +806,7 @@ async function loadPerks() {
   donateBanner();
   loadFortune();
   loadGiftCatalog().then(() => checkNewGifts()).catch(() => {});
+  loadExams().catch(() => {});
   const plus = hasPlus(), prem = isPremium();
   if (plus !== prefs.plus || prem !== !!prefs.premium) { prefs.plus = plus; prefs.premium = prem; savePrefs(); applyTheme(); }
   if (await refreshPeople().catch(() => false)) changed = true;
@@ -1536,7 +1544,7 @@ const lastNews = () => news.list[news.list.length - 1];
 const events = { list: [], off: true, ch: null, open: false };
 const eventsSeenKey = () => 'events-seen-' + (state.me?.id || '');
 const eventsSeen = () => { try { return Number(localStorage.getItem(eventsSeenKey()) || 0); } catch { return 0; } };
-const EVENT_ICON = { gift_order: 'gift', order_limited: 'gem', order_premium: 'premium', resale: 'gem', node_new: 'screen', node_down: 'warn', node_up: 'screen', turn_new: 'relay', user_new: 'users', ban: 'shield', unban: 'shield' };
+const EVENT_ICON = { exam: 'flask', gift_order: 'gift', order_limited: 'gem', order_premium: 'premium', resale: 'gem', node_new: 'screen', node_down: 'warn', node_up: 'screen', turn_new: 'relay', user_new: 'users', ban: 'shield', unban: 'shield' };
 async function startEvents() {
   const me = state.me?.id;
   if (!me || roleOf(me) !== 'creator') return;
@@ -1601,6 +1609,7 @@ function goEvent(e) {
   if (go === 'orders') { events.open = false; openShop('orders'); }
   else if (go.startsWith('user:')) { events.open = false; openAdmin('users', go.slice(5)); }
   else if (go === 'nodes') { events.open = false; openSettings('network'); }
+  else if (go === 'exams') { events.open = false; openExamsAdmin(); }
 }
 
 async function startNews() {
@@ -6521,6 +6530,7 @@ function openAdminHub() {
       creator && !events.off ? item('bell', 'События', 'Заявки, узлы, TURN, новые люди, баны', () => openEvents(), evCount ? h('span', { class: 'hub-count', text: String(evCount) }) : null) : null,
       creator ? item('gem', 'Заявки', 'Лимитки, Премиум, крутки и подарки — выдать после доната', () => openShop('orders'), orders) : null,
       item('users', 'Люди', creator ? 'Поиск, роли, модераторы, значки, баны' : lvl === 2 ? 'Поиск и баны на любой срок' : 'Поиск и баны на 1–7 дней', () => openAdmin('users')),
+      creator ? item('flask', 'Тесты для команды', 'Запустить тест старшим модераторам и тестерам, проверить ответы', () => openExamsAdmin()) : null,
       lvl >= 2 ? item('chart', 'Статистика', 'Люди, сообщения, место, узлы, звонки', () => openAdmin('stats')) : null,
       creator ? item('archive', 'Журнал модераторов', 'Кто кого банил и когда', () => openAdmin('log')) : null),
     creator ? donateAdmin(msg) : null,
@@ -6655,6 +6665,208 @@ async function checkNewGifts() {
   toast('🎁 Вам подарили «' + giftName(g.kind) + '»' + (fresh.length > 1 ? ` и ещё ${fresh.length - 1}` : '') + (g.sender ? ' — от ' + nameOf(g.sender) : ''));
   giftView(g, me, true);
   if (prefs.sound) ding();
+}
+
+/* =====================================================================
+   Тесты для команды (update-30): старшие модераторы и тестеры
+   ===================================================================== */
+const exams = { off: false, list: [], timer: null, cur: null };
+const EXAM_ST = { assigned: 'не начал', in_progress: 'проходит', submitted: 'сдал на проверку', timeout: 'время вышло', missed: 'не успел начать', pass: 'СДАЛ ✓', fail: 'ПРОВАЛИЛ ✗' };
+const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
+function leftText(ms) {
+  if (ms <= 0) return '0:00';
+  const t = Math.floor(ms / 1000), d = Math.floor(t / 86400), hh = Math.floor(t / 3600) % 24, mm = Math.floor(t / 60) % 60, ss = t % 60;
+  return (d ? d + ' д ' : '') + (d || hh ? hh + ':' + String(mm).padStart(2, '0') : String(mm)) + ':' + String(ss).padStart(2, '0');
+}
+async function loadExams() {
+  if (!state.me || exams.off) return;
+  const { data, error } = await sb.rpc('exam_mine');
+  if (error) { if (/exam|function|schema cache/i.test(error.message || '')) exams.off = true; return; }
+  exams.list = (data || []).filter((x) => x.status === 'assigned' || x.status === 'in_progress');
+  examPill();
+  const fresh = exams.list.find((x) => x.status === 'assigned' && !lsGet('exam-seen:' + x.attempt_id));
+  if (fresh) {
+    lsSet('exam-seen:' + fresh.attempt_id, '1');
+    if (prefs.sound) ding();
+    examNotice(fresh);
+  }
+}
+/** Плашка над чатами с обратным отсчётом */
+function examPill() {
+  document.querySelector('.exam-pill')?.remove();
+  clearInterval(exams.timer);
+  const x = exams.list[0];
+  if (!x) return;
+  const txt = h('span', {});
+  const pill = h('div', { class: 'exam-pill' + (x.status === 'in_progress' ? ' live' : ''), role: 'button', tabindex: '0', onclick: () => openExam(x) },
+    h('span', { class: 'exam-pill-ico' }, icon('flask')), txt);
+  const tick = () => {
+    const end = x.status === 'in_progress' ? new Date(x.due_at) : new Date(x.deadline), ms = end - Date.now();
+    if (ms <= 0) { clearInterval(exams.timer); loadExams(); return; }
+    txt.replaceChildren(h('b', { text: x.status === 'in_progress' ? 'Тест идёт · ' : 'Тест «' + x.title + '» · ' }),
+      x.status === 'in_progress' ? 'осталось ' : 'начать в течение ', h('b', { class: 'exam-clock', text: leftText(ms) }));
+  };
+  tick(); exams.timer = setInterval(tick, 1000);
+  $('chatList')?.before(pill);
+}
+function examNotice(x) {
+  const close = () => ov.remove();
+  const ov = h('div', { class: 'overlay exam-overlay' },
+    h('div', { class: 'modal exam-notice', role: 'dialog', 'aria-modal': 'true' },
+      h('div', { class: 'exam-notice-ico' }, icon('flask')),
+      h('h3', { text: 'Тебе назначен тест' }),
+      h('p', { text: `«${x.title}»: ${x.questions} вопросов${x.has_task ? ' + задача с кодом' : ''}. На прохождение — ${x.minutes} мин. Начать нужно до ${fmtWhen(x.deadline)}.` }),
+      h('p', { class: 'exam-warn', text: 'Не успел или провалил — вылетаешь из команды. Проверяет создатель.' }),
+      h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Перейти к тесту', onclick: () => { close(); openExam(x); } }),
+      h('button', { class: 'btn btn-block', type: 'button', text: 'Позже', onclick: close })));
+  document.body.append(ov);
+}
+async function openExam(x) {
+  if (x.status === 'assigned') {
+    return openModal({ title: 'Тест «' + x.title + '»', overlay: true },
+      h('p', { text: `${x.questions} вопросов${x.has_task ? ' и задача, где нужно написать код' : ''}.` }),
+      h('div', { class: 'exam-rules' },
+        h('div', {}, icon('clock'), h('span', { text: `На всё — ${x.minutes} мин. Время пойдёт сразу после «Начать» и не остановится, даже если закрыть приложение.` })),
+        h('div', {}, icon('edit'), h('span', { text: 'Ответы сохраняются сами. Кончилось время — отправится то, что успел.' })),
+        h('div', {}, icon('shield'), h('span', { text: 'Результат проверяет создатель.' }))),
+      h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Начать — пошло время', onclick: () => startExam(x.attempt_id) }),
+      h('button', { class: 'btn btn-block', type: 'button', text: 'Позже', onclick: () => closeModal() }));
+  }
+  return startExam(x.attempt_id);
+}
+async function startExam(aid) {
+  const { data, error } = await sb.rpc('exam_start', { p_attempt: aid });
+  if (error) { toast(humanError(error)); return loadExams(); }
+  const ex = data?.[0];
+  if (!ex) return;
+  if (ex.status !== 'in_progress') { closeModal(); toast('Тест уже закрыт: ' + (EXAM_ST[ex.status] || ex.status)); return loadExams(); }
+  const answers = Array.isArray(ex.answers) ? [...ex.answers] : [];
+  const code = h('textarea', { class: 'exam-code', rows: 10, spellcheck: 'false', autocapitalize: 'off', placeholder: 'Пиши код здесь…', value: ex.code || '' });
+  code.value = ex.code || '';
+  const clock = h('b', { class: 'exam-clock' });
+  const saved = h('small', { class: 'muted exam-saved' });
+  let saveT = null, done = false;
+  const save = async (final = false) => {
+    clearTimeout(saveT);
+    const { data: st, error: e } = await sb.rpc('exam_save', { p_attempt: aid, p_answers: answers.map((v) => (v == null ? null : v)), p_code: code.value || null, p_final: final });
+    if (e) { saved.textContent = humanError(e); return null; }
+    saved.textContent = 'Сохранено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return st;
+  };
+  const later = () => { clearTimeout(saveT); saveT = setTimeout(() => save(false), 1200); };
+  code.oninput = later;
+  const finish = async (auto) => {
+    if (done) return; done = true;
+    clearInterval(exams.cur); exams.cur = null;
+    await save(true);
+    closeModal(); loadExams();
+    toast(auto ? '⏰ Время вышло — ответы отправлены на проверку' : '✅ Тест сдан. Жди проверки');
+  };
+  const qs = (ex.questions || []).map((q, i) => h('div', { class: 'exam-q' },
+    h('div', { class: 'exam-q-text' }, h('span', { class: 'exam-q-num', text: String(i + 1) }), h('span', { text: q.q })),
+    h('div', { class: 'exam-opts' }, ...(q.opts || []).map((o, j) => {
+      const id = `ex${aid}-${i}-${j}`;
+      const input = h('input', { type: 'radio', name: `ex${aid}-${i}`, id, checked: answers[i] === j });
+      input.onchange = () => { answers[i] = j; while (answers.length < (ex.questions || []).length) answers.push(null); later(); };
+      return h('label', { class: 'exam-opt', for: id }, input, h('span', { class: 'exam-letter', text: LETTERS[j] }), h('span', { class: 'exam-opt-text', text: o }));
+    }))));
+  openModal({ title: ex.title, overlay: true, onClose: () => { clearInterval(exams.cur); exams.cur = null; if (!done) save(false); } },
+    h('div', { class: 'exam-bar' }, icon('clock'), 'Осталось ', clock, saved),
+    ...qs,
+    ex.task ? h('div', { class: 'exam-task' }, h('b', { text: 'Практическое задание' }), h('pre', { text: ex.task }), code) : null,
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Сдать', onclick: () => {
+      const empty = (ex.questions || []).filter((_, i) => answers[i] == null).length;
+      if (!confirm(empty ? `Без ответа ${empty} вопр. Всё равно сдать?` : 'Сдать тест? Изменить ответы потом нельзя.')) return;
+      finish(false);
+    } }),
+    h('small', { class: 'muted', text: 'Можно свернуть — время всё равно идёт, ответы сохранены.' }));
+  const due = new Date(ex.due_at);
+  const tick = () => {
+    const ms = due - Date.now();
+    clock.textContent = leftText(ms);
+    clock.classList.toggle('hot', ms < 60000);
+    if (ms <= 0) finish(true);
+  };
+  tick(); clearInterval(exams.cur); exams.cur = setInterval(tick, 1000);
+  loadExams();
+}
+/* ---------- создателю: запуск и проверка ---------- */
+async function openExamsAdmin() {
+  const [tp, ls] = await Promise.all([sb.rpc('exam_templates_list'), sb.rpc('exams_list')]);
+  if (tp.error) return toast(/exam|function|schema cache/i.test(tp.error.message || '') ? 'Тесты заработают после обновления сервера (update-30)' : humanError(tp.error));
+  const msg = note();
+  const tpl = h('select', {}, ...(tp.data || []).map((t) => h('option', { value: t.code, text: `${t.title} (${t.questions} вопр.)` })));
+  const hours = h('input', { type: 'number', min: 1, max: 720, value: 24, inputMode: 'numeric' });
+  const mins = h('input', { type: 'number', min: 5, max: 600, value: 40, inputMode: 'numeric' });
+  openModal({ title: 'Тесты для команды' },
+    section('Запустить тест',
+      h('small', { class: 'muted', text: 'Придёт всем старшим модераторам и тестерам: окно-уведомление и плашка с обратным отсчётом.' }),
+      h('label', { class: 'field' }, h('span', { text: 'Тест' }), tpl),
+      h('div', { class: 'inline' },
+        h('label', { class: 'field' }, h('span', { text: 'Начать в течение, часов' }), hours),
+        h('label', { class: 'field' }, h('span', { text: 'На прохождение, минут' }), mins)),
+      h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Запустить', onclick: async () => {
+        if (!confirm('Запустить тест? Он сразу придёт всем старшим модераторам и тестерам.')) return;
+        const { data, error } = await sb.rpc('exam_launch', { p_template: tpl.value, p_hours: +hours.value || 0, p_minutes: +mins.value || 0 });
+        if (error) return say(msg, humanError(error));
+        toast('Тест запущен'); openExamResults(data);
+      } }), msg),
+    section('Запущенные', ...(ls.data || []).map((e) => h('button', { class: 'hub-item', type: 'button', onclick: () => openExamResults(e.id) },
+      h('span', { class: 'hub-ico' }, icon('flask')),
+      h('span', { class: 'row-text' }, h('b', { text: e.title }), h('small', { text: `${fmtWhen(e.created_at)} · проверено ${e.done} из ${e.total}` })),
+      e.waiting ? h('span', { class: 'hub-count', text: String(e.waiting) }) : null,
+      h('span', { class: 'hub-arrow' }, icon('back')))).concat(ls.data?.length ? [] : [h('p', { class: 'muted', text: 'Пока ни одного' })])));
+}
+async function openExamResults(eid) {
+  const { data, error } = await sb.rpc('exam_results', { p_exam: eid });
+  if (error) return toast(humanError(error));
+  await loadPeople((data || []).map((r) => r.user_id));
+  openModal({ title: 'Результаты' },
+    h('small', { class: 'muted', text: 'Нажми на человека — увидишь его ответы рядом с правильными и код задачи.' }),
+    ...(data || []).map((r) => h('button', { class: 'exam-row st-' + r.status, type: 'button', onclick: () => openExamAttempt(r.attempt_id, eid) },
+      userAvatar(r.user_id, 'sm'),
+      h('span', { class: 'row-text' }, h('b', { text: '@' + r.username }), h('small', { text: (r.mod_level === 'senior' ? 'старший модератор' : '') + (r.mod_level === 'senior' && r.role === 'tester' ? ' · ' : '') + (r.role === 'tester' ? 'тестер' : '') })),
+      r.score != null ? h('span', { class: 'exam-score', text: `${r.score}/${r.questions}` }) : null,
+      h('span', { class: 'exam-chip', text: EXAM_ST[r.status] || r.status }))).concat(data?.length ? [] : [h('p', { class: 'muted', text: 'Некому было сдавать: нет ни старших модераторов, ни тестеров' })]),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад к тестам', onclick: () => openExamsAdmin() }));
+}
+async function openExamAttempt(aid, eid) {
+  const { data, error } = await sb.rpc('exam_attempt_detail', { p_attempt: aid });
+  if (error || !data?.[0]) return toast(humanError(error || { message: 'exam not found' }));
+  const d = data[0], key = d.answer_key || [], ans = d.answers || [], msg = note();
+  const why = h('input', { maxLength: 300, placeholder: 'Комментарий (необязательно)', value: d.note || '' });
+  const verdict = async (pass, strip) => {
+    if (strip && !confirm(`@${d.username} провалил — снять роль тестера и права модератора?`)) return;
+    const { error: e } = await sb.rpc('exam_verdict', { p_attempt: aid, p_pass: pass, p_strip: strip, p_note: why.value });
+    if (e) return say(msg, humanError(e));
+    toast(pass ? '@' + d.username + ' — сдал' : '@' + d.username + ' — провалил' + (strip ? ', права сняты' : ''));
+    if (strip) { await loadPerks().catch(() => {}); renderChats(); }
+    openExamResults(eid);
+  };
+  openModal({ title: '@' + d.username },
+    h('div', { class: 'exam-summary' },
+      h('span', { class: 'exam-chip big st-' + d.status, text: EXAM_ST[d.status] || d.status }),
+      d.started_at ? h('b', { class: 'exam-score big', text: `${d.score} из ${key.length}` }) : null,
+      h('small', { class: 'muted', text: d.started_at ? 'Начал ' + fmtWhen(d.started_at) + (d.submitted_at ? ' · сдал ' + fmtWhen(d.submitted_at) : '') : 'Не начинал' })),
+    ...(d.questions || []).map((q, i) => {
+      const got = ans[i], right = key[i];
+      return h('div', { class: 'exam-q review ' + (got == null ? 'none' : got === right ? 'ok' : 'bad') },
+        h('div', { class: 'exam-q-text' }, h('span', { class: 'exam-q-num', text: String(i + 1) }), h('span', { text: q.q })),
+        h('div', { class: 'exam-opts' }, ...(q.opts || []).map((o, j) => h('div', { class: 'exam-opt' + (j === right ? ' right' : '') + (j === got && got !== right ? ' wrong' : '') + (j === got ? ' picked' : '') },
+          h('span', { class: 'exam-letter', text: LETTERS[j] }), h('span', { class: 'exam-opt-text', text: o }),
+          j === right ? h('small', { class: 'exam-mark', text: j === got ? '✓ его ответ' : '✓ правильный' }) : j === got ? h('small', { class: 'exam-mark', text: '✗ его ответ' }) : null))),
+        got == null ? h('small', { class: 'muted', text: 'Без ответа' }) : null);
+    }),
+    d.task ? h('div', { class: 'exam-task' }, h('b', { text: 'Задача' }), h('pre', { text: d.task }),
+      h('b', { text: 'Его код' }), d.code ? h('pre', { class: 'exam-code-view', text: d.code }) : h('p', { class: 'muted', text: 'Код не написал' }),
+      d.solution ? h('details', { class: 'exam-solution' }, h('summary', { text: 'Эталонное решение' }), h('pre', { class: 'exam-code-view', text: d.solution })) : null) : null,
+    section('Решение', why, msg,
+      h('div', { class: 'shop-actions' },
+        h('button', { class: 'btn btn-primary', type: 'button', text: 'Сдал ✓', onclick: () => verdict(true, false) }),
+        h('button', { class: 'btn', type: 'button', text: 'Провалил', onclick: () => verdict(false, false) })),
+      h('button', { class: 'btn btn-danger btn-block', type: 'button', text: 'Провалил — снять роль и права', onclick: () => verdict(false, true) }),
+      d.verdict ? h('small', { class: 'muted', text: 'Уже оценён: ' + EXAM_ST[d.verdict] + '. Можно поменять.' }) : null),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад к результатам', onclick: () => openExamResults(eid) }));
 }
 
 async function signOut() {

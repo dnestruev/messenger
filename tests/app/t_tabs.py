@@ -46,7 +46,7 @@ with sync_playwright() as pw:
     check('из настроек назад — в чаты', p.evaluate("document.body.dataset.tab") == 'chats' and p.locator('#chatList').is_visible())
     b = boss.page
     b.click('.tab[data-tab=admin]'); b.wait_for_selector('.hub-item')
-    check('Админка: События, Заявки, Люди, Статистика, Журнал', b.locator('.hub-item').count() == 5)
+    check('Админка: События, Заявки, Люди, Тесты, Статистика, Журнал', b.locator('.hub-item').count() == 6)
     b.locator('.hub-item b', has_text='Люди').click(); b.wait_for_selector('.admin-user, .admin')
     check('Люди внутри вкладки, со стрелкой назад', b.locator('.page-back').count() == 1 and b.locator('.overlay').count() == 0)
     b.locator('.page-back').click(); b.wait_for_selector('.hub-item')
