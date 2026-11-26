@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126133726';
-import * as CONFIG from '../config.js?v=20261126133726';
-import * as E2E from './crypto.js?v=20261126133726';
-import { createNet } from './net.js?v=20261126133726';
-import { qrSvg } from './qr.js?v=20261126133726';
-import { findEmbed } from './embeds.js?v=20261126133726';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126133726';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126133726';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126133726';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126200032';
+import * as CONFIG from '../config.js?v=20261126200032';
+import * as E2E from './crypto.js?v=20261126200032';
+import { createNet } from './net.js?v=20261126200032';
+import { qrSvg } from './qr.js?v=20261126200032';
+import { findEmbed } from './embeds.js?v=20261126200032';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126200032';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126200032';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126200032';
 
 /* =====================================================================
    Утилиты
@@ -40,6 +40,21 @@ const uuid = () => crypto.randomUUID ? crypto.randomUUID()
 })();
 
 /** Создать элемент: h('div', { class: 'x', text: '…', onclick }, ...дети) */
+/** Кнопка с запросом к серверу: пока он идёт, второе нажатие не проходит (было: «Начислить» и «Продать» уходили дважды) */
+function guardClick(fn) {
+  return function (e) {
+    const btn = e.currentTarget;
+    if (btn.dataset.busy) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+    const r = fn.call(this, e);
+    if (r && typeof r.then === 'function') {
+      btn.dataset.busy = '1'; btn.classList.add('busy');
+      const wasDisabled = btn.disabled; btn.disabled = true;
+      const done = () => { delete btn.dataset.busy; btn.classList.remove('busy'); if (!wasDisabled && btn.isConnected) btn.disabled = false; };
+      r.then(done, done);
+    }
+    return r;
+  };
+}
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -49,6 +64,7 @@ function h(tag, attrs = {}, ...children) {
     else if (k === 'style') Object.assign(el.style, v);
     else if (k === 'vars') for (const [n, val] of Object.entries(v)) el.style.setProperty(n, val);
     else if (k === 'dataset') Object.assign(el.dataset, v);
+    else if (k === 'onclick' && tag === 'button') el.addEventListener('click', guardClick(v));
     else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else if (k in el && typeof v !== 'string') el[k] = v;
     else el.setAttribute(k, v === true ? '' : v);
@@ -129,13 +145,12 @@ function humanError(err) {
     [/limited sold out/i, 'Этот статус уже разобрали — посмотрите во вкладке «С рук»'],
     [/no spins left/i, 'Попытки кончились. Бесплатные появятся в полночь по Москве — или докупи крутки'],
     [/fortune is over/i, 'Ивент «Фортуна» уже закончился'],
-    [/not for sale/i, '«Удачу» нельзя купить — только выбить в «Фортуне»'],
     [/bad spins count/i, 'Укажи, сколько круток купить: от 1 до 10 000'],
     [/order already pending/i, 'Ваша заявка на этот статус уже ждёт проверки'],
     [/too many pending orders/i, 'У вас уже 3 заявки на проверке — дождитесь ответа'],
     [/bad proof/i, 'Напишите, как найти ваш донат: ссылку или имя и время (от 5 до 300 символов)'],
     [/item reserved/i, 'На этот экземпляр уже есть заявка — дождитесь решения'],
-    [/not for sale/i, 'Этот экземпляр уже не продаётся'],
+    [/not for sale/i, 'Этот статус сейчас не продаётся — обновите список'],
     [/own item/i, 'Это ваш собственный статус'],
     [/listing changed/i, 'Этот экземпляр уже не продаётся'],
     [/bad price/i, 'Цена — от 100 до 10 000 000 ₽'],
@@ -145,6 +160,29 @@ function humanError(err) {
     [/username taken/i, 'Этот ник занят'],
     [/bad username/i, 'Ник: латиница, цифры и _, от 3 до 24 символов'],
     [/username change too soon: ([\d.]+)/i, 'Ник можно менять раз в 30 дней — следующий раз с $1'],
+    [/order not pending|order not found/i, 'Эту заявку уже обработали — обновите список'],
+    [/item not found/i, 'Этот экземпляр уже не ваш или продан — обновите список'],
+    [/no such limited/i, 'Такого статуса нет'],
+    [/user not found or is a creator/i, 'Нет такого человека (или это создатель)'],
+    [/user not found/i, 'Нет человека с таким ником'],
+    [/not signed in/i, 'Вы вышли из аккаунта — войдите снова'],
+    [/cannot chat with yourself/i, 'Себе можно писать в «Избранное»'],
+    [/not a member/i, 'Вы не состоите в этом чате'],
+    [/not a group/i, 'Это не группа'],
+    [/^blocked$|\bblocked\b/i, 'Переписка недоступна: кто-то из вас заблокировал другого'],
+    [/empty title/i, 'Название не может быть пустым'],
+    [/too many pins/i, 'Закрепить можно не больше 10 чатов'],
+    [/creators can only assign testers|role can only be changed by a creator/i, 'Это может только создатель'],
+    [/creator is already above moderators/i, 'Создатель и так выше модераторов'],
+    [/bad moderator level/i, 'Неверный уровень модератора'],
+    [/bad donate url/i, 'Ссылка на донаты должна начинаться с https://'],
+    [/only own badges/i, 'Этот значок можно поставить только себе'],
+    [/bad badge/i, 'Такого значка нет'],
+    [/missing email or phone/i, 'Впишите email'],
+    [/too many call reports/i, 'Слишком много отчётов о звонках, подождите немного'],
+    [/node already registered/i, 'Этот узел уже подключён'],
+    [/only the text can be edited/i, 'Изменить можно только текст'],
+    [/username cannot be changed/i, 'Ник меняется только через «Сменить» в профиле'],
   ];
   for (const [re, text] of rules) if (re.test(m)) return m.replace(new RegExp('^.*?' + re.source + '.*$', re.flags.replace('g', '') + 's'), text);
   if (/(user_keys|key_backups|conversation_keys|messages_e2ee|last_ct|my_chats|conversation)/i.test(m)
@@ -207,6 +245,9 @@ try {
   if (saved.theme && !saved.mode) saved.mode = saved.theme;   // старый формат
   Object.assign(prefs, saved);
 } catch {}
+/** localStorage без исключений: в приватном режиме Safari и при переполнении он бросает ошибку */
+function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 const savePrefs = () => { try { localStorage.setItem('prefs', JSON.stringify(prefs)); } catch {} };
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 const resolvedMode = () => (prefs.mode === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : prefs.mode);
@@ -1078,6 +1119,8 @@ $('authForm').onsubmit = async (e) => {
   e.preventDefault();
   const email = $('email').value.trim();
   const password = $('password').value;
+  if (!email) return say('authMsg', 'Впишите email');
+  if (!password) return say('authMsg', 'Впишите пароль');
   $('authBtn').disabled = true;
   try {
     if (authMode === 'login') {
@@ -3299,7 +3342,7 @@ async function cleanupOldMedia() {
   cleaning = true;
   const me = state.me.id, cursorKey = 'cleanup-cursor-' + me;
   const cutoff = new Date(Date.now() - MEDIA_TTL_DAYS * 864e5).toISOString();
-  let cursor = localStorage.getItem(cursorKey) || '1970-01-01T00:00:00Z';
+  let cursor = lsGet(cursorKey) || '1970-01-01T00:00:00Z';
   let cleaned = 0;
   try {
     for (let page = 0; page < 5; page++) {                  // не больше 500 сообщений за раз
@@ -3322,16 +3365,16 @@ async function cleanupOldMedia() {
         await updatePayload(m, { ...p, [kind]: gone }).catch(() => {});
         cleaned++;
       }
-      localStorage.setItem(cursorKey, cursor);
+      lsSet(cursorKey, cursor);
       if (data.length < 100) break;
     }
   } catch {}
   cleaning = false;
-  localStorage.setItem('cleanup-at-' + me, String(Date.now()));
+  lsSet('cleanup-at-' + me, String(Date.now()));
   return cleaned;
 }
 function scheduleCleanup() {
-  const last = +localStorage.getItem('cleanup-at-' + state.me.id) || 0;
+  const last = +lsGet('cleanup-at-' + state.me.id) || 0;
   if (Date.now() - last > 864e5) setTimeout(cleanupOldMedia, 30000);   // раз в сутки, через 30 с после запуска
 }
 
@@ -5534,6 +5577,7 @@ function premiumBuyDialog(months, price) {
     proof, msg,
     h('small', { class: 'muted', text: 'Возврата нет. Подписка сама выключится, когда срок закончится, — деньги автоматически не списываются.' }),
     h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Я оплатил — отправить заявку', onclick: async (e) => {
+      if (proof.value.trim().length < 5) return say(msg, 'Напишите, как найти ваш донат: ссылку или имя и время (от 5 символов)');
       e.target.disabled = true;
       const { error } = await sb.rpc('premium_order', { p_months: months, p_proof: proof.value.trim() });
       e.target.disabled = false;
@@ -5684,6 +5728,7 @@ function fortuneBuyDialog() {
       h('li', { text: 'Вставьте сюда ссылку или опишите донат. Создатель проверит и начислит крутки.' })),
     proof, msg,
     h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Отправить заявку', onclick: async (e) => {
+      if (proof.value.trim().length < 5) return say(msg, 'Напишите, как найти ваш донат: ссылку или имя и время (от 5 символов)');
       e.target.disabled = true;
       const { error } = await sb.rpc('fortune_order', { p_spins: upd(), p_proof: proof.value.trim() });
       e.target.disabled = false;
@@ -5923,6 +5968,7 @@ function buyDialog({ kind, price, item = null, serial = null, seller = null }, d
     proof, msg,
     h('small', { class: 'muted', text: 'Возврата нет. Статус — украшение, а не вложение денег.' }),
     h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Я оплатил — отправить заявку', onclick: async (e) => {
+      if (proof.value.trim().length < 5) return say(msg, 'Напишите, как найти ваш донат: ссылку или имя и время (от 5 символов)');
       e.target.disabled = true;
       const { error } = await sb.rpc('limited_order', { p_kind: kind, p_item: null, p_proof: proof.value.trim() });
       e.target.disabled = false;
@@ -5940,7 +5986,9 @@ function sellDialog(r, done) {
     h('small', { class: 'muted', text: 'Статус появится во вкладке «С рук». Покупатель пришлёт заявку, об оплате договоритесь с ним сами. Получили деньги — нажмите «Передать» в «Мои». Комиссии нет.' }),
     price, msg,
     h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Выставить на продажу', onclick: async () => {
-      const { error } = await sb.rpc('limited_sell', { p_item: r.item_id, p_price: Math.floor(+price.value || 0) });
+      const p = Math.floor(+price.value || 0);
+      if (p < 100 || p > 10000000) return say(msg, 'Цена — от 100 до 10 000 000 ₽');
+      const { error } = await sb.rpc('limited_sell', { p_item: r.item_id, p_price: p });
       if (error) return say(msg, humanError(error));
       toast('Выставлено на продажу'); done();
     } }),
@@ -6274,7 +6322,7 @@ async function signOut() {
   await setupPush(false).catch(() => {});
   await nativeUnregister();
   await E2E.store.del('me:' + state.me.id).catch(() => {});   // на этом устройстве при следующем входе понадобится код
-  await sb.auth.signOut();
+  await sb.auth.signOut({ scope: 'local' });                  // только это устройство: по умолчанию supabase выкидывает со ВСЕХ
 }
 
 function deleteAccountDialog(username) {

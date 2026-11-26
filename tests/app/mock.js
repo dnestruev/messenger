@@ -90,7 +90,7 @@ export function createClient() {
         if (r.error) return { error: r.error };
         setSession(r.data); emit('SIGNED_IN'); return { data: { session, user: r.data }, error: null };
       },
-      async signOut() { setSession(null); emit('SIGNED_OUT'); return { error: null }; },
+      async signOut(o) { window.__signOutScope = o?.scope || 'global'; setSession(null); emit('SIGNED_OUT'); return { error: null }; },
       async updateUser({ password }) { await api('password', { password }); return { data: {}, error: null }; },
       async resetPasswordForEmail() { window.__resetAsked = true; return { data: {}, error: null }; },
     },
