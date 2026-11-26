@@ -1,15 +1,15 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126222757';
-import * as CONFIG from '../config.js?v=20261126222757';
-import * as E2E from './crypto.js?v=20261126222757';
-import { createNet } from './net.js?v=20261126222757';
-import { qrSvg } from './qr.js?v=20261126222757';
-import { findEmbed } from './embeds.js?v=20261126222757';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126222757';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126222757';
-import { fileText } from './filetext.js?v=20261126222757';
-import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126222757';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126222757';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126230215';
+import * as CONFIG from '../config.js?v=20261126230215';
+import * as E2E from './crypto.js?v=20261126230215';
+import { createNet } from './net.js?v=20261126230215';
+import { qrSvg } from './qr.js?v=20261126230215';
+import { findEmbed } from './embeds.js?v=20261126230215';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126230215';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126230215';
+import { fileText } from './filetext.js?v=20261126230215';
+import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126230215';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126230215';
 
 /* =====================================================================
    Утилиты
@@ -5114,8 +5114,8 @@ function openSettings(sub = null) {
   openModal({ title: 'Настройки' },
     h('button', { class: 'set-me', type: 'button', onclick: () => goTab('profile') },
       userAvatar(me, 'md'),
-      h('span', { class: 'row-text' }, h('b', {}, nameLine(nameOf(me), roleBadge(me, true, 2))), h('small', { text: '@' + p.username })),
-      h('span', { class: 'set-me-edit' }, icon('edit'), 'Профиль')),
+      h('span', { class: 'row-text' }, h('b', {}, nickLine(me, nameOf(me), roleBadge(me, true, 2))), h('small', { text: '@' + p.username })),
+      h('span', { class: 'set-me-edit', title: 'Профиль' }, icon('edit'), h('span', { class: 'set-me-edit-t', text: 'Профиль' }))),
     setGroup('Плюшки',
       setRow('premium', 'Премиум', isPremium() ? 'Включён — спасибо за поддержку' : 'Темы, цветной ник, файлы до 25 МБ', () => settingsSub('premium'), null, 'gold'),
       setRow('star', 'Партнёрство и Плюс', kind === 'partner' ? 'Вы партнёр сети ' + ({ gold: '· золото', silver: '· серебро' }[tierOf(me)] || '') : kind === 'plus' ? 'У вас Плюс' : 'Бесплатно: держите узел — получайте Плюс', () => settingsSub('perks'), null, 'violet'),

@@ -2028,3 +2028,16 @@ body.page-on .chat { display: none; }
 .set-row .row-text small, .hub-item .row-text small { white-space: normal; overflow-wrap: anywhere; }
 .page pre, .page .fp, .page code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .page-back[hidden] { display: none; }
+/* шапка настроек: длинное имя и значки не наезжают на «Профиль» */
+.set-me .row-text { overflow: hidden; }
+.set-me .row-text b { display: block; min-width: 0; }
+.set-me .name-line { flex-wrap: wrap; row-gap: 4px; }
+.set-me .name-line .t { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-me-edit { flex-shrink: 0; }
+@media (max-width: 480px) {
+  .set-me { gap: 12px; padding: 12px; }
+  .set-me .avatar { --size: 52px; }
+  .set-me-edit { width: 40px; height: 40px; padding: 0; justify-content: center; }
+  .set-me-edit .i { width: 18px; height: 18px; }
+  .set-me-edit-t { display: none; }
+}
