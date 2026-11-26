@@ -36,6 +36,7 @@ with sync_playwright() as pw:
     api('fortune', {'force': ['l_clover']})
     spin(a.page)
     check('выпал Клевер №1', a.page.locator('.fortune-win .role.l-clover').count() == 1 and '№1' in a.page.inner_text('.fortune-win'))
+    check('Бурмалда в списке призов: 3%, 2 500 ₽', a.page.locator('.fortune-prize', has=a.page.locator('.role.l-burmalda')).count() == 1 and '3%' in a.page.locator('.fortune-prize', has=a.page.locator('.role.l-burmalda')).inner_text() and '2 500 ₽' in a.page.locator('.fortune-prize', has=a.page.locator('.role.l-burmalda')).inner_text())
     check('бесплатных стало 2', '2 бесплатных' in a.page.inner_text('.fortune-info'))
     check('лента остановилась на выигрыше под указателем', a.page.evaluate("""(() => { const w = document.querySelector('.reel-tile.won'), m = document.querySelector('.reel-marker');
         const a = w.getBoundingClientRect(), b = m.getBoundingClientRect(); const c = b.left + b.width / 2; return a.left < c && a.right > c; })()"""))

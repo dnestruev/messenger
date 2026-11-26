@@ -35,12 +35,12 @@ const premExtend = (uid, days) => {
 /** магазин лимиток: создаётся заново после сброса базы */
 const FRT = () => (db.fortune?.prizes ? db.fortune : db.fortune = {
   starts: new Date(Date.now() - 864e5).toISOString(), ends: new Date(Date.now() + 27 * 864e5).toISOString(), off: false,
-  prizes: [['l_clover', 2500], ['l_horseshoe', 1200], ['l_dice', 600], ['l_jackpot', 190], ['l_luck', 10]],
+  prizes: [['l_clover', 2500], ['l_horseshoe', 1200], ['l_dice', 600], ['l_burmalda', 300], ['l_jackpot', 190], ['l_luck', 10]],
   bal: {}, spins: [], orders: [], force: [],
   active() { return !this.off && Date.now() < Date.parse(this.ends); },
   freeLeft(uid) { const day = new Date().toDateString(); return Math.max(0, 3 - this.spins.filter((x) => x.user_id === uid && !x.paid && new Date(x.created_at).toDateString() === day).length); },
 });
-const LTD = () => (db.limited?.kinds ? db.limited : db.limited = { kinds: [['l_spark', 700, 100], ['l_owl', 900, 90], ['l_coffee', 1200, 80], ['l_pond', 1500, 70], ['l_bug', 1800, 60], ['l_vibe', 2200, 50], ['l_neon', 2700, 45], ['l_comet', 3200, 40], ['l_storm', 3800, 35], ['l_ice', 4500, 30], ['l_flame', 5200, 25], ['l_ghost', 6000, 20], ['l_diamond', 7000, 15], ['l_eclipse', 8000, 12], ['l_legend', 9500, 10], ['l_astro', 11000, 8], ['l_phoenix', 13000, 6], ['l_emperor', 15000, 5], ['l_hole', 17500, 3], ['l_absolute', 20000, 1], ['l_cinema', 10000, 10], ['l_clover', 500, 300], ['l_horseshoe', 1500, 150], ['l_dice', 4000, 60], ['l_jackpot', 15000, 20], ['l_luck', 500000, 3]].map(([kind, price, total]) => ({ kind, price, total })), items: [], orders: [] });
+const LTD = () => (db.limited?.kinds ? db.limited : db.limited = { kinds: [['l_spark', 700, 100], ['l_owl', 900, 90], ['l_coffee', 1200, 80], ['l_pond', 1500, 70], ['l_bug', 1800, 60], ['l_vibe', 2200, 50], ['l_neon', 2700, 45], ['l_comet', 3200, 40], ['l_storm', 3800, 35], ['l_ice', 4500, 30], ['l_flame', 5200, 25], ['l_ghost', 6000, 20], ['l_diamond', 7000, 15], ['l_eclipse', 8000, 12], ['l_legend', 9500, 10], ['l_astro', 11000, 8], ['l_phoenix', 13000, 6], ['l_emperor', 15000, 5], ['l_hole', 17500, 3], ['l_absolute', 20000, 1], ['l_cinema', 10000, 10], ['l_clover', 500, 300], ['l_horseshoe', 1500, 150], ['l_dice', 4000, 60], ['l_burmalda', 2500, 100], ['l_jackpot', 15000, 20], ['l_luck', 500000, 3]].map(([kind, price, total]) => ({ kind, price, total })), items: [], orders: [] });
 
 /* ---------- события ---------- */
 function push(cid, ev) {
@@ -476,7 +476,7 @@ const RPC = {
       const k = L.kinds.find((x) => x.kind === p_kind);
       if (!k) return fail('no such limited');
       if (k.kind === 'l_luck') return fail('not for sale');
-      if (k.kind.match(/^l_(clover|horseshoe|dice|jackpot)$/) && !FRT().active()) return fail('fortune is over');
+      if (k.kind.match(/^l_(clover|horseshoe|dice|burmalda|jackpot)$/) && !FRT().active()) return fail('fortune is over');
       if (L.orders.some((x) => x.buyer === uid && x.kind === k.kind && x.status === 'pending' && !x.resale)) return fail('order already pending');
       if (L.items.filter((i) => i.kind === k.kind).length + L.orders.filter((x) => x.kind === k.kind && x.status === 'pending' && !x.resale).length >= k.total) return fail('limited sold out');
       Object.assign(o, { kind: k.kind, price: isPrem(uid) ? Math.round(k.price * 0.9) : k.price });

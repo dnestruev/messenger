@@ -11,7 +11,7 @@ select '0 повторное применение без ошибок' as t;
 set role authenticated;
 select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
 select '1 состояние: идёт, 3 бесплатных, 0 платных' as t, active, free_left, paid_left, spin_price, pack_price, pack_size from public.fortune_state();
-select '2 призы и шансы (сумма 45%)' as t, string_agg(kind || ':' || chance_bp || ':' || buyable, ' ' order by chance_bp desc), sum(chance_bp) from public.fortune_prizes_list();
+select '2 призы и шансы (сумма 48% с Бурмалдой)' as t, string_agg(kind || ':' || chance_bp || ':' || buyable, ' ' order by chance_bp desc), sum(chance_bp) from public.fortune_prizes_list();
 select '3 три бесплатные крутки проходят' as t, count(*) from (select public.fortune_spin() from generate_series(1,3)) x;
 select '4 четвёртая — ошибка (нет попыток)' as t; select public.fortune_spin();
 select '5 осталось 0/0' as t, free_left, paid_left from public.fortune_state();

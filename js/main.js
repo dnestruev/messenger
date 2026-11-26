@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126132440';
-import * as CONFIG from '../config.js?v=20261126132440';
-import * as E2E from './crypto.js?v=20261126132440';
-import { createNet } from './net.js?v=20261126132440';
-import { qrSvg } from './qr.js?v=20261126132440';
-import { findEmbed } from './embeds.js?v=20261126132440';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126132440';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126132440';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126132440';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126133726';
+import * as CONFIG from '../config.js?v=20261126133726';
+import * as E2E from './crypto.js?v=20261126133726';
+import { createNet } from './net.js?v=20261126133726';
+import { qrSvg } from './qr.js?v=20261126133726';
+import { findEmbed } from './embeds.js?v=20261126133726';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126133726';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126133726';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126133726';
 
 /* =====================================================================
    Утилиты
@@ -439,6 +439,7 @@ const LIMITED = [
   ['l_clover', 'Клевер', 'clover', 'Четыре листа удачи. Выпал в «Фортуне».', true],
   ['l_horseshoe', 'Подкова', 'horseshoe', 'Висит над дверью и тянет удачу. Из «Фортуны».', true],
   ['l_dice', 'Кости', 'dice', 'Бросил — и выпало как надо. Из «Фортуны».', true],
+  ['l_burmalda', 'Бурмалда', 'slot', 'Три семёрки в ряд — и понеслась. Неоновый приз «Фортуны».', true],
   ['l_jackpot', 'Джекпот', 'coins', 'Сорвал банк. Редкий приз «Фортуны».', true],
   ['l_luck', 'Удача', 'sparkle', 'Сверхредкий статус «Фортуны»: всего 3 на весь мессенджер, шанс 0,1%. Купить нельзя — только выбить.', true],
 ].map(([kind, name, ic, text, fortune]) => ({ kind, name, icon: ic, text, fortune: !!fortune }));
@@ -5579,7 +5580,7 @@ function fortuneCard() {
   if (!fortuneActive()) return null;
   return h('div', { class: 'shop-card fortune-card', role: 'button', tabindex: '0', onclick: () => openFortune() },
     h('div', { class: 'fortune-card-top' }, badgeEl('l_luck'), h('b', { text: '🎰 Фортуна' })),
-    h('small', { text: `Ивент: ${fortuneLeftText()}. Крути рулетку — Клевер, Подкова, Кости, Джекпот и сверхредкая «Удача» (3 шт.). ${fortune.state.free_left} бесплатных круток сегодня.` }),
+    h('small', { text: `Ивент: ${fortuneLeftText()}. Крути рулетку — Клевер, Подкова, Кости, Бурмалда, Джекпот и сверхредкая «Удача» (3 шт.). ${fortune.state.free_left} бесплатных круток сегодня.` }),
     h('div', { class: 'shop-actions' }, h('button', { class: 'btn btn-primary', type: 'button', text: 'Крутить' })));
 }
 function fortuneTile(kind) {
@@ -5588,8 +5589,8 @@ function fortuneTile(kind) {
 }
 /** Случайная (для красоты) лента: вес как у настоящих шансов, но «Удача» и «Джекпот» мелькают почаще — для азарта */
 function fortuneFiller() {
-  const pool = [[null, 30], ['l_clover', 25], ['l_horseshoe', 16], ['l_dice', 12], ['l_jackpot', 9], ['l_luck', 5]];
-  let r = Math.random() * 97;
+  const pool = [[null, 28], ['l_clover', 24], ['l_horseshoe', 15], ['l_dice', 11], ['l_burmalda', 10], ['l_jackpot', 8], ['l_luck', 5]];
+  let r = Math.random() * 101;
   for (const [k, w] of pool) { if ((r -= w) < 0) return k; }
   return null;
 }
