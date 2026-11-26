@@ -8,6 +8,7 @@ const ROOT = process.argv[2];
 const PORT = +process.argv[3] || 8765;
 const JITTER = +(process.env.JITTER ?? 400);   // мс случайной задержки broadcast
 const now = () => new Date().toISOString();
+const GFT = () => (db.giftsx?.kinds ? db.giftsx : db.giftsx = { kinds: [{ kind: 'whisky', name: 'Виски «Дельта»', price: 300, total: 777, active: true }], list: [] });
 const uuid = () => crypto.randomUUID();
 
 const slow = { ms: 0, fail: false };
@@ -386,6 +387,45 @@ const RPC = {
   // ---- Приложение iPhone (update-24) ----
   app_register: (uid) => { const sec = 'sec-' + uid.slice(0, 8) + '-' + Math.random().toString(36).slice(2); (db.app_devices ||= []).push({ user_id: uid, secret: sec }); return sec; },
   app_unregister: (uid, { p_secret }) => { db.app_devices = (db.app_devices || []).filter((d) => d.secret !== p_secret); return null; },
+  // ---- Подарки (update-29) ----
+  gifts_catalog: () => GFT().kinds.map((k) => ({ ...k, sold: GFT().list.filter((g) => g.kind === k.kind && ['sent', 'pending'].includes(g.status)).length })),
+  gift_send: (uid, { p_kind, p_to, p_message, p_anon, p_proof }) => {
+    const G = GFT(), k = G.kinds.find((x) => x.kind === p_kind && x.active), creator = prof(uid)?.role === 'creator', proof = String(p_proof || '').trim();
+    if (!k) return fail('no such gift');
+    const r = db.profiles.find((x) => x.username === String(p_to || '').trim().replace(/^@/, '').toLowerCase());
+    if (!r) return fail('user not found');
+    const msg = String(p_message || '').trim() || null;
+    if (msg && msg.length > 200) return fail('gift message too long');
+    if (!creator && (proof.length < 5 || proof.length > 300)) return fail('bad proof');
+    if (!creator && G.list.filter((g) => g.sender === uid && g.status === 'pending').length >= 3) return fail('too many pending orders');
+    if (k.total && G.list.filter((g) => g.kind === k.kind && ['sent', 'pending'].includes(g.status)).length >= k.total) return fail('gift sold out');
+    const g = { id: G.list.length + 1, kind: k.kind, serial: null, sender: uid, recipient: r.id, message: msg, anonymous: !!p_anon, hidden: false, status: 'pending', price: creator ? 0 : k.price, proof, created_at: now(), decided_at: null };
+    if (creator) { g.status = 'sent'; g.serial = Math.max(0, ...G.list.filter((x) => x.kind === k.kind).map((x) => x.serial || 0)) + 1; g.decided_at = now(); }
+    else logEvent('gift_order', '@' + prof(uid)?.username + ' хочет подарить «' + k.name + '» @' + r.username, 'orders');
+    G.list.push(g); return g.id;
+  },
+  gifts_of: (uid, { p_user }) => GFT().list.filter((g) => g.recipient === p_user && g.status === 'sent' && (!g.hidden || g.recipient === uid))
+    .map((g) => ({ id: g.id, kind: g.kind, serial: g.serial, sender: !g.anonymous || [g.recipient, g.sender].includes(uid) || prof(uid)?.role === 'creator' ? g.sender : null,
+      message: [g.recipient, g.sender].includes(uid) ? g.message : null, anonymous: g.anonymous, hidden: g.hidden, created_at: g.decided_at || g.created_at })).reverse(),
+  gift_hide: (uid, { p_id, p_hidden }) => { const g = GFT().list.find((x) => x.id === p_id && x.recipient === uid && x.status === 'sent'); if (!g) return fail('gift not found'); g.hidden = !!p_hidden; return null; },
+  gifts_my_orders: (uid) => GFT().list.filter((g) => g.sender === uid && g.price > 0).map((g) => ({ id: g.id, kind: g.kind, recipient: prof(g.recipient)?.username, price: g.price, status: g.status, note: g.note || null, created_at: g.created_at })).reverse(),
+  gift_cancel: (uid, { p_id }) => { const g = GFT().list.find((x) => x.id === p_id && x.sender === uid && x.status === 'pending'); if (!g) return fail('order not pending'); g.status = 'cancelled'; return null; },
+  gifts_orders_admin: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators') : GFT().list.filter((g) => g.status === 'pending')
+    .map((g) => ({ id: g.id, kind: g.kind, sender: prof(g.sender)?.username, recipient: prof(g.recipient)?.username, price: g.price, proof: g.proof, message: g.message, anonymous: g.anonymous, created_at: g.created_at })),
+  gift_decide: (uid, { p_id, p_ok, p_note }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    const G = GFT(), g = G.list.find((x) => x.id === p_id && x.status === 'pending');
+    if (!g) return fail('order not pending');
+    if (p_ok) { g.status = 'sent'; g.serial = Math.max(0, ...G.list.filter((x) => x.kind === g.kind).map((x) => x.serial || 0)) + 1; g.decided_at = now(); }
+    else { g.status = 'rejected'; g.note = p_note || null; }
+    return null;
+  },
+  gift_set: (uid, { p_kind, p_price, p_total, p_active }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    const k = GFT().kinds.find((x) => x.kind === p_kind); if (!k) return fail('no such gift');
+    if (!(p_price >= 1)) return fail('bad price');
+    Object.assign(k, { price: p_price, total: p_total ?? null, active: p_active ?? k.active }); return null;
+  },
   // ---- Премиум (update-21) ----
   premium_list: () => PRM().users.filter((p) => new Date(p.until) > new Date()).map((p) => ({ user_id: p.user_id, nick_color: p.nick_color })),
   premium_me: (uid) => { const p = PRM().users.find((x) => x.user_id === uid); return [{ until: p?.until || null, nick_color: p?.nick_color || null, price_month: 2000, price_year: 24000 }]; },

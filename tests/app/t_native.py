@@ -48,7 +48,7 @@ with sync_playwright() as pw:
     check('нажали на уведомление — открылся чат', 'секретный' in a.page.inner_text('#messages'))
     a.page.evaluate('window.nativeOpenChat("<script>")')
 
-    a.page.evaluate("document.querySelector('#settingsBtn').click()"); time.sleep(0.5)
+    a.page.evaluate("document.querySelector('#settingsBtn').click()"); time.sleep(0.8)
     a.page.on('dialog', lambda d: d.accept())
     out = a.page.locator('.modal button', has_text='Выйти')
     if out.count(): out.first.click(); time.sleep(1.5)

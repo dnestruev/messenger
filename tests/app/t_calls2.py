@@ -45,7 +45,7 @@ with sync_playwright() as pw:
     time.sleep(1)
 
     # 3. Боб вышел и сразу зашёл снова — входящие звонки должны приходить
-    b.page.click('#settingsBtn')
+    settings_page(b.page)
     b.page.locator('.modal button', has_text='Выйти').last.click()
     b.page.wait_for_selector('#authBtn', timeout=10000)
     b.page.click('#tabLogin')

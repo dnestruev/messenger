@@ -25,8 +25,7 @@ with sync_playwright() as pw:
     a.open_dm('bobby'); a.send('привет')
     relog(a)
     p = a.page
-    p.click('#settingsBtn')
-    p.locator('.section', has_text='Админка').locator('button', has_text='Открыть').click()
+    tab(p, 'admin'); p.locator('.hub-item b', has_text='Статистика').click()
     p.wait_for_selector('.stat-tile')
     check('статистика: людей 3', '3' in p.locator('.stat-tile', has_text='Людей').inner_text())
     a.shot('admin_stats')
@@ -54,10 +53,10 @@ with sync_playwright() as pw:
     p.keyboard.press('Escape')
     # смена ника у carol
     cp = c.page
-    cp.click('#settingsBtn'); cp.locator('.section', has_text='Профиль').locator('button', has_text='Сменить').click()
+    profile_page(cp); cp.locator('.section', has_text='Имя и ник').locator('button', has_text='Сменить').click()
     cp.locator('.modal input').fill('carol_new'); cp.locator('.modal .btn-primary', has_text='Сохранить').click(); time.sleep(1)
     check('ник сменился', '@carol_new' in cp.inner_text('#meNick'))
-    cp.locator('.section', has_text='Профиль').locator('button', has_text='Сменить').click()
+    cp.locator('.section', has_text='Имя и ник').locator('button', has_text='Сменить').click()
     cp.locator('.modal input').fill('carol_two'); cp.locator('.modal .btn-primary', has_text='Сохранить').click(); time.sleep(1)
     check('второй раз сразу нельзя (раз в 30 дней)', 'раз в 30 дней' in cp.inner_text('.modal .note'))
     cp.keyboard.press('Escape')

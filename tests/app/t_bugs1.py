@@ -29,8 +29,7 @@ with sync_playwright() as pw:
     check('короткое подтверждение доната — подсказка без запроса', 'от 5 символов' in a.page.inner_text('.modal'))
     a.page.fill('.modal textarea', 'донат 900 от alice'); a.page.locator('.modal button', has_text='Отправить заявку').click(); time.sleep(1.2)
     boss.page.reload(); boss.page.wait_for_selector('.chat-item'); time.sleep(0.8)
-    close_all(boss.page); boss.page.click('#settingsBtn'); time.sleep(0.6)
-    boss.page.locator('.section', has_text='Лимитированные статусы').locator('button', has_text='Открыть').click(); boss.page.wait_for_selector('.shop')
+    close_all(boss.page); tab(boss.page, 'shop'); boss.page.wait_for_selector('.shop')
     boss.page.locator('.segmented button', has_text='Заявки').click(); boss.page.wait_for_selector('.order-card')
     calls = []
     def slow(r):
@@ -43,7 +42,7 @@ with sync_playwright() as pw:
     a.page.keyboard.press('Escape'); time.sleep(0.3); a.page.keyboard.press('Escape'); time.sleep(0.3)
     # выход — только на этом устройстве
     a.page.keyboard.press('Escape'); time.sleep(0.3)
-    a.page.click('#settingsBtn'); time.sleep(0.6)
+    settings_page(a.page)
     a.page.locator('.modal button', has_text='Выйти').first.click(); a.page.wait_for_timeout(1500)
     check('выход: scope=local (остальные устройства остаются в аккаунте)', a.page.evaluate('window.__signOutScope') == 'local')
     errs = [e for e in a.errors + g.errors + boss.errors if 'pageerror' in e]

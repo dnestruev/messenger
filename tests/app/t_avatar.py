@@ -22,7 +22,7 @@ with sync_playwright() as pw:
             route.fulfill(status=200, content_type='image/png', body=PNG)
     a.page.route('**/storage/v1/object/public/**', handle)
     a.page.reload(); a.page.wait_for_selector('.chat-item'); time.sleep(0.5)
-    a.page.click('#settingsBtn'); a.page.wait_for_selector('.modal .profile-head')
+    profile_page(a.page)
     time.sleep(0.5)
     def photo_ok():
         return a.page.evaluate("[...document.querySelectorAll('.modal .profile-head .avatar-img')].some(i => i.complete && i.naturalWidth > 0)")

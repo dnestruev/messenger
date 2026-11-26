@@ -64,3 +64,28 @@ class User:
 
     def shot(self, name):
         self.page.screenshot(path=f'/home/claude/test/shots/{name}.png')
+
+# ---- навигация после редизайна: вкладки, страница настроек, отдельный профиль ----
+def close_overlays(p):
+    for _ in range(4):
+        if not p.locator('#modalRoot .overlay').count(): break
+        p.keyboard.press('Escape'); time.sleep(0.2)
+
+def to_chats(p):
+    close_overlays(p)
+    if p.locator('body.page-on').count():
+        p.locator('.tab[data-tab=chats]').click(); time.sleep(0.3)
+    if p.locator('#backBtn').is_visible(): p.click('#backBtn'); time.sleep(0.3)
+
+def settings_page(p, row=None):
+    to_chats(p); p.click('#settingsBtn'); p.wait_for_selector('.set-me')
+    if row:
+        p.locator('.set-row', has=p.locator('b', has_text=row)).first.click(); time.sleep(0.7)
+
+def profile_page(p):
+    to_chats(p); p.click('#meBtn'); p.wait_for_selector('.profile-hero'); time.sleep(0.3)
+
+def tab(p, name):
+    close_overlays(p)
+    if p.locator('#backBtn').is_visible() and not p.locator('#tabbar').is_visible(): p.click('#backBtn'); time.sleep(0.3)
+    p.locator(f'.tab[data-tab={name}]').click(); time.sleep(0.9)

@@ -9,14 +9,12 @@ def close_all(p):
     for _ in range(4):
         if p.locator('.modal').count() == 0: break
         p.keyboard.press('Escape'); time.sleep(0.25)
-def shop(p, tab):
-    close_all(p); p.click('#settingsBtn'); time.sleep(0.6)
-    p.locator('.section', has_text='Лимитированные статусы').locator('button', has_text='Открыть').click(); p.wait_for_selector('.shop')
-    if tab != 'Витрина': p.locator('.segmented button', has_text=tab).click()
+def shop(p, tb):
+    close_all(p); tab(p, 'shop'); p.wait_for_selector('.shop')
+    if tb != 'Витрина': p.locator('.segmented button', has_text=tb).click()
     time.sleep(0.8)
 def fortune(p):
-    close_all(p); p.click('#settingsBtn'); time.sleep(0.6)
-    p.locator('.section', has_text='Лимитированные статусы').locator('button', has_text='Крутить').click(); p.wait_for_selector('.fortune .reel-tile'); time.sleep(0.4)
+    close_all(p); tab(p, 'fortune'); p.wait_for_selector('.fortune .reel-tile'); time.sleep(0.4)
 def spin(p):
     p.locator('.fortune-spin').click()
     p.wait_for_function("!document.querySelector('.fortune-spin').disabled || document.querySelector('.fortune-result').textContent.length > 0", timeout=15000)
@@ -81,8 +79,7 @@ with sync_playwright() as pw:
     api('fortune', {'off': True})
     close_all(a.page); a.page.reload(); a.page.wait_for_selector('.chat-item'); time.sleep(1)
     check('ивент кончился — плашки нет', a.page.locator('.fortune-pill').count() == 0)
-    a.page.click('#settingsBtn'); time.sleep(0.6)
-    check('ивент кончился — в настройках «Фортуны» нет', a.page.locator('.section', has_text='Лимитированные статусы').locator('button', has_text='Крутить').count() == 0)
+    check('ивент кончился — вкладки «Фортуна» нет', a.page.locator('.tab[data-tab=fortune]').count() == 0)
     errs = [e for e in a.errors + boss.errors if 'pageerror' in e]
     check('нет ошибок JS', not errs); print(errs[:3]) if errs else None
     br.close()

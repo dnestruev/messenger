@@ -8,12 +8,10 @@ ok = []
 def check(name, cond):
     ok.append((name, bool(cond)))
     print(('OK  ' if cond else 'FAIL') + ' ' + name, flush=True)
-def shop(p, tab=None):
-    if not p.locator('.shop').count():
-        if not p.locator('.modal').count(): p.click('#settingsBtn')
-        p.locator('.section', has_text='Лимитированные статусы').locator('button', has_text='Открыть').click()
+def shop(p, tb=None):
+    if not p.locator('.shop').count(): tab(p, 'shop')
     p.wait_for_selector('.shop')
-    if tab: p.locator('.segmented button', has_text=tab).click()
+    if tb: p.locator('.segmented button', has_text=tb).click()
     time.sleep(0.7)
 def card(p, name): return p.locator('.shop-card', has=p.locator('.role > span', has_text=re.compile('^' + name + '$')))
 
@@ -30,12 +28,12 @@ with sync_playwright() as pw:
     a.open_dm('bobby'); a.send('привет'); time.sleep(1)
 
     shop(b.page)
-    check('витрина: 21 статус', b.page.locator('.shop-card:not(.premium-card):not(.fortune-card)').count() == 21)
+    check('витрина: 21 статус', b.page.locator('.shop-card:not(.premium-card):not(.fortune-card):not(.gifts-card)').count() == 21)
     card(b.page, 'Абсолют синема').locator('.role').click(); time.sleep(0.25)
     check('«Абсолют синема»: по нажатию разлетаются картинки', b.page.locator('.cinema-burst img.cinema-bit').count() == 12 and b.page.locator('.cinema-big').count() == 1 and b.page.evaluate("document.querySelector('.cinema-big').complete && document.querySelector('.cinema-big').naturalWidth > 0"))
     time.sleep(0.5); b.shot('cinema_burst'); time.sleep(2.2)
     check('картинки убрались', b.page.locator('.cinema-burst').count() == 0)
-    check('самый дорогой первым, 20 000 ₽, тираж 1', all(x in b.page.locator('.shop-card:not(.premium-card):not(.fortune-card)').first.inner_text() for x in ('Абсолют', '20 000 ₽', 'осталось 1 из 1')))
+    check('самый дорогой первым, 20 000 ₽, тираж 1', all(x in b.page.locator('.shop-card:not(.premium-card):not(.fortune-card):not(.gifts-card)').first.inner_text() for x in ('Абсолют', '20 000 ₽', 'осталось 1 из 1')))
     check('обычный человек не видит «Заявки» и «Изменить»', b.page.locator('.segmented button', has_text='Заявки').count() == 0 and b.page.locator('.shop-card button', has_text='Изменить').count() == 0)
     b.shot('shop_phone')
     card(b.page, 'Абсолют').locator('button', has_text='Купить').click()

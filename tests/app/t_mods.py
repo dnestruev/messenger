@@ -14,9 +14,9 @@ def relog(u):
         u.page.fill('.modal input[type=password]', 'секретный код 1'); u.page.click('.modal .btn-primary')
         u.page.wait_for_selector('.modal', state='detached', timeout=20000)
     u.page.wait_for_selector('.chat-item')
-def open_panel(p, name):
-    p.click('#settingsBtn')
-    p.locator('.section', has_text=name).locator('button', has_text='Открыть').click()
+def open_panel(p, name, sect='Люди'):
+    tab(p, 'admin'); p.wait_for_selector('.hub-item')
+    p.locator('.hub-item b', has_text=sect).click()
     p.wait_for_selector('.admin')
 def open_user(p, nick):
     if p.locator('.segmented button', has_text='Люди').count(): p.locator('.segmented button', has_text='Люди').click()
@@ -34,9 +34,7 @@ with sync_playwright() as pw:
     for u in (a, m, s, v): u.page.on('dialog', lambda d: d.accept())
     relog(a)
     # обычный человек админку не видит
-    m.page.click('#settingsBtn'); time.sleep(0.5)
-    check('без прав раздела «Модерация» нет', m.page.locator('.section', has_text='Модерация').count() == 0)
-    m.page.keyboard.press('Escape')
+    check('без прав вкладки «Модерация» нет', m.page.locator('.tab[data-tab=admin]').count() == 0)
     # создатель назначает: mod1 — модератор без срока, senior1 — старший на 30 минут
     p = a.page
     open_panel(p, 'Админка'); open_user(p, 'mod1')
@@ -72,7 +70,7 @@ with sync_playwright() as pw:
     mp.keyboard.press('Escape')
     # старший: статистика + навсегда + бан модератора
     relog(s); sp = s.page
-    open_panel(sp, 'Модерация')
+    open_panel(sp, 'Модерация', 'Статистика')
     sp.wait_for_selector('.stat-tile')
     check('старший видит статистику', sp.locator('.stat-tile').count() >= 5)
     check('у старшего нет журнала', sp.locator('.segmented button', has_text='Журнал').count() == 0)
@@ -101,8 +99,8 @@ with sync_playwright() as pw:
     open_panel(sp, 'Модерация'); time.sleep(1)
     check('срок вышел: сервер не пускает', 'Недостаточно прав' in sp.inner_text('.modal'))
     sp.keyboard.press('Escape')
-    relog(s); sp.click('#settingsBtn'); time.sleep(0.5)
-    check('срок вышел: раздел исчез', sp.locator('.section', has_text='Модерация').count() == 0)
+    relog(s); time.sleep(0.5)
+    check('срок вышел: вкладка исчезла', sp.locator('.tab[data-tab=admin]').count() == 0)
     for u in (a, m, s, v, v2):
         errs = [e for e in u.errors if 'ERR_' not in e]
         check(f'нет ошибок JS ({u.nick})', not errs)

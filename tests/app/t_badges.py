@@ -38,7 +38,7 @@ with sync_playwright() as pw:
     b.shot('badges_all'); bp.keyboard.press('Escape'); time.sleep(0.3)
     # Алиса скрывает два значка
     p = a.page
-    p.click('#settingsBtn'); sec = p.locator('.section', has_text='Значки у ника')
+    profile_page(p); sec = p.locator('.section', has_text='Значки у ника')
     check('в настройках 5 переключателей', sec.locator('.row').count() == 5)
     sec.locator('.row', has=p.locator('.role.donor')).locator('label.switch').click(); time.sleep(0.5)
     sec.locator('.row', has=p.locator('.role.relay')).locator('label.switch').click(); time.sleep(0.8)
@@ -51,7 +51,7 @@ with sync_playwright() as pw:
     relog(b); b.open_chat('alice'); time.sleep(0.5)
     check('скрыла все — у bobby значков нет', bp.locator('#chatTitle .role').count() == 0)
     sec.locator('button', has_text='Показать все').click(); time.sleep(0.8)
-    relog(a); p.click('#settingsBtn'); time.sleep(0.5)
+    relog(a); profile_page(p); time.sleep(0.5)
     check('после перезагрузки выбор сохранён (все 5)', p.locator('.modal .profile-head .name-line .role').count() == 5)
     for u in (a, b):
         errs = [e for e in u.errors if 'ERR_' not in e]
