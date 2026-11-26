@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126200032';
-import * as CONFIG from '../config.js?v=20261126200032';
-import * as E2E from './crypto.js?v=20261126200032';
-import { createNet } from './net.js?v=20261126200032';
-import { qrSvg } from './qr.js?v=20261126200032';
-import { findEmbed } from './embeds.js?v=20261126200032';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126200032';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126200032';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126200032';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126202454';
+import * as CONFIG from '../config.js?v=20261126202454';
+import * as E2E from './crypto.js?v=20261126202454';
+import { createNet } from './net.js?v=20261126202454';
+import { qrSvg } from './qr.js?v=20261126202454';
+import { findEmbed } from './embeds.js?v=20261126202454';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126202454';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126202454';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126202454';
 
 /* =====================================================================
    Утилиты
@@ -296,9 +296,24 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installProm
    ===================================================================== */
 let modalLocked = false;
 let modalOnClose = null;
-function openModal({ title, locked = false, onClose = null }, ...body) {
+/* Вкладки: Чаты · Фортуна · Магазин · Темы · Админка. На вкладке кроме «Чатов» окна рисуются прямо на странице. */
+const page = { tab: 'chats', rootTitle: null, expectRoot: false };
+const pageMode = (overlay, locked) => page.tab !== 'chats' && !overlay && !locked && !$('modalRoot').children.length;
+function openModal({ title, locked = false, onClose = null, overlay: asOverlay = false }, ...body) {
   const prev = modalOnClose; modalOnClose = null; prev?.();
   modalOnClose = onClose;
+  if (pageMode(asOverlay, locked)) {
+    modalLocked = false;
+    if (page.expectRoot) { page.rootTitle = title; page.expectRoot = false; }
+    const root = title === page.rootTitle;
+    const view = $('pageView');
+    const box = h('div', { class: 'modal page-body' + (root ? '' : ' page-sub') }, ...body);
+    view.replaceChildren(h('header', { class: 'page-head' },
+      root ? null : h('button', { class: 'icon-btn page-back', type: 'button', title: 'Назад', onclick: () => showTab(page.tab) }, icon('back')),
+      h('h2', { class: 'page-title', text: title })), box);
+    view.scrollTop = 0;
+    return box;
+  }
   modalLocked = locked;
   const head = h('div', { class: 'modal-head' }, h('h3', { text: title }),
     locked ? null : h('button', { class: 'icon-btn', title: 'Закрыть', onclick: closeModal }, icon('close')));
@@ -307,12 +322,17 @@ function openModal({ title, locked = false, onClose = null }, ...body) {
   $('modalRoot').replaceChildren(overlay);
   return overlay;
 }
-function closeModal() { modalLocked = false; $('modalRoot').replaceChildren(); const f = modalOnClose; modalOnClose = null; f?.(); }
+function closeModal() {
+  const onPage = !$('modalRoot').children.length && page.tab !== 'chats';
+  modalLocked = false; $('modalRoot').replaceChildren(); const f = modalOnClose; modalOnClose = null; f?.();
+  if (onPage) showTab(page.tab);                            // «закрыть» на странице — вернуться к началу вкладки
+}
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   document.querySelector('.lightbox')?.remove();
   closeMenu();
   if ($('modalRoot').children.length) { if (!modalLocked) closeModal(); }
+  else if (page.tab !== 'chats' && document.querySelector('.page-sub')) showTab(page.tab);
   else if (state.compose) setCompose(null);
 });
 const section = (title, ...kids) => h('div', { class: 'section' }, title ? h('div', { class: 'section-title', text: title }) : null, ...kids);
@@ -1356,6 +1376,7 @@ function stopApp() {
   keys.priv = null; keys.fp = null; keys.chat.clear(); keys.pub.clear(); keys.trusted = {}; keys.sign = null; keys.verify.clear();
   if (state.channel) { dropChannel(state.channel); state.channel = null; }
   closeModal();
+  showTab('chats');
   $('app').hidden = true;
   $('auth').hidden = false;
   document.body.classList.remove('in-chat');
@@ -1441,6 +1462,7 @@ function previewOf(c) {
 }
 
 function renderChats() {
+  renderTabbar();
   const all = [...state.chats.values()].sort((a, b) =>
     (b.is_official - a.is_official) || (isSaved(b) - isSaved(a)) || pinRank(a) - pinRank(b) || ts(b.last_message_at) - ts(a.last_message_at));
   const archived = all.filter((c) => c.archived);
@@ -1647,6 +1669,7 @@ function newsRow() {
         un ? h('span', { class: 'unread-dot' }) : null)));
 }
 function openNews() {
+  if (page.tab !== 'chats') showTab('chats');
   if (news.ui) return;
   const feed = h('div', { class: 'news-feed' });
   const canWrite = roleOf(state.me.id) === 'creator';
@@ -2201,6 +2224,7 @@ async function loadReads(chatId) {
 }
 
 async function openChat(id) {
+  if (page.tab !== 'chats') showTab('chats');
   state.seen.delete(id);                                  // при открытии — без анимации каждого пузыря
   state.shown.delete(id);                                 // и снова только последние сообщения
   if (rec && rec.chat !== id) stopVoice(false);
@@ -5144,7 +5168,7 @@ function openSettings() {
       h('p', { text: 'Тестеры получают значок и могут писать в официальные чаты.' }));
   }
 
-  openModal({ title: 'Настройки' },
+  openModal({ title: 'Настройки', overlay: true },
     h('div', { class: 'profile-head' }, avatarSlot, h('div', { class: 'name-line' }, roleBadge(state.me.id)), h('div', { class: 'profile-nick', text: '@' + p.username })),
     badgeVisibilitySection(msg),
     section('Профиль', name, nickRow(msg), swatches, photoControls(msg, drawAvatar), h('button', { class: 'btn btn-primary btn-block', text: 'Сохранить', onclick: async () => {
@@ -5163,7 +5187,8 @@ function openSettings() {
     shopSection(),
     section('Оформление',
       segmented([['classic', 'Обычный'], ['dot', 'Dot'], ['aurora', 'Аврора']], prefs.style, (v) => smoothTheme(() => { prefs.style = v; savePrefs(); applyTheme(); })),
-      segmented([['light', 'Светлая'], ['dark', 'Тёмная'], ['auto', 'Авто']], prefs.mode, (v) => { prefs.mode = v; savePrefs(); applyTheme(); })),
+      segmented([['light', 'Светлая'], ['dark', 'Тёмная'], ['auto', 'Авто']], prefs.mode, (v) => { prefs.mode = v; savePrefs(); applyTheme(); }),
+      h('button', { class: 'btn btn-block', type: 'button', text: 'Все темы с превью', onclick: () => showTab('themes') })),
     section('Уведомления',
       pushBlock(standalone, pushToggle, msg),
       h('div', { class: 'row' }, h('div', { class: 'row-text' }, h('b', { text: 'Звук' }), h('small', { text: 'Когда приложение открыто' })),
@@ -5381,7 +5406,7 @@ function openCallsHelp() {
       msg);
   };
   openModal({ title: 'Помочь со звонками' }, body,
-    h('button', { class: 'btn btn-block', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
+    h('button', { class: 'btn btn-block to-settings', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
   draw();
 }
 
@@ -5931,7 +5956,7 @@ function openShop(tab = 'shop') {
     }
   };
   openModal({ title: 'Магазин' }, segmented(tabsList, tab, (v) => draw(v)), body,
-    h('button', { class: 'btn btn-block', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
+    h('button', { class: 'btn btn-block to-settings', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
   draw(tab);
 }
 function buyDialog({ kind, price, item = null, serial = null, seller = null }, done) {
@@ -6082,8 +6107,8 @@ function openAdmin(tab, preset = '') {
       load();
     }
   };
-  openModal({ title: lvl === 3 ? 'Админка' : 'Модерация' }, lvl < 3 ? mine : null, tabs, body,
-    h('button', { class: 'btn btn-block', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
+  openModal({ title: 'Пользователи' }, lvl < 3 ? mine : null, tabs, body,
+    h('button', { class: 'btn btn-block to-settings', type: 'button', text: '← Назад в настройки', onclick: () => openSettings() }));
   draw(tab);
 }
 function openAdminUser(u) {
@@ -6316,6 +6341,119 @@ function partnerDialog() {
     say(msg, 'Заявка отправлена! Узел заработает, когда создатель его подтвердит.', 'ok');
     url.value = '';
   };
+}
+
+/* =====================================================================
+   Вкладки и страницы
+   ===================================================================== */
+const THEMES = [['classic', 'Обычная', null], ['dot', 'Dot', null], ['aurora', 'Аврора', null], ['paper', 'Бумага', 'plus'], ['neon', 'Неон', 'plus'], ['sunset', 'Закат', 'premium'], ['abyss', 'Бездна', 'premium']];
+function tabsList() {
+  if (!state.me) return [];
+  const lvl = modLevel();
+  return [
+    ['chats', 'Чаты', 'chat'],
+    fortuneActive() ? ['fortune', 'Фортуна', 'slot'] : null,
+    ['shop', 'Магазин', 'gem'],
+    ['themes', 'Темы', 'palette'],
+    lvl ? ['admin', lvl === 3 ? 'Админка' : 'Модерация', 'shield'] : null,
+  ].filter(Boolean);
+}
+function tabCount(id) {
+  if (id === 'chats') return [...state.chats.values()].filter((c) => !c.archived && isUnread(c)).length;
+  if (id === 'fortune') return fortune.state?.free_left || 0;
+  if (id === 'admin') return events.off ? 0 : unseenEvents();
+  return 0;
+}
+function renderTabbar() {
+  const bar = $('tabbar');
+  if (!bar) return;
+  const tabs = tabsList();
+  if (page.tab !== 'chats' && !tabs.some(([id]) => id === page.tab)) { showTab('chats'); return; }
+  bar.style.setProperty('--tabs', tabs.length);
+  bar.style.setProperty('--at', Math.max(0, tabs.findIndex(([id]) => id === page.tab)));
+  const sig = tabs.map(([id]) => id + tabCount(id)).join() + page.tab;
+  if (bar.dataset.sig === sig) return;                     // ничего не поменялось — не трогаем (renderChats зовётся часто)
+  bar.dataset.sig = sig;
+  bar.replaceChildren(h('span', { class: 'tab-glider', 'aria-hidden': 'true' }), ...tabs.map(([id, label, ico]) => {
+    const n = tabCount(id);
+    return h('button', { class: 'tab' + (page.tab === id ? ' on' : ''), type: 'button', dataset: { tab: id }, 'aria-current': page.tab === id ? 'page' : null,
+      onclick: () => { if (page.tab === id && id === 'chats') { $('chatList').scrollTo({ top: 0, behavior: 'smooth' }); return; } showTab(id); } },
+      h('span', { class: 'tab-ico' }, icon(ico), n ? h('span', { class: 'tab-count' + (id === 'fortune' ? ' gold' : ''), text: n > 99 ? '99+' : String(n) }) : null),
+      h('span', { class: 'tab-label', text: label }));
+  }));
+}
+function showTab(id) {
+  const leaving = page.tab;
+  if (!$('modalRoot').children.length && leaving !== 'chats') { const f = modalOnClose; modalOnClose = null; f?.(); }
+  $('modalRoot').replaceChildren(); modalLocked = false;
+  page.tab = id; page.rootTitle = null; page.expectRoot = id !== 'chats';
+  document.body.classList.toggle('page-on', id !== 'chats');
+  document.body.dataset.tab = id;
+  renderTabbar();
+  const view = $('pageView');
+  if (id === 'chats') { view.replaceChildren(); return; }
+  if (leaving === 'chats' && news.ui) closeNews();
+  view.replaceChildren(h('div', { class: 'page-loading' }, h('span', { class: 'spinner' })));
+  ({ fortune: openFortune, shop: () => openShop('shop'), themes: openThemes, admin: openAdminHub })[id]?.();
+}
+function openThemes() {
+  const grid = h('div', { class: 'theme-grid' });
+  const draw = () => grid.replaceChildren(...THEMES.map(([id, name, need], i) => {
+    const locked = need === 'plus' ? !prefs.plus : need === 'premium' ? !prefs.premium : false;
+    return h('button', { class: 'theme-card' + (prefs.style === id ? ' on' : '') + (locked ? ' locked' : ''), type: 'button', vars: { '--i': i },
+      onclick: () => {
+        if (locked) return need === 'premium' ? (toast('Тема с Премиумом — он в магазине'), showTab('shop'))
+          : toast('Тема с Плюсом: стань партнёром сети или попроси друга-партнёра подарить Плюс (Настройки → Партнёрство)');
+        smoothTheme(() => { prefs.style = id; savePrefs(); applyTheme(); }); draw();
+      } },
+      h('span', { class: 'theme-preview', 'data-style': id, 'data-mode': resolvedMode() },
+        h('span', { class: 'tp-top' }, h('i'), h('b')),
+        h('span', { class: 'tp-msg tp-theirs' }), h('span', { class: 'tp-msg tp-mine' }), h('span', { class: 'tp-msg tp-theirs short' }),
+        h('span', { class: 'tp-input' }, h('i'))),
+      h('span', { class: 'theme-name' }, h('b', { text: name }),
+        locked ? h('small', { class: 'theme-lock' }, icon('lock'), need === 'plus' ? 'Плюс' : 'Премиум') : prefs.style === id ? h('small', { class: 'theme-on', text: 'Включена' }) : null));
+  }));
+  draw();
+  const blocks = [
+    section('Тема', grid),
+    section('Режим', segmented([['light', 'Светлая'], ['dark', 'Тёмная'], ['auto', 'Как в системе']], prefs.mode, (v) => smoothTheme(() => { prefs.mode = v; savePrefs(); applyTheme(); draw(); }))),
+  ];
+  if (prefs.plus) {
+    const accents = h('div', { class: 'swatches accent-swatches' });
+    const drawAccents = () => accents.replaceChildren(
+      h('button', { class: 'swatch none' + (prefs.accent == null ? ' on' : ''), title: 'Как в теме', type: 'button',
+        onclick: () => { prefs.accent = null; savePrefs(); applyTheme(); drawAccents(); } }),
+      ...[...HUES, 200, 120, 0].map((hh) => h('button', {
+        class: 'swatch' + (hh === prefs.accent ? ' on' : ''), vars: { '--h': hh }, title: 'Акцент', type: 'button',
+        onclick: () => smoothTheme(() => { prefs.accent = hh; savePrefs(); applyTheme(); drawAccents(); }),
+      })));
+    drawAccents();
+    blocks.push(section('Цвет акцента', h('small', { class: 'muted', text: 'Кнопки и ваши сообщения. Рамка аватарки — в Настройках → Партнёрство.' }), accents));
+  } else blocks.push(h('p', { class: 'muted shop-hint', text: 'Свой цвет акцента и темы «Бумага» и «Неон» — с Плюсом, «Закат» и «Бездна» — с Премиумом.' }));
+  openModal({ title: 'Темы' }, ...blocks);
+}
+function openAdminHub() {
+  const lvl = modLevel(), creator = lvl === 3, msg = note();
+  const item = (ico, title, sub, fn, count) => h('button', { class: 'hub-item', type: 'button', onclick: fn },
+    h('span', { class: 'hub-ico' }, icon(ico)),
+    h('span', { class: 'row-text' }, h('b', { text: title }), h('small', { text: sub })),
+    count || null, h('span', { class: 'hub-arrow' }, icon('back')));
+  const orders = h('span', { class: 'hub-count', hidden: true });
+  const evCount = unseenEvents();
+  if (creator) Promise.all([sb.rpc('limited_orders_admin', { p_all: false }), sb.rpc('premium_orders_admin'), sb.rpc('fortune_orders_admin', { p_all: false })]).then((rs) => {
+    const n = rs.reduce((a, r) => a + (r.data || []).filter((o) => !o.status || o.status === 'pending').length, 0);
+    if (n) { orders.textContent = String(n); orders.hidden = false; }
+  }).catch(() => {});
+  openModal({ title: creator ? 'Админка' : 'Модерация' },
+    h('div', { class: 'hub' },
+      creator && !events.off ? item('bell', 'События', 'Заявки, узлы, TURN, новые люди, баны', () => openEvents(), evCount ? h('span', { class: 'hub-count', text: String(evCount) }) : null) : null,
+      creator ? item('gem', 'Заявки', 'Лимитки, Премиум и крутки — выдать после доната', () => openShop('orders'), orders) : null,
+      item('users', 'Люди', creator ? 'Поиск, роли, модераторы, значки, баны' : lvl === 2 ? 'Поиск и баны на любой срок' : 'Поиск и баны на 1–7 дней', () => openAdmin('users')),
+      lvl >= 2 ? item('chart', 'Статистика', 'Люди, сообщения, место, узлы, звонки', () => openAdmin('stats')) : null,
+      creator ? item('archive', 'Журнал модераторов', 'Кто кого банил и когда', () => openAdmin('log')) : null),
+    creator ? donateAdmin(msg) : null,
+    creator ? ownBadgesAdmin(msg) : null,
+    msg);
 }
 
 async function signOut() {

@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Doto:wght@600;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/styles.css?v=20261126200032">
+<link rel="stylesheet" href="css/styles.css?v=20261126202454">
 <script>
   // Тема применяется до отрисовки, чтобы не было «вспышки»
   try {
@@ -93,6 +93,8 @@
     <symbol id="i-snow" viewBox="0 0 24 24"><path d="M12 2v20M3.300 7l17.400 10M20.700 7 3.300 17M9.500 3.500 12 6l2.500-2.500M9.500 20.500 12 18l2.500 2.500"/></symbol>
     <symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 22a6.500 6.500 0 0 1-6.500-6.500c0-3 2-4.500 3-6.500.500 1.500 1.500 2.500 2.500 2.500C10 8 12 5 12 2c3 2 6.500 6.500 6.500 13.500A6.500 6.500 0 0 1 12 22Z"/></symbol>
     <symbol id="i-ghost" viewBox="0 0 24 24"><path d="M5 21V10.500a7 7 0 0 1 14 0V21l-2.300-2-2.400 2-2.300-2-2.300 2-2.400-2z"/><path d="M9.500 10.500v.500M14.500 10.500v.500"/></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 1.6-2.1-.4-1.2.3-2.4 1.6-2.4H17a4 4 0 0 0 4-4c0-5-4-9.5-9-9.5Z"/><circle cx="7.5" cy="11.5" r="1.2" fill="currentColor"/><circle cx="10.5" cy="7.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="8" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V4M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-3M20 16V6"/></symbol>
     <symbol id="i-gem" viewBox="0 0 24 24"><path d="M6.500 3.500h11L22 9.500 12 21 2 9.500zM2 9.500h20M9 3.500l-1.500 6L12 21l4.500-11.500-1.500-6"/></symbol>
     <symbol id="i-eclipse" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="currentColor"/><path d="M12 2v2.500M12 19.500V22M2 12h2.500M19.500 12H22M4.900 4.900l1.800 1.800M17.300 17.300l1.800 1.800M4.900 19.100l1.800-1.800M17.300 6.700l1.800-1.800"/></symbol>
     <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 2.500 2.900 6 6.600.900-4.800 4.600 1.200 6.500L12 17.400l-5.900 3.100 1.200-6.500L2.500 9.400l6.600-.900z"/></symbol>
@@ -164,7 +166,9 @@
     <p class="note" id="findMsg" role="status"></p>
     <div class="list-label" id="listLabel">Чаты</div>
     <div class="chat-list" id="chatList"></div>
+    <nav class="tabbar" id="tabbar" aria-label="Разделы"></nav>
   </aside>
+  <section class="page" id="pageView" aria-live="polite"></section>
 
   <main class="chat" id="chat">
     <header class="chat-top">
@@ -225,6 +229,6 @@
   <p>Откройте файл <b>config.js</b> и вставьте туда адрес проекта и ключ из Supabase. Подробно — в README.md.</p>
 </div>
 
-<script type="module" src="js/main.js?v=20261126200032"></script>
+<script type="module" src="js/main.js?v=20261126202454"></script>
 </body>
 </html>
