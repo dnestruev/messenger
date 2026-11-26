@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261115152529';
-import * as CONFIG from '../config.js?v=20261115152529';
-import * as E2E from './crypto.js?v=20261115152529';
-import { createNet } from './net.js?v=20261115152529';
-import { qrSvg } from './qr.js?v=20261115152529';
-import { findEmbed } from './embeds.js?v=20261115152529';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261115152529';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261115152529';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261115152529';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126105344';
+import * as CONFIG from '../config.js?v=20261126105344';
+import * as E2E from './crypto.js?v=20261126105344';
+import { createNet } from './net.js?v=20261126105344';
+import { qrSvg } from './qr.js?v=20261126105344';
+import { findEmbed } from './embeds.js?v=20261126105344';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126105344';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126105344';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126105344';
 
 /* =====================================================================
    Утилиты
@@ -2856,15 +2856,39 @@ async function sendImage(file, target = null, extra = null, opts = {}) {
   }
 }
 
+/** Картинка из файла для рисования на canvas. createImageBitmap быстрый, но Safari на iOS 15 (iPhone 7)
+ *  падает на части фото с камеры (HEIC и др.): «An error occured reading the Blob argument».
+ *  Тогда — через обычный <img>: его Safari декодирует всегда (и сам поворачивает по EXIF). */
+async function decodeImage(file) {
+  try { return await createImageBitmap(file); } catch (e1) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.decoding = 'async';
+      await new Promise((ok, bad) => { img.onload = ok; img.onerror = () => bad(new Error('Не получилось открыть эту картинку — попробуй другое фото или скриншот')); img.src = url; });
+      try { await img.decode?.(); } catch {}
+      if (!img.naturalWidth) throw new Error('Не получилось открыть эту картинку — попробуй другое фото или скриншот');
+      return { width: img.naturalWidth, height: img.naturalHeight, src: img };
+    } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  }
+}
+const drawable = (b) => b.src || b;
+/** canvas.toBlob на старых iPhone иногда отдаёт null — пробуем ещё раз через dataURL */
+async function canvasBlob(canvas, type, q) {
+  let blob = await new Promise((r) => canvas.toBlob(r, type, q));
+  if (!blob) { const d = canvas.toDataURL(type, q); blob = await (await fetch(d)).blob(); }
+  return blob;
+}
+
 /** Уменьшаем фото до 1600 px (с Плюсом — до 2560 px): экономит бесплатный 1 ГБ хранилища. */
 async function shrinkImage(file) {
-  const bmp = await createImageBitmap(file);
+  const bmp = await decodeImage(file);
   if (file.type === 'image/gif' && file.size < 4 * 1024 * 1024) return { blob: file, type: 'image/gif', w: bmp.width, h: bmp.height };
   const max = hasPlus() ? 2560 : 1600;                   // с Плюсом — фото в высоком качестве
   const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const canvas = h('canvas', { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
-  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
-  const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', hasPlus() ? 0.9 : 0.82));
+  canvas.getContext('2d').drawImage(drawable(bmp), 0, 0, canvas.width, canvas.height);
+  const blob = await canvasBlob(canvas, 'image/jpeg', hasPlus() ? 0.9 : 0.82);
   return { blob, type: 'image/jpeg', w: canvas.width, h: canvas.height };
 }
 
@@ -3299,12 +3323,12 @@ const MY_STICKERS = 'my-stickers';
 let stickerTab = 'dot';
 /** Картинка → стикер: до 512 px, прозрачность сохраняется (WebP, а где не умеют — PNG) */
 async function stickerImage(file) {
-  const bmp = await createImageBitmap(file);
+  const bmp = await decodeImage(file);
   const scale = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
   const canvas = h('canvas', { width: Math.round(bmp.width * scale), height: Math.round(bmp.height * scale) });
-  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  canvas.getContext('2d').drawImage(drawable(bmp), 0, 0, canvas.width, canvas.height);
   let blob = await new Promise((r) => canvas.toBlob(r, 'image/webp', 0.9));
-  if (!blob || blob.type !== 'image/webp') blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+  if (!blob || blob.type !== 'image/webp') blob = await canvasBlob(canvas, 'image/png');
   return { blob, type: blob.type, w: canvas.width, h: canvas.height };
 }
 /*

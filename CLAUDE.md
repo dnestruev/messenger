@@ -90,6 +90,7 @@
 - **Прочтение** (`conversation_members` UPDATE) приходит на каждое сообщение — только `patchTicks()`, не `renderMessages()`.
 - **safeupdate**: функции, которые зовутся через API (PostgREST), падают на `UPDATE`/`DELETE` без `WHERE` — писать `where true`. Из cron и SQL-редактора этого не видно.
 - PG-регулярки: счётчик повторов `{a,b}` не больше 255 — длину проверять `char_length`.
+- **Фото на iPhone 7 (Safari iOS 15)**: `createImageBitmap(file)` падает «An error occured reading the Blob argument» — картинки только через `decodeImage()` (запасной путь через `<img>`), `canvasBlob()` вместо голого `toBlob`. Тест `t_photo_ios15.py`.
 - `INSERT … RETURNING` в таблицу без права select (call_reports) падает по RLS — вставлять без `.select()`.
 - `el.replaceChildren(a, null)` пишет на экран «null» (в отличие от `h()`) — фильтровать `filter(Boolean)`.
 - Поля, которые ставит сервер (`created_at` и т.п.), клиент мог подделать при вставке — защищать триггером BEFORE INSERT (сделано в update-12).
