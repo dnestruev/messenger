@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126111332';
-import * as CONFIG from '../config.js?v=20261126111332';
-import * as E2E from './crypto.js?v=20261126111332';
-import { createNet } from './net.js?v=20261126111332';
-import { qrSvg } from './qr.js?v=20261126111332';
-import { findEmbed } from './embeds.js?v=20261126111332';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126111332';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126111332';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126111332';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126132440';
+import * as CONFIG from '../config.js?v=20261126132440';
+import * as E2E from './crypto.js?v=20261126132440';
+import { createNet } from './net.js?v=20261126132440';
+import { qrSvg } from './qr.js?v=20261126132440';
+import { findEmbed } from './embeds.js?v=20261126132440';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126132440';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126132440';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126132440';
 
 /* =====================================================================
    Утилиты
@@ -127,6 +127,10 @@ function humanError(err) {
     [/frame needs premium/i, 'Эта рамка — только с Премиумом'],
     [/bad premium term/i, 'Премиум оформляется на месяц или на год'],
     [/limited sold out/i, 'Этот статус уже разобрали — посмотрите во вкладке «С рук»'],
+    [/no spins left/i, 'Попытки кончились. Бесплатные появятся в полночь по Москве — или докупи крутки'],
+    [/fortune is over/i, 'Ивент «Фортуна» уже закончился'],
+    [/not for sale/i, '«Удачу» нельзя купить — только выбить в «Фортуне»'],
+    [/bad spins count/i, 'Укажи, сколько круток купить: от 1 до 10 000'],
     [/order already pending/i, 'Ваша заявка на этот статус уже ждёт проверки'],
     [/too many pending orders/i, 'У вас уже 3 заявки на проверке — дождитесь ответа'],
     [/bad proof/i, 'Напишите, как найти ваш донат: ссылку или имя и время (от 5 до 300 символов)'],
@@ -432,7 +436,12 @@ const LIMITED = [
   ['l_hole', 'Чёрная дыра', 'spiral', 'Притягивает всё внимание.'],
   ['l_absolute', 'Абсолют', 'infinity', 'Самый редкий статус мессенджера. Выше некуда.'],
   ['l_cinema', 'Абсолют синема', 'clapper', 'Когда всё настолько хорошо, что остаётся только встать и поднять руки. Нажми на значок.'],
-].map(([kind, name, ic, text]) => ({ kind, name, icon: ic, text }));
+  ['l_clover', 'Клевер', 'clover', 'Четыре листа удачи. Выпал в «Фортуне».', true],
+  ['l_horseshoe', 'Подкова', 'horseshoe', 'Висит над дверью и тянет удачу. Из «Фортуны».', true],
+  ['l_dice', 'Кости', 'dice', 'Бросил — и выпало как надо. Из «Фортуны».', true],
+  ['l_jackpot', 'Джекпот', 'coins', 'Сорвал банк. Редкий приз «Фортуны».', true],
+  ['l_luck', 'Удача', 'sparkle', 'Сверхредкий статус «Фортуны»: всего 3 на весь мессенджер, шанс 0,1%. Купить нельзя — только выбить.', true],
+].map(([kind, name, ic, text, fortune]) => ({ kind, name, icon: ic, text, fortune: !!fortune }));
 const LIMITED_BY = new Map(LIMITED.map((l) => [l.kind, l]));
 for (const l of LIMITED) BADGE[l.kind] = { icon: l.icon, label: l.name, cls: 'ltd ' + l.kind.replace('_', '-') };
 const rub = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
@@ -717,6 +726,7 @@ async function loadPerks() {
   }
   if (!st.error) state.settings = Object.fromEntries((st.data || []).map((r) => [r.key, r.value]));
   donateBanner();
+  loadFortune();
   const plus = hasPlus(), prem = isPremium();
   if (plus !== prefs.plus || prem !== !!prefs.premium) { prefs.plus = plus; prefs.premium = prem; savePrefs(); applyTheme(); }
   if (await refreshPeople().catch(() => false)) changed = true;
@@ -5532,13 +5542,194 @@ function premiumBuyDialog(months, price) {
     h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: () => openShop('shop') }));
 }
 const shopOld = (error) => /limited_/i.test(error?.message || '') && /function|schema cache|does not exist/i.test(error?.message || '');
+/* =====================================================================
+   Ивент «Фортуна» (update-26): рулетка статусов на 4 недели.
+   Что выпало, решает сервер (fortune_spin) — здесь только показ.
+   ===================================================================== */
+const fortune = { state: null, prizes: [], off: true };
+const FORTUNE_EMPTY = { kind: null, name: 'Пусто', icon: 'close' };
+const fortuneTileOf = (kind) => (kind ? LIMITED_BY.get(kind) : FORTUNE_EMPTY);
+const pct = (bp) => (bp / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + '%';
+async function loadFortune() {
+  if (!state.me) return;
+  const [st, pr] = await Promise.all([sb.rpc('fortune_state'), sb.rpc('fortune_prizes_list')]);
+  if (st.error || pr.error || !st.data?.[0]) { fortune.off = true; return; }   // до update-26 функций нет — ивента не видно
+  fortune.state = st.data[0]; fortune.prizes = pr.data || []; fortune.off = false;
+  fortunePill();
+}
+const fortuneActive = () => !fortune.off && fortune.state?.active;
+function fortuneLeftText() {
+  const ms = new Date(fortune.state.ends_at) - Date.now(), d = Math.floor(ms / 864e5), hrs = Math.floor(ms / 36e5) % 24;
+  return ms <= 0 ? 'закончился' : d ? `ещё ${d} дн. ${hrs} ч` : `ещё ${hrs} ч ${Math.floor(ms / 6e4) % 60} мин`;
+}
+/** Плашка над чатами: есть бесплатные крутки — зовём крутить (крестик прячет до завтра) */
+function fortunePill() {
+  document.querySelector('.fortune-pill')?.remove();
+  if (!fortuneActive() || !(fortune.state.free_left > 0)) return;
+  const key = 'fortune-pill:' + state.me.id + ':' + new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' });
+  try { if (localStorage.getItem(key)) return; } catch {}
+  const pill = h('div', { class: 'fortune-pill', role: 'button', tabindex: '0', onclick: (e) => { if (!e.target.closest('.icon-btn')) openFortune(); } },
+    h('span', { class: 'fortune-pill-ico' }, icon('sparkle')),
+    h('span', {}, h('b', { text: '«Фортуна» ' }), `${fortune.state.free_left} бесплатн${fortune.state.free_left === 1 ? 'ая крутка ждёт' : 'ые крутки ждут'}. Вдруг «Удача»?`),
+    h('button', { class: 'icon-btn', type: 'button', title: 'Скрыть до завтра', onclick: () => { try { localStorage.setItem(key, '1'); } catch {} pill.remove(); } }, icon('close')));
+  $('chatList')?.before(pill);
+}
+/** Карточка на витрине магазина и в настройках */
+function fortuneCard() {
+  if (!fortuneActive()) return null;
+  return h('div', { class: 'shop-card fortune-card', role: 'button', tabindex: '0', onclick: () => openFortune() },
+    h('div', { class: 'fortune-card-top' }, badgeEl('l_luck'), h('b', { text: '🎰 Фортуна' })),
+    h('small', { text: `Ивент: ${fortuneLeftText()}. Крути рулетку — Клевер, Подкова, Кости, Джекпот и сверхредкая «Удача» (3 шт.). ${fortune.state.free_left} бесплатных круток сегодня.` }),
+    h('div', { class: 'shop-actions' }, h('button', { class: 'btn btn-primary', type: 'button', text: 'Крутить' })));
+}
+function fortuneTile(kind) {
+  const t = fortuneTileOf(kind);
+  return h('div', { class: 'reel-tile ' + (kind ? 't-' + kind.slice(2) : 't-empty') }, icon(t.icon), h('small', { text: t.name }));
+}
+/** Случайная (для красоты) лента: вес как у настоящих шансов, но «Удача» и «Джекпот» мелькают почаще — для азарта */
+function fortuneFiller() {
+  const pool = [[null, 30], ['l_clover', 25], ['l_horseshoe', 16], ['l_dice', 12], ['l_jackpot', 9], ['l_luck', 5]];
+  let r = Math.random() * 97;
+  for (const [k, w] of pool) { if ((r -= w) < 0) return k; }
+  return null;
+}
+async function openFortune() {
+  await loadFortune();
+  if (fortune.off) return toast('«Фортуна» заработает после обновления сервера');
+  const st = fortune.state;
+  const info = h('div', { class: 'fortune-info' });
+  const reel = h('div', { class: 'reel-track' });
+  const win = h('div', { class: 'reel', 'aria-live': 'polite' }, reel, h('div', { class: 'reel-marker' }));
+  const result = h('div', { class: 'fortune-result' });
+  const spinBtn = h('button', { class: 'btn btn-primary btn-block fortune-spin', type: 'button' });
+  const buyBtn = h('button', { class: 'btn btn-block', type: 'button', text: 'Докупить крутки', onclick: () => fortuneBuyDialog() });
+  const prizes = h('div', { class: 'fortune-prizes' });
+  const drawInfo = () => {
+    const s = fortune.state;
+    info.replaceChildren(
+      h('span', {}, icon('clock'), ' ', fortuneLeftText()),
+      h('span', {}, h('b', { text: String(s.free_left) }), ' бесплатных'),
+      h('span', {}, h('b', { text: String(s.paid_left) }), ' купленных'));
+    const any = s.free_left + s.paid_left > 0;
+    spinBtn.disabled = !s.active || !any;
+    spinBtn.textContent = !s.active ? 'Ивент закончился' : s.free_left ? 'Крутить бесплатно' : s.paid_left ? 'Крутить (купленная)' : 'Новые бесплатные — в 00:00';
+    buyBtn.hidden = !s.active;
+  };
+  const drawPrizes = () => {
+    prizes.replaceChildren(h('b', { text: 'Что можно выбить' }),
+      ...fortune.prizes.map((p) => {
+        const left = Math.max(0, p.total - p.given);
+        return h('div', { class: 'fortune-prize' },
+          badgeEl(p.kind),
+          h('span', { class: 'fortune-odds' }, h('b', { text: pct(p.chance_bp) }), h('small', { text: left ? `осталось ${left} из ${p.total}` : 'все разобраны' })),
+          p.buyable && left && st.active
+            ? h('button', { class: 'btn', type: 'button', text: rub(isPremium() ? Math.round(p.price * 0.9) : p.price), title: 'Купить без рулетки', onclick: () => buyDialog({ kind: p.kind, price: isPremium() ? Math.round(p.price * 0.9) : p.price }, () => openShop('mine')) })
+            : h('small', { class: 'muted', text: p.buyable ? '' : 'только выбить' }));
+      }),
+      h('small', { class: 'muted', text: `Остальное — пусто (${pct(10000 - fortune.prizes.reduce((a, p) => a + p.chance_bp, 0))}). Шансы честные: что выпало, решает сервер. Разобрали тираж — этот приз больше не выпадает. Выпал второй такой же статус — его можно продать с рук.` }));
+  };
+  const fill = () => reel.replaceChildren(...Array.from({ length: 9 }, () => fortuneTile(fortuneFiller())));
+  let busy = false;
+  spinBtn.onclick = async () => {
+    if (busy) return;
+    busy = true; spinBtn.disabled = true; result.replaceChildren();
+    const { data, error } = await sb.rpc('fortune_spin');
+    if (error) { busy = false; toast(humanError(error)); await loadFortune(); drawInfo(); return; }
+    const r = data?.[0] || {};
+    // лента: 40 случайных + выигрыш на 34-м месте, потом ещё несколько
+    const WIN = 34, tiles = Array.from({ length: 40 }, (_, i) => fortuneTile(i === WIN ? r.kind : fortuneFiller()));
+    reel.replaceChildren(...tiles);
+    reel.style.transform = 'translateX(0)';
+    const tw = tiles[0].getBoundingClientRect().width + 8, center = win.clientWidth / 2;
+    const target = -(WIN * tw + tw / 2 - center) + (Math.random() * 0.5 - 0.25) * tw;
+    const dur = r.kind === 'l_luck' || r.kind === 'l_jackpot' ? 6200 : 4600;
+    const anim = reel.animate?.([{ transform: 'translateX(0)' }, { transform: `translateX(${target}px)` }], { duration: dur, easing: 'cubic-bezier(.08, .7, .12, 1)', fill: 'forwards' });
+    if (anim) await anim.finished.catch(() => {}); else reel.style.transform = `translateX(${target}px)`;
+    tiles[WIN].classList.add('won');
+    fortune.state = { ...fortune.state, free_left: r.free_left ?? 0, paid_left: r.paid_left ?? 0 };
+    if (r.kind) {
+      const p = fortune.prizes.find((x) => x.kind === r.kind); if (p) p.given++;
+      result.replaceChildren(h('div', { class: 'fortune-win' }, h('small', { text: 'Выпало!' }), badgeEl(r.kind), h('b', { text: `№${r.serial}` })));
+      if (r.kind === 'l_luck') luckBurst(r.serial); else if (r.kind === 'l_jackpot') luckBurst(r.serial, true);
+      else if (prefs.sound) ding();
+      loadPerks().then(() => renderChats()).catch(() => {});
+    } else result.replaceChildren(h('small', { class: 'muted', text: 'В этот раз пусто. Ещё разок?' }));
+    drawInfo(); drawPrizes(); fortunePill();
+    busy = false;
+  };
+  const mine = h('button', { class: 'btn btn-block', type: 'button', text: 'Мои статусы и заявки', onclick: () => openShop('mine') });
+  openModal({ title: '🎰 Фортуна' }, h('div', { class: 'fortune' },
+    h('p', { class: 'muted shop-hint', text: 'Ивент на 4 недели: 3 бесплатные крутки каждый день (обновляются в полночь по Москве), можно докупить ещё. Главный приз — «Удача»: всего 3 на весь мессенджер.' }),
+    info, win, result, spinBtn, buyBtn, prizes, mine));
+  fill(); drawInfo(); drawPrizes();
+}
+function fortuneBuyDialog() {
+  const s = fortune.state, url = state.settings.donate_url;
+  const cost = (n) => Math.floor(n / s.pack_size) * s.pack_price + (n % s.pack_size) * s.spin_price;
+  const count = h('input', { type: 'number', min: 1, max: 10000, value: s.pack_size, inputmode: 'numeric' });
+  const total = h('b', {});
+  const upd = () => { const n = Math.max(1, Math.min(10000, parseInt(count.value, 10) || 1)); total.textContent = `${n} круток — ${rub(cost(n))}`; return n; };
+  count.oninput = upd;
+  const preset = (n) => h('button', { class: 'btn', type: 'button', text: n === 1 ? `1 — ${rub(s.spin_price)}` : `${n} — ${rub(cost(n))}`, onclick: () => { count.value = n; upd(); } });
+  const proof = h('textarea', { rows: 3, maxLength: 300, placeholder: 'Ссылка на донат или: имя в донате, сумма и время' });
+  const msg = note();
+  openModal({ title: 'Купить крутки' },
+    h('div', { class: 'shop-actions' }, preset(1), preset(s.pack_size), preset(s.pack_size * 5)),
+    h('label', { class: 'field' }, h('span', { text: 'Сколько круток' }), count), total,
+    h('small', { class: 'muted', text: `Одна — ${rub(s.spin_price)}, пачка из ${s.pack_size} — ${rub(s.pack_price)}.` }),
+    h('ol', { class: 'shop-steps' },
+      h('li', {}, 'Отправьте донат ровно на эту сумму. ', url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', text: 'Открыть страницу оплаты' }) : 'Ссылку спросите у @deltaofishal.'),
+      h('li', { text: 'В сообщении к донату напишите свой ник в мессенджере.' }),
+      h('li', { text: 'Вставьте сюда ссылку или опишите донат. Создатель проверит и начислит крутки.' })),
+    proof, msg,
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Отправить заявку', onclick: async (e) => {
+      e.target.disabled = true;
+      const { error } = await sb.rpc('fortune_order', { p_spins: upd(), p_proof: proof.value.trim() });
+      e.target.disabled = false;
+      if (error) return say(msg, humanError(error));
+      toast('Заявка отправлена — крутки начислят после проверки'); openFortune();
+    } }),
+    h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: () => openFortune() }));
+  upd();
+}
+/** Выпала «Удача» (или Джекпот — потише): экран темнеет, лучи, золотые искры, большой значок */
+function luckBurst(serial, small = false) {
+  const layer = h('div', { class: 'luck-burst' + (small ? ' small' : ''), onclick: () => layer.remove() },
+    h('div', { class: 'luck-rays' }),
+    h('div', { class: 'luck-center' },
+      h('div', { class: 'luck-title', text: small ? 'ДЖЕКПОТ!' : 'УДАЧА!' }),
+      badgeEl(small ? 'l_jackpot' : 'l_luck'),
+      h('div', { class: 'luck-sub', text: small ? `№${serial}` : `№${serial} из 3 на весь мессенджер` })));
+  const N = small ? 26 : 60;
+  for (let i = 0; i < N; i++) {
+    const p = h('span', { class: 'luck-spark' });
+    const ang = Math.random() * Math.PI * 2, dist = 120 + Math.random() * (small ? 160 : 280);
+    layer.append(p);
+    p.animate?.([
+      { transform: 'translate(-50%, -50%) scale(.2)', opacity: 1 },
+      { transform: `translate(calc(-50% + ${Math.cos(ang) * dist}px), calc(-50% + ${Math.sin(ang) * dist}px)) scale(${0.6 + Math.random()})`, opacity: 1, offset: 0.6 },
+      { transform: `translate(calc(-50% + ${Math.cos(ang) * dist * 1.2}px), calc(-50% + ${Math.sin(ang) * dist * 1.2 + 80}px)) scale(.3)`, opacity: 0 },
+    ], { duration: 1600 + Math.random() * 1400, delay: Math.random() * (small ? 200 : 700), easing: 'cubic-bezier(.1, .8, .3, 1)', fill: 'both' });
+  }
+  document.body.append(layer);
+  if (prefs.sound) { ding(); setTimeout(ding, 220); if (!small) setTimeout(ding, 440); }
+  try { navigator.vibrate?.(small ? [80, 60, 80] : [120, 80, 120, 80, 300]); } catch {}
+  setTimeout(() => layer.classList.add('out'), small ? 2600 : 4200);
+  setTimeout(() => layer.remove(), small ? 3100 : 4800);
+}
+
 function shopSection() {
   return section('Магазин',
     h('div', { class: 'row' },
       h('div', { class: 'row-text' },
         h('b', {}, icon('gem'), ' Лимитированные статусы'),
         h('small', { text: 'Премиум и редкие значки к нику. Тираж лимиток ограничен: разберут — останется только с рук.' })),
-      h('button', { class: 'btn btn-primary', type: 'button', text: 'Открыть', onclick: () => openShop() })));
+      h('button', { class: 'btn btn-primary', type: 'button', text: 'Открыть', onclick: () => openShop() })),
+    fortuneActive() ? h('div', { class: 'row' },
+      h('div', { class: 'row-text' },
+        h('b', {}, icon('sparkle'), ' Фортуна'),
+        h('small', { text: 'Рулетка редких статусов: ' + fortuneLeftText() + '. Бесплатных круток сегодня: ' + fortune.state.free_left + '.' })),
+      h('button', { class: 'btn btn-primary', type: 'button', text: 'Крутить', onclick: () => openFortune() })) : null);
 }
 function openShop(tab = 'shop') {
   const creator = roleOf(state.me.id) === 'creator';
@@ -5572,7 +5763,8 @@ function openShop(tab = 'shop') {
             h('button', { class: 'btn', type: 'button', text: 'Снять', onclick: () => give(0) })));
         })() : null);
       body.replaceChildren(...[premCard].filter(Boolean), h('p', { class: 'muted shop-hint', text: 'Статус — это украшение к нику, прав он не даёт. Оплата — донатом, выдаёт создатель после проверки. Возврата нет.' + (prem ? ' Ваша скидка Премиума 10% уже учтена.' : '') }),
-        ...(data || []).filter((r) => LIMITED_BY.has(r.kind)).sort((x, y) => y.price - x.price).map((r) => {
+        fortuneCard(),
+        ...(data || []).filter((r) => LIMITED_BY.has(r.kind) && !LIMITED_BY.get(r.kind).fortune).sort((x, y) => y.price - x.price).map((r) => {
           const l = LIMITED_BY.get(r.kind), left = Math.max(0, r.total - r.sold - r.pending);
           return card(r.kind,
             h('small', { text: l.text }),
@@ -5595,7 +5787,7 @@ function openShop(tab = 'shop') {
             : h('button', { class: 'btn btn-primary', type: 'button', text: 'Купить', onclick: () => buyDialog({ kind: r.kind, price: r.price, item: r.item_id, serial: r.serial, seller: r.seller }, () => openShop('mine')) })))
           .concat(data?.length ? [] : [h('p', { class: 'muted', text: 'Пока никто ничего не продаёт' })]));
     } else if (v === 'mine') {
-      const [it, od, rq, po] = await Promise.all([sb.rpc('limited_mine'), sb.rpc('limited_my_orders'), sb.rpc('limited_requests'), sb.rpc('premium_my_orders')]);
+      const [it, od, rq, po, fm] = await Promise.all([sb.rpc('limited_mine'), sb.rpc('limited_my_orders'), sb.rpc('limited_requests'), sb.rpc('premium_my_orders'), sb.rpc('fortune_my_orders')]);
       if (it.error || od.error || rq.error) return fail(it.error || od.error || rq.error);
       await loadPeople((rq.data || []).map((r) => r.buyer));
       const decide = async (id, ok) => {
@@ -5627,6 +5819,14 @@ function openShop(tab = 'shop') {
             } }) : null)))
           .concat(it.data?.length ? [] : [h('p', { class: 'muted', text: 'Пока ни одного. Загляните на витрину.' })]),
         h('b', { text: 'Мои заявки' }),
+        ...(fm.data || []).map((o) => h('div', { class: 'log-row' },
+          h('span', {}, h('b', { text: `🎰 ${o.spins} круток` }), ` · ${rub(o.price)} · ${ST[o.status] || o.status}` + (o.note ? ` (${o.note})` : '')),
+          h('small', { text: fmtWhen(o.created_at) }),
+          o.status === 'pending' ? h('button', { class: 'btn', type: 'button', text: 'Отменить заявку', onclick: async () => {
+            const { error } = await sb.rpc('fortune_cancel', { p_id: o.id });
+            if (error) return toast(humanError(error));
+            draw('mine');
+          } }) : null)),
         ...(po.data || []).map((o) => h('div', { class: 'log-row' },
           h('span', {}, h('b', { text: 'Премиум на ' + (o.months === 12 ? 'год' : 'месяц') }), ` · ${rub(o.price)} · ${ST[o.status] || o.status}` + (o.note ? ` (${o.note})` : '')),
           h('small', { text: fmtWhen(o.created_at) }),
@@ -5643,9 +5843,9 @@ function openShop(tab = 'shop') {
             if (error) return toast(humanError(error));
             draw('mine');
           } }) : null))
-          .concat(od.data?.length || po.data?.length ? [] : [h('p', { class: 'muted', text: 'Заявок нет' })]));
+          .concat(od.data?.length || po.data?.length || fm.data?.length ? [] : [h('p', { class: 'muted', text: 'Заявок нет' })]));
     } else {
-      const [{ data, error }, pa] = await Promise.all([sb.rpc('limited_orders_admin', { p_all: false }), sb.rpc('premium_orders_admin')]);
+      const [{ data, error }, pa, fo] = await Promise.all([sb.rpc('limited_orders_admin', { p_all: false }), sb.rpc('premium_orders_admin'), sb.rpc('fortune_orders_admin', { p_all: false })]);
       if (error) return fail(error);
       const act = async (fn, args) => {
         const { error: e } = await sb.rpc(fn, args);
@@ -5653,6 +5853,13 @@ function openShop(tab = 'shop') {
         await loadPerks().catch(() => {}); renderChats(); draw('orders');
       };
       body.replaceChildren(h('p', { class: 'muted shop-hint', text: 'Проверьте, что донат на эту сумму действительно пришёл, и только потом выдавайте. Сделки «с рук» сюда не попадают — их подтверждает продавец.' }),
+        ...(fo.data || []).map((o) => h('div', { class: 'order-card' },
+          h('div', {}, h('b', { text: `🎰 ${o.spins} круток «Фортуны» · ${rub(o.price)}` })),
+          h('small', { text: `покупатель @${o.buyer || '—'} · ${fmtWhen(o.created_at)}` }),
+          h('div', { class: 'order-proof' }, /^https:\/\/[^\s]+$/i.test(o.proof) ? h('a', { href: o.proof, target: '_blank', rel: 'noopener noreferrer', text: o.proof }) : h('span', { text: o.proof })),
+          h('div', { class: 'shop-actions' },
+            h('button', { class: 'btn btn-primary', type: 'button', text: 'Деньги пришли — начислить', onclick: () => act('fortune_decide', { p_id: o.id, p_ok: true, p_note: null }) }),
+            h('button', { class: 'btn', type: 'button', text: 'Отклонить', onclick: () => act('fortune_decide', { p_id: o.id, p_ok: false, p_note: null }) })))),
         ...(pa.data || []).map((o) => h('div', { class: 'order-card' },
           h('div', {}, h('b', { text: `Премиум на ${o.months === 12 ? 'год' : 'месяц'} · ${rub(o.price)}` })),
           h('small', { text: `покупатель @${o.buyer || '—'} · ${fmtWhen(o.created_at)}` + (o.has_until && new Date(o.has_until) > new Date() ? ' · уже есть до ' + fmtDate(o.has_until) : '') }),
@@ -5674,7 +5881,7 @@ function openShop(tab = 'shop') {
                   h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Отклонить', onclick: async () => { await act('limited_decide', { p_id: o.id, p_ok: false, p_note: why.value.trim() || null }); openShop('orders'); } }),
                   h('button', { class: 'btn btn-block', type: 'button', text: 'Назад', onclick: () => openShop('orders') }));
               } })));
-        }).concat(data?.length || pa.data?.length ? [] : [h('p', { class: 'muted', text: 'Новых заявок нет' })]));
+        }).concat(data?.length || pa.data?.length || fo.data?.length ? [] : [h('p', { class: 'muted', text: 'Новых заявок нет' })]));
     }
   };
   openModal({ title: 'Магазин' }, segmented(tabsList, tab, (v) => draw(v)), body,

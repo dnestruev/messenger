@@ -33,7 +33,14 @@ const premExtend = (uid, days) => {
   p.until = new Date(Math.max(Date.now(), new Date(p.until).getTime()) + days * 864e5).toISOString();
 };
 /** магазин лимиток: создаётся заново после сброса базы */
-const LTD = () => (db.limited?.kinds ? db.limited : db.limited = { kinds: [['l_spark', 700, 100], ['l_owl', 900, 90], ['l_coffee', 1200, 80], ['l_pond', 1500, 70], ['l_bug', 1800, 60], ['l_vibe', 2200, 50], ['l_neon', 2700, 45], ['l_comet', 3200, 40], ['l_storm', 3800, 35], ['l_ice', 4500, 30], ['l_flame', 5200, 25], ['l_ghost', 6000, 20], ['l_diamond', 7000, 15], ['l_eclipse', 8000, 12], ['l_legend', 9500, 10], ['l_astro', 11000, 8], ['l_phoenix', 13000, 6], ['l_emperor', 15000, 5], ['l_hole', 17500, 3], ['l_absolute', 20000, 1], ['l_cinema', 10000, 10]].map(([kind, price, total]) => ({ kind, price, total })), items: [], orders: [] });
+const FRT = () => (db.fortune?.prizes ? db.fortune : db.fortune = {
+  starts: new Date(Date.now() - 864e5).toISOString(), ends: new Date(Date.now() + 27 * 864e5).toISOString(), off: false,
+  prizes: [['l_clover', 2500], ['l_horseshoe', 1200], ['l_dice', 600], ['l_jackpot', 190], ['l_luck', 10]],
+  bal: {}, spins: [], orders: [], force: [],
+  active() { return !this.off && Date.now() < Date.parse(this.ends); },
+  freeLeft(uid) { const day = new Date().toDateString(); return Math.max(0, 3 - this.spins.filter((x) => x.user_id === uid && !x.paid && new Date(x.created_at).toDateString() === day).length); },
+});
+const LTD = () => (db.limited?.kinds ? db.limited : db.limited = { kinds: [['l_spark', 700, 100], ['l_owl', 900, 90], ['l_coffee', 1200, 80], ['l_pond', 1500, 70], ['l_bug', 1800, 60], ['l_vibe', 2200, 50], ['l_neon', 2700, 45], ['l_comet', 3200, 40], ['l_storm', 3800, 35], ['l_ice', 4500, 30], ['l_flame', 5200, 25], ['l_ghost', 6000, 20], ['l_diamond', 7000, 15], ['l_eclipse', 8000, 12], ['l_legend', 9500, 10], ['l_astro', 11000, 8], ['l_phoenix', 13000, 6], ['l_emperor', 15000, 5], ['l_hole', 17500, 3], ['l_absolute', 20000, 1], ['l_cinema', 10000, 10], ['l_clover', 500, 300], ['l_horseshoe', 1500, 150], ['l_dice', 4000, 60], ['l_jackpot', 15000, 20], ['l_luck', 500000, 3]].map(([kind, price, total]) => ({ kind, price, total })), items: [], orders: [] });
 
 /* ---------- события ---------- */
 function push(cid, ev) {
@@ -417,6 +424,41 @@ const RPC = {
     p.nick_color = p_color || null; return null;
   },
   // ---- магазин лимиток (update-19) ----
+  // ---- «Фортуна» (update-26). db.fortune.force — что выпадет следующим (для тестов), иначе пусто ----
+  fortune_state: (uid) => { const F = FRT(); return [{ active: F.active(), starts_at: F.starts, ends_at: F.ends, free_left: F.freeLeft(uid), paid_left: F.bal[uid] || 0, spin_price: 100, pack_size: 10, pack_price: 900, next_free: now() }]; },
+  fortune_prizes_list: () => FRT().prizes.map(([kind, chance_bp]) => { const k = LTD().kinds.find((x) => x.kind === kind); return { kind, chance_bp, total: k.total, given: LTD().items.filter((i) => i.kind === kind).length, price: k.price, buyable: kind !== 'l_luck' }; }),
+  fortune_spin: (uid) => {
+    const F = FRT(), L = LTD();
+    if (!F.active()) return fail('fortune is over');
+    let paid = false;
+    if (F.freeLeft(uid) > 0) {} else if ((F.bal[uid] || 0) > 0) { paid = true; F.bal[uid]--; } else return fail('no spins left');
+    let won = F.force.length ? F.force.shift() : null, serial = null, item = null;
+    if (won) {
+      const k = L.kinds.find((x) => x.kind === won);
+      if (L.items.filter((i) => i.kind === won).length >= k.total) won = null;
+      else { serial = L.items.filter((i) => i.kind === won).length + 1; item = { id: L.items.length + 1, kind: won, serial, owner: uid, sale_price: null, acquired_at: now() }; L.items.push(item); }
+    }
+    F.spins.push({ user_id: uid, paid, kind: won, created_at: now() });
+    return [{ kind: won, serial, item_id: item?.id || null, free_left: F.freeLeft(uid), paid_left: F.bal[uid] || 0 }];
+  },
+  fortune_my_spins: (uid) => FRT().spins.filter((x) => x.user_id === uid).reverse(),
+  fortune_order: (uid, { p_spins, p_proof }) => {
+    const F = FRT(), proof = String(p_proof || '').trim();
+    if (!F.active()) return fail('fortune is over');
+    if (!(p_spins >= 1 && p_spins <= 10000)) return fail('bad spins count');
+    if (proof.length < 5) return fail('bad proof');
+    const o = { id: F.orders.length + 1, buyer: uid, spins: p_spins, price: Math.floor(p_spins / 10) * 900 + (p_spins % 10) * 100, proof, status: 'pending', note: null, created_at: now() };
+    F.orders.push(o); return o.id;
+  },
+  fortune_my_orders: (uid) => FRT().orders.filter((o) => o.buyer === uid).reverse(),
+  fortune_cancel: (uid, { p_id }) => { const o = FRT().orders.find((x) => x.id === p_id && x.buyer === uid && x.status === 'pending'); if (o) o.status = 'cancelled'; return null; },
+  fortune_orders_admin: (uid) => prof(uid)?.role !== 'creator' ? fail('only creators') : FRT().orders.filter((o) => o.status === 'pending').map((o) => ({ ...o, buyer: prof(o.buyer)?.username })),
+  fortune_decide: (uid, { p_id, p_ok }) => {
+    if (prof(uid)?.role !== 'creator') return fail('only creators');
+    const F = FRT(), o = F.orders.find((x) => x.id === p_id);
+    if (!o || o.status !== 'pending') return fail('order not pending');
+    o.status = p_ok ? 'approved' : 'rejected'; if (p_ok) F.bal[o.buyer] = (F.bal[o.buyer] || 0) + o.spins; return null;
+  },
   limited_catalog: () => LTD().kinds.map((k) => ({ kind: k.kind, price: k.price, total: k.total, sold: LTD().items.filter((i) => i.kind === k.kind).length,
     pending: LTD().orders.filter((o) => o.kind === k.kind && o.status === 'pending' && !o.resale).length })),
   limited_market: () => LTD().items.filter((i) => i.sale_price != null).map((i) => ({ item_id: i.id, kind: i.kind, serial: i.serial, seller: i.owner, price: i.sale_price,
@@ -433,6 +475,8 @@ const RPC = {
     if (p_item == null) {
       const k = L.kinds.find((x) => x.kind === p_kind);
       if (!k) return fail('no such limited');
+      if (k.kind === 'l_luck') return fail('not for sale');
+      if (k.kind.match(/^l_(clover|horseshoe|dice|jackpot)$/) && !FRT().active()) return fail('fortune is over');
       if (L.orders.some((x) => x.buyer === uid && x.kind === k.kind && x.status === 'pending' && !x.resale)) return fail('order already pending');
       if (L.items.filter((i) => i.kind === k.kind).length + L.orders.filter((x) => x.kind === k.kind && x.status === 'pending' && !x.resale).length >= k.total) return fail('limited sold out');
       Object.assign(o, { kind: k.kind, price: isPrem(uid) ? Math.round(k.price * 0.9) : k.price });
@@ -605,6 +649,7 @@ http.createServer(async (req, res) => {
     case '/api/mod': { const p = db.profiles.find((x) => x.username === j.username); db.moderators = db.moderators.filter((m) => m.user_id !== p.id); if (j.level) db.moderators.push({ user_id: p.id, level: j.level, until: j.seconds ? new Date(Date.now() + j.seconds * 1000).toISOString() : null, by_user: null }); return send(res, 200, { ok: true }); }
     case '/api/avatar': { const p = db.profiles.find((x) => x.username === j.username); p.avatar_path = j.path; return send(res, 200, { ok: true }); }
     case '/api/reports': return send(res, 200, { data: db.call_reports });
+    case '/api/fortune': { const F = FRT(); if (j.force) F.force.push(...j.force); if ('off' in j) F.off = !!j.off; return send(res, 200, { ok: true }); }
     case '/api/event': { logEvent(j.kind || 'user_new', j.text, j.go || null); return send(res, 200, { ok: true }); }
     case '/api/role': { const p = db.profiles.find((x) => x.username === j.username); p.role = j.role; return send(res, 200, { ok: true }); }
     case '/api/partner': {   // тест: сделать человека партнёром (узел)

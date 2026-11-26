@@ -1569,3 +1569,87 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .event-ico { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--surface-3); }
 .event-ico .i { width: 18px; height: 18px; }
 .event-text { display: block; overflow-wrap: anywhere; }
+
+/* ===== «Фортуна» (update-26) ===== */
+.role.l-clover { --l-bg: linear-gradient(135deg, #1f9d55, #63d471); }
+.role.l-clover > .i { animation: clover-sway 2.6s ease-in-out infinite; }
+@keyframes clover-sway { 50% { transform: rotate(-12deg); } }
+.role.l-horseshoe { --l-bg: linear-gradient(135deg, #5b6b7c, #c9d6e3 55%, #5b6b7c); color: #10202e; text-shadow: none; --l-shine: rgba(255, 255, 255, .8); }
+.role.l-dice { --l-bg: linear-gradient(135deg, #c1121f, #ff4d6d); }
+.role.l-dice > .i { animation: dice-roll 3s ease-in-out infinite; }
+@keyframes dice-roll { 0%, 70%, 100% { transform: rotate(0); } 80% { transform: rotate(180deg) scale(.85); } 90% { transform: rotate(360deg); } }
+.role.l-jackpot { --l-bg: linear-gradient(135deg, #0b6e4f, #f4c430 55%, #0b6e4f); box-shadow: 0 0 0 1.5px #ffe680, 0 0 10px rgba(244, 196, 48, .6); --l-shine: rgba(255, 250, 200, .85); --l-speed: 2.4s; }
+.role.l-jackpot > .i { animation: coin-hop 1.6s ease-in-out infinite; }
+@keyframes coin-hop { 0%, 60%, 100% { transform: translateY(0); } 75% { transform: translateY(-2px) scale(1.12); } }
+/* «Удача»: вращающееся радужное золото под стеклом, блик, мерцающая искра — красивее «Абсолюта» */
+.role.l-luck { --l-bg: #1a1000; color: #fff8dc; font-weight: 800; letter-spacing: .02em;
+  text-shadow: 0 0 6px rgba(255, 210, 80, .95), 0 1px 2px #000;
+  box-shadow: inset 0 0 0 1.5px #ffe27a, 0 0 10px rgba(255, 210, 80, .85), 0 0 22px rgba(255, 90, 200, .45), 0 0 34px rgba(80, 200, 255, .25); }
+.role.l-luck::before { content: ""; position: absolute; left: 50%; top: 50%; width: 260%; aspect-ratio: 1; z-index: -2; pointer-events: none;
+  background: conic-gradient(#ffd700, #ff8a00, #ff3dac, #9b5cff, #2bd9ff, #2bff88, #ffd700);
+  transform: translate(-50%, -50%) rotate(0); animation: luck-rot 3.2s linear infinite; opacity: .75; }
+.role.l-luck::after { z-index: -1; width: 45%; background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .95), transparent); --l-speed: 2.2s; }
+.role.l-luck > .i { color: #fff3b0; filter: drop-shadow(0 0 3px #ffd700); animation: luck-twinkle 1.4s ease-in-out infinite; }
+@keyframes luck-rot { to { transform: translate(-50%, -50%) rotate(360deg); } }
+@keyframes luck-twinkle { 0%, 100% { transform: scale(1) rotate(0); } 40% { transform: scale(1.3) rotate(25deg); } 60% { transform: scale(.9) rotate(-10deg); } }
+
+.fortune-pill { display: flex; align-items: center; gap: 10px; margin: 0 12px 8px; padding: 10px 8px 10px 12px; border-radius: 18px; cursor: pointer; font-size: 13.5px; line-height: 1.35;
+  color: #fff8dc; background: linear-gradient(120deg, #2a1800, #4a2a00 50%, #2a1800); box-shadow: inset 0 0 0 1px rgba(255, 215, 90, .55); animation: donate-in .35s var(--spring, ease-out); }
+.fortune-pill > span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.fortune-pill-ico { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: radial-gradient(#ffe27a, #ff9f1c); color: #3a2200; }
+.fortune-pill-ico .i { width: 18px; height: 18px; animation: luck-twinkle 1.6s ease-in-out infinite; }
+.fortune-pill .icon-btn { flex: none; width: 32px; height: 32px; color: inherit; }
+.fortune-card { cursor: pointer; background: linear-gradient(135deg, #2a1800, #3d1d3a 60%, #102a3d); color: #fff8dc; box-shadow: inset 0 0 0 1.5px rgba(255, 215, 90, .6); }
+.fortune-card small { color: rgba(255, 248, 220, .85); }
+.fortune-card-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fortune { display: flex; flex-direction: column; gap: 10px; min-width: 0; max-width: 100%; }
+.fortune-info { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13.5px; color: var(--muted, #888); }
+.fortune-info b { color: var(--text, inherit); }
+.fortune-info .i { width: 14px; height: 14px; vertical-align: -2px; }
+.reel { position: relative; overflow: hidden; height: 92px; width: 100%; min-width: 0; contain: layout paint; border-radius: 16px; background: radial-gradient(120% 140% at 50% 50%, #2a1d05, #0d0a05);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 215, 90, .5), inset 0 0 24px rgba(0, 0, 0, .7); }
+.reel::before, .reel::after { content: ""; position: absolute; top: 0; bottom: 0; width: 22%; z-index: 2; pointer-events: none; }
+.reel::before { left: 0; background: linear-gradient(90deg, #0d0a05, transparent); }
+.reel::after { right: 0; background: linear-gradient(-90deg, #0d0a05, transparent); }
+.reel-track { display: flex; gap: 8px; padding: 10px 8px; width: max-content; will-change: transform; }
+.reel-marker { position: absolute; left: 50%; top: 4px; bottom: 4px; width: 3px; transform: translateX(-50%); z-index: 3; border-radius: 2px; background: #ffd700; box-shadow: 0 0 10px #ffd700; }
+.reel-tile { flex: none; width: 76px; height: 72px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #fff;
+  background: #2b2b2b; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
+.reel-tile .i { width: 26px; height: 26px; }
+.reel-tile small { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.reel-tile.t-empty { background: #222; color: #777; }
+.reel-tile.t-clover { background: linear-gradient(135deg, #1f9d55, #63d471); }
+.reel-tile.t-horseshoe { background: linear-gradient(135deg, #5b6b7c, #c9d6e3); color: #10202e; }
+.reel-tile.t-dice { background: linear-gradient(135deg, #c1121f, #ff4d6d); }
+.reel-tile.t-jackpot { background: linear-gradient(135deg, #0b6e4f, #f4c430); }
+.reel-tile.t-luck { background: conic-gradient(from 30deg, #ffd700, #ff8a00, #ff3dac, #9b5cff, #2bd9ff, #2bff88, #ffd700); color: #1a1000; box-shadow: 0 0 12px rgba(255, 215, 90, .8); }
+.reel-tile.won { animation: tile-won .7s ease-out 2; }
+@keyframes tile-won { 50% { transform: scale(1.12); } }
+.fortune-result { min-height: 28px; display: flex; justify-content: center; text-align: center; }
+.fortune-win { display: flex; align-items: center; gap: 8px; animation: donate-in .4s var(--spring, ease-out); }
+.fortune-spin { font-size: 16px; padding-block: 14px; }
+.fortune-prizes { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.fortune-prize { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fortune-prize > .role { flex: none; min-width: 112px; justify-content: center; }
+.fortune-odds { flex: 1; min-width: 90px; display: flex; flex-direction: column; line-height: 1.2; }
+.fortune-odds small { color: var(--muted, #888); }
+.luck-burst { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; overflow: hidden; background: radial-gradient(circle, rgba(40, 25, 0, .93), rgba(0, 0, 0, .97)); animation: luck-in .35s ease-out; cursor: pointer; }
+.luck-burst.out { animation: luck-out .5s ease-in forwards; }
+@keyframes luck-in { from { opacity: 0; } }
+@keyframes luck-out { to { opacity: 0; } }
+.luck-rays { position: absolute; left: 50%; top: 50%; width: 220vmax; aspect-ratio: 1; transform: translate(-50%, -50%);
+  background: repeating-conic-gradient(rgba(255, 215, 90, .28) 0 8deg, transparent 8deg 20deg); animation: luck-rot 9s linear infinite;
+  -webkit-mask: radial-gradient(circle, #000 5%, transparent 45%); mask: radial-gradient(circle, #000 5%, transparent 45%); }
+.luck-center { position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px; animation: luck-pop .9s cubic-bezier(.2, 1.6, .4, 1); }
+.luck-center .role { transform: scale(2.2); margin: 18px 0; }
+.luck-title { font-size: clamp(38px, 12vw, 72px); font-weight: 900; letter-spacing: .06em; color: #ffe27a;
+  text-shadow: 0 0 18px #ffb300, 0 0 40px #ff3dac, 0 4px 0 #6b3d00; animation: luck-glow 1.2s ease-in-out infinite; }
+.luck-burst.small .luck-title { color: #c8ffb0; text-shadow: 0 0 18px #2bff88, 0 4px 0 #0b4d2a; }
+.luck-sub { color: #fff8dc; font-weight: 600; text-shadow: 0 1px 3px #000; }
+@keyframes luck-pop { from { transform: scale(.2) rotate(-10deg); opacity: 0; } }
+@keyframes luck-glow { 50% { transform: scale(1.05); } }
+.luck-spark { position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; will-change: transform, opacity;
+  background: radial-gradient(#fff, #ffd700 45%, rgba(255, 140, 0, 0) 70%); }
+.luck-spark:nth-child(3n) { background: radial-gradient(#fff, #ff5fd2 45%, rgba(255, 60, 170, 0) 70%); }
+.luck-spark:nth-child(4n) { background: radial-gradient(#fff, #5fe1ff 45%, rgba(40, 200, 255, 0) 70%); }
+@media (prefers-reduced-motion: reduce) { .role.l-luck::before, .role.l-luck > .i, .role.l-clover > .i, .role.l-dice > .i, .role.l-jackpot > .i, .fortune-pill-ico .i { animation: none; } }
