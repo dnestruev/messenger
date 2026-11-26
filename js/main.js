@@ -1,13 +1,13 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126105344';
-import * as CONFIG from '../config.js?v=20261126105344';
-import * as E2E from './crypto.js?v=20261126105344';
-import { createNet } from './net.js?v=20261126105344';
-import { qrSvg } from './qr.js?v=20261126105344';
-import { findEmbed } from './embeds.js?v=20261126105344';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126105344';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126105344';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126105344';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126111332';
+import * as CONFIG from '../config.js?v=20261126111332';
+import * as E2E from './crypto.js?v=20261126111332';
+import { createNet } from './net.js?v=20261126111332';
+import { qrSvg } from './qr.js?v=20261126111332';
+import { findEmbed } from './embeds.js?v=20261126111332';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126111332';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126111332';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126111332';
 
 /* =====================================================================
    Утилиты
@@ -406,6 +406,7 @@ const BADGE = {
   relay: { icon: 'relay', label: 'Связь' },
   bro: { icon: 'sparkle', label: 'Реальный бро' },
   bee: { icon: 'bee', label: 'Любитель пчёлок' },
+  football: { icon: 'ball', label: 'Футбольный мастер' },
   premium: { icon: 'premium', label: 'Премиум' },
 };
 /** Лимитированные статусы из магазина: от дешёвого к дорогому. Цена и тираж — в базе (limited_kinds) */
@@ -495,6 +496,12 @@ const STATUS_INFO = {
     benefits: ['Всё из Плюса: темы «Бумага» и «Неон», альбомы, большие группы', 'Эксклюзивные темы «Закат» и «Бездна», анимированные рамки', 'Цветной ник', 'Файлы до 25 МБ', 'Демонстрация экрана в высоком качестве', 'Скидка 10% на лимитки в магазине'],
     how: 'Настройки → «Магазин» → карточка «Премиум»: 2 000 ₽ за месяц или 24 000 ₽ за год.',
   },
+  football: {
+    label: 'Футбольный мастер',
+    description: 'Мастер мяча: с футболом на «ты».',
+    benefits: ['Единственный в мире значок «Футбольный мастер»', 'Вечный — его нельзя снять', 'Мяч всегда в игре ⚽'],
+    how: 'Никак: он выпущен в одном экземпляре и уже занят.',
+  },
   bee: {
     label: 'Любитель пчёлок',
     description: 'Он пчёлок уважает.',
@@ -574,7 +581,7 @@ async function openStatusInfo(uid, kind) {
     if (!overlay.isConnected) return;
     status.classList.add(confirmed ? 'is-ok' : 'is-bad');
     status.textContent = !confirmed ? 'Статус не подтверждён: он мог измениться. Обновите страницу.'
-      : kind === 'bro' || kind === 'bee' ? '✓ Подтверждено сервером: единственный такой значок в мессенджере'
+      : kind === 'bro' || kind === 'bee' || kind === 'football' ? '✓ Подтверждено сервером: единственный такой значок в мессенджере'
       : LIMITED_BY.has(kind) ? '✓ Подтверждено сервером: лимитированный статус действителен'
       : granted && kind !== 'donor' ? '✓ Подтверждено сервером: значок выдан создателем'
       : '✓ Подтверждено сервером: статус действителен';
@@ -651,6 +658,7 @@ function badgeKinds(id, all = false) {
     state.premium.has(id) || b.has('premium') ? 'premium' : null,
     b.has('bro') ? 'bro' : null,
     b.has('bee') ? 'bee' : null,
+    b.has('football') ? 'football' : null,
     ...LIMITED.filter((l) => b.has(l.kind)).map((l) => l.kind).reverse(),   // дорогие первыми
     r !== 'tester' && b.has('tester') ? 'tester' : null,
     tier || (!state.premium.has(id) && (k === 'plus' || b.has('plus')) ? 'plus' : b.has('plus') && !state.premium.has(id) ? 'plus' : null),

@@ -1469,6 +1469,14 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .75), transparent); transform: translateX(-120%); animation: ltd-shine 2.8s ease-in-out infinite; }
 .role.bee > .i { animation: bee-buzz 1.2s ease-in-out infinite; }
 @keyframes bee-buzz { 25% { transform: translate(1px, -1px) rotate(8deg); } 75% { transform: translate(-1px, 1px) rotate(-8deg); } }
+.role.football { position: relative; overflow: hidden; isolation: isolate; color: #fff; font-weight: 700; text-shadow: 0 1px 2px rgba(0, 0, 0, .35);
+  background: repeating-linear-gradient(90deg, #1f9d4c 0 10px, #24b057 10px 20px); box-shadow: 0 0 0 1.5px #7be3a0, 0 0 8px rgba(36, 176, 87, .5); }
+.role.football::before { content: ""; position: absolute; inset: 2px; z-index: -1; pointer-events: none; border: 1px solid rgba(255, 255, 255, .35); border-radius: inherit; }
+.role.football::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 35%; z-index: -1; pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .55), transparent); transform: translateX(-120%); animation: ltd-shine 3.2s ease-in-out infinite; }
+.role.football > .i { animation: ball-spin 2.4s linear infinite; }
+@keyframes ball-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .role.football > .i, .role.football::after { animation: none; } }
 .role.ltd { position: relative; overflow: hidden; isolation: isolate; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .4); background: var(--l-bg, #555); }
 .role.ltd::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; z-index: -1; pointer-events: none;
   background: linear-gradient(100deg, transparent, var(--l-shine, rgba(255, 255, 255, .45)), transparent); transform: translateX(-120%); animation: ltd-shine var(--l-speed, 3.6s) ease-in-out infinite; }
