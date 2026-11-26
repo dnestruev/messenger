@@ -14,10 +14,12 @@ def debug():
     return json.load(urllib.request.urlopen(urllib.request.Request(BASE + 'api/debug', data=b'{}', method='POST')))
 
 class User:
-    def __init__(self, browser, nick, w=1280, h=800, mobile=False):
+    def __init__(self, browser, nick, w=1280, h=800, mobile=False, restore=False):
         self.nick = nick
         self.ctx = browser.new_context(viewport={'width': w, 'height': h}, has_touch=mobile, is_mobile=mobile,
                                        permissions=['microphone', 'camera'])
+        if not restore:   # старые тесты ждут, что после перезагрузки открыт список чатов — «где был» не восстанавливаем
+            self.ctx.add_init_script("try { for (const k of Object.keys(localStorage)) if (k.startsWith('nav:')) localStorage.removeItem(k); } catch (e) {}")
         self.page = self.ctx.new_page()
         self.errors = []
         self.page.on('pageerror', lambda e: self.errors.append('pageerror: ' + str(e)))
@@ -78,7 +80,11 @@ def to_chats(p):
     if p.locator('#backBtn').is_visible(): p.click('#backBtn'); time.sleep(0.3)
 
 def settings_page(p, row=None):
-    to_chats(p); p.click('#settingsBtn'); p.wait_for_selector('.set-me')
+    to_chats(p); p.click('#settingsBtn'); time.sleep(0.3)
+    for _ in range(3):                      # настройки помнят раздел — возвращаемся к меню
+        if p.locator('.set-me').count(): break
+        p.locator('#pageView .page-back').click(); time.sleep(0.4)
+    p.wait_for_selector('.set-me')
     if row:
         p.locator('.set-row', has=p.locator('b', has_text=row)).first.click(); time.sleep(0.7)
 
@@ -88,4 +94,5 @@ def profile_page(p):
 def tab(p, name):
     close_overlays(p)
     if p.locator('#backBtn').is_visible() and not p.locator('#tabbar').is_visible(): p.click('#backBtn'); time.sleep(0.3)
-    p.locator(f'.tab[data-tab={name}]').click(); time.sleep(0.9)
+    p.locator(f'.tab[data-tab={name}]').click(); time.sleep(0.5)
+    p.locator(f'.tab[data-tab={name}]').click(); time.sleep(0.9)   # второе нажатие — начало вкладки и свежие данные

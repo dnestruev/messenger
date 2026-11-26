@@ -2018,3 +2018,13 @@ body.page-on .chat { display: none; }
 .exam-edit-q { flex: 1; min-height: 44px; resize: vertical; font-weight: 600; }
 .exam-q.edit.none { box-shadow: inset 3px 0 0 #e8912d; }
 .exam-q.edit .exam-opt { text-align: left; width: 100%; }
+
+/* страницы не шире экрана: колонка сетки не растягивается под длинные строки (Safari) */
+.modal, .section, .set-list, .set-group, .hub, .exam-edit-list { grid-template-columns: minmax(0, 1fr); }
+.page { overflow-x: hidden; max-width: 100vw; }
+.page .page-body, .page .page-body > * { min-width: 0; max-width: 100%; }
+.set-row, .set-me, .hub-item { width: 100%; min-width: 0; }
+.set-row .row-text, .set-me .row-text, .hub-item .row-text { min-width: 0; }
+.set-row .row-text small, .hub-item .row-text small { white-space: normal; overflow-wrap: anywhere; }
+.page pre, .page .fp, .page code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.page-back[hidden] { display: none; }

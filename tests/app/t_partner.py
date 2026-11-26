@@ -6,11 +6,11 @@ from lib import *
 reset()
 ok = []
 def relog(u):
-    u.page.reload(); u.page.wait_for_selector('.chat-item, .modal input[type=password]', timeout=20000)
+    u.page.reload(); u.page.wait_for_selector('.chat-item, .modal input[type=password]', state='attached', timeout=20000)
     if u.page.locator('.modal input[type=password]').count():
         u.page.fill('.modal input[type=password]', 'секретный код 1'); u.page.click('.modal .btn-primary')
         u.page.wait_for_selector('.modal', state='detached', timeout=20000)
-    u.page.wait_for_selector('.chat-item')
+    u.page.wait_for_selector('.chat-item', state='attached'); time.sleep(0.6); to_chats(u.page)
 def check(name, cond):
     ok.append((name, bool(cond)))
     print(('OK  ' if cond else 'FAIL') + ' ' + name, flush=True)

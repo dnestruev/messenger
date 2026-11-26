@@ -1,15 +1,15 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126215635';
-import * as CONFIG from '../config.js?v=20261126215635';
-import * as E2E from './crypto.js?v=20261126215635';
-import { createNet } from './net.js?v=20261126215635';
-import { qrSvg } from './qr.js?v=20261126215635';
-import { findEmbed } from './embeds.js?v=20261126215635';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126215635';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126215635';
-import { fileText } from './filetext.js?v=20261126215635';
-import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126215635';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126215635';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126222757';
+import * as CONFIG from '../config.js?v=20261126222757';
+import * as E2E from './crypto.js?v=20261126222757';
+import { createNet } from './net.js?v=20261126222757';
+import { qrSvg } from './qr.js?v=20261126222757';
+import { findEmbed } from './embeds.js?v=20261126222757';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126222757';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126222757';
+import { fileText } from './filetext.js?v=20261126222757';
+import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126222757';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126222757';
 
 /* =====================================================================
    Утилиты
@@ -316,7 +316,7 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installProm
 let modalLocked = false;
 let modalOnClose = null;
 /* Вкладки: Чаты · Фортуна · Магазин · Темы · Админка. На вкладке кроме «Чатов» окна рисуются прямо на странице. */
-const page = { tab: 'chats', rootTitle: null, expectRoot: false };
+const page = { tab: 'chats', rootTitle: null, expectRoot: false, back: null, sub: null, mem: {} };
 const pageMode = (overlay, locked) => page.tab !== 'chats' && !overlay && !locked && !$('modalRoot').children.length;
 function openModal({ title, locked = false, onClose = null, overlay: asOverlay = false }, ...body) {
   const prev = modalOnClose; modalOnClose = null; prev?.();
@@ -327,11 +327,13 @@ function openModal({ title, locked = false, onClose = null, overlay: asOverlay =
     const root = title === page.rootTitle;
     const view = $('pageView');
     const box = h('div', { class: 'modal page-body' + (root ? '' : ' page-sub') }, ...body);
-    view.replaceChildren(h('header', { class: 'page-head' },
-      !root ? h('button', { class: 'icon-btn page-back', type: 'button', title: 'Назад', onclick: () => showTab(page.tab) }, icon('back'))
-        : page.tab === 'settings' || page.tab === 'profile' ? h('button', { class: 'icon-btn page-back', type: 'button', title: 'Назад', onclick: () => showTab(page.tab === 'profile' ? 'settings' : 'chats') }, icon('back')) : null,
+    if (root) page.sub = null;
+    view.replaceChildren(h('header', { class: 'page-head', dataset: { root: root ? '1' : '' } },
+      h('button', { class: 'icon-btn page-back', type: 'button', title: 'Назад', onclick: () => pageBack() }, icon('back')),
       h('h2', { class: 'page-title', text: title })), box);
+    syncBack();
     view.scrollTop = 0;
+    saveNav();
     return box;
   }
   modalLocked = locked;
@@ -352,7 +354,7 @@ addEventListener('keydown', (e) => {
   document.querySelector('.lightbox')?.remove();
   closeMenu();
   if ($('modalRoot').children.length) { if (!modalLocked) closeModal(); }
-  else if (page.tab !== 'chats' && document.querySelector('.page-sub')) showTab(page.tab);
+  else if (page.tab !== 'chats' && (document.querySelector('.page-sub') || page.back)) pageBack();
   else if (state.compose) setCompose(null);
 });
 const section = (title, ...kids) => h('div', { class: 'section' }, title ? h('div', { class: 'section-title', text: title }) : null, ...kids);
@@ -1279,7 +1281,8 @@ async function startApp(user) {
   nativeRegister();
   const deep = location.hash.match(/c=([0-9a-f-]{36})/);
   if (deep) { window.history.replaceState(null, '', location.pathname); openChat(deep[1]); }
-  else handleProfileLink();
+  else if (/^#u=/.test(location.hash)) handleProfileLink();
+  else restoreNav().catch(() => {});
 }
 // Вернулись в приложение (телефон разблокировали) — освежаем значки и профили
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me) loadPerks(); if (!document.hidden) checkUpdate(); });
@@ -1401,7 +1404,7 @@ function stopApp() {
   keys.priv = null; keys.fp = null; keys.chat.clear(); keys.pub.clear(); keys.trusted = {}; keys.sign = null; keys.verify.clear();
   if (state.channel) { dropChannel(state.channel); state.channel = null; }
   closeModal();
-  showTab('chats');
+  showTab('chats'); page.mem = {};
   $('app').hidden = true;
   $('auth').hidden = false;
   document.body.classList.remove('in-chat');
@@ -2261,6 +2264,7 @@ async function openChat(id) {
   if (state.activeId !== id) { setCompose(null); state.reads = new Map(); }
   state.activeId = id;
   document.body.classList.add('in-chat');
+  saveNav();
   $('placeholder').hidden = true;
   $('messages').hidden = false;
   renderHeader();
@@ -2294,6 +2298,7 @@ $('backBtn').onclick = () => {
   state.activeId = null;
   showPlaceholder();
   renderChats();
+  saveNav();
 };
 $('chatInfo').onclick = () => { if (state.activeId) openChatInfo(state.activeId); };
 
@@ -5107,7 +5112,7 @@ function openSettings(sub = null) {
   const me = state.me.id, p = state.people.get(me), lvl = modLevel(), kind = perkOf(me);
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   openModal({ title: 'Настройки' },
-    h('button', { class: 'set-me', type: 'button', onclick: () => showTab('profile') },
+    h('button', { class: 'set-me', type: 'button', onclick: () => goTab('profile') },
       userAvatar(me, 'md'),
       h('span', { class: 'row-text' }, h('b', {}, nameLine(nameOf(me), roleBadge(me, true, 2))), h('small', { text: '@' + p.username })),
       h('span', { class: 'set-me-edit' }, icon('edit'), 'Профиль')),
@@ -5117,7 +5122,7 @@ function openSettings(sub = null) {
       setRow('relay', 'Помочь со звонками', 'Свой TURN — значок «Связь»', () => openCallsHelp(), null, 'green'),
       state.settings?.donate_url ? setRow('heart', 'Поддержать проект', 'Донат на сервер и развитие', () => settingsSub('donate'), null, 'pink') : null),
     setGroup('Приложение',
-      setRow('palette', 'Оформление', 'Тема, светлая или тёмная, акцент', () => showTab('themes'), null, 'blue'),
+      setRow('palette', 'Оформление', 'Тема, светлая или тёмная, акцент', () => goTab('themes'), null, 'blue'),
       setRow('bell', 'Уведомления и звук', prefs.notify ? 'Push включены' : 'Push выключены', () => settingsSub('notify'), null, 'red'),
       setRow('lock', 'Конфиденциальность', 'Время визита, заблокированные', () => settingsSub('privacy'), null, 'gray'),
       setRow('shield', 'Шифрование', 'Секретный код и ключ устройства', () => settingsSub('crypto'), null, 'teal'),
@@ -5125,7 +5130,7 @@ function openSettings(sub = null) {
       setRow('edit', 'Как оформлять текст', 'Жирный, спойлер, код, цитата', () => settingsSub('md'), null, 'gray'),
       setRow('download', 'Приложение на телефон', standalone ? 'Установлено' : 'Как установить', () => settingsSub('app'), null, 'blue')),
     lvl ? setGroup('Управление',
-      setRow('shield', lvl === 3 ? 'Админка' : 'Модерация', lvl === 3 ? 'Заявки, люди, события, статистика' : 'Люди и баны', () => showTab('admin'), null, 'violet'),
+      setRow('shield', lvl === 3 ? 'Админка' : 'Модерация', lvl === 3 ? 'Заявки, люди, события, статистика' : 'Люди и баны', () => goTab('admin'), null, 'violet'),
       roleOf(me) === 'creator' ? setRow('users', 'Команда', 'Тестеры', () => settingsSub('team'), null, 'teal') : null) : null,
     setGroup('Аккаунт',
       setRow('users', 'Аккаунт', state.me.email || '', () => settingsSub('account'), null, 'gray')),
@@ -5133,6 +5138,7 @@ function openSettings(sub = null) {
 }
 function settingsSub(sub) {
   const me = state.me.id, msg = note();
+  setTimeout(() => { if (page.tab === 'settings') { page.sub = sub; saveNav(); } }, 0);
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const show = (title, ...body) => openModal({ title }, ...body, msg);
   if (sub === 'premium') return show('Премиум', premiumSection(msg));
@@ -5365,8 +5371,8 @@ function perksSection(msg) {
       h('p', { class: 'muted', text: 'Или попросите друга-партнёра подарить вам Плюс.' }));
   } else {
     body.append(h('div', { class: 'inline' },
-      h('button', { class: 'btn', type: 'button', text: 'Рамка аватарки', onclick: () => showTab('profile') }),
-      h('button', { class: 'btn', type: 'button', text: 'Темы и акцент', onclick: () => showTab('themes') })));
+      h('button', { class: 'btn', type: 'button', text: 'Рамка аватарки', onclick: () => goTab('profile') }),
+      h('button', { class: 'btn', type: 'button', text: 'Темы и акцент', onclick: () => goTab('themes') })));
   }
 
   body.append(tierLadder(msg));
@@ -5647,8 +5653,8 @@ function premiumSection(msg) {
   if (on) {
     sb.rpc('premium_me').then(({ data }) => { if (data?.[0]?.until) info.textContent = 'Действует до ' + fmtDate(data[0].until) + '. Спасибо за поддержку!'; });
     body.append(h('div', { class: 'inline' },
-      h('button', { class: 'btn', type: 'button', text: 'Цвет ника и рамка', onclick: () => showTab('profile') }),
-      h('button', { class: 'btn', type: 'button', text: 'Темы «Закат» и «Бездна»', onclick: () => showTab('themes') })));
+      h('button', { class: 'btn', type: 'button', text: 'Цвет ника и рамка', onclick: () => goTab('profile') }),
+      h('button', { class: 'btn', type: 'button', text: 'Темы «Закат» и «Бездна»', onclick: () => goTab('themes') })));
   }
   body.append(h('button', { class: 'btn btn-primary btn-block', type: 'button', text: on ? 'Продлить' : 'Оформить Премиум', onclick: () => openShop('shop') }));
   return section('Премиум', body);
@@ -6460,27 +6466,76 @@ function renderTabbar() {
   bar.replaceChildren(h('span', { class: 'tab-glider', 'aria-hidden': 'true' }), ...tabs.map(([id, label, ico]) => {
     const n = tabCount(id);
     return h('button', { class: 'tab' + (page.tab === id ? ' on' : ''), type: 'button', dataset: { tab: id }, 'aria-current': page.tab === id ? 'page' : null,
-      onclick: () => { if (page.tab === id && id === 'chats') { $('chatList').scrollTo({ top: 0, behavior: 'smooth' }); return; } showTab(id); } },
+      onclick: () => { if (page.tab === id && id === 'chats') { $('chatList').scrollTo({ top: 0, behavior: 'smooth' }); return; } showTab(id, { fresh: page.tab === id }); } },
       h('span', { class: 'tab-ico' }, icon(ico), n ? h('span', { class: 'tab-count' + (id === 'fortune' ? ' gold' : ''), text: n > 99 ? '99+' : String(n) }) : null),
       h('span', { class: 'tab-label', text: label }));
   }));
 }
-function showTab(id) {
-  const leaving = page.tab;
+/** Переход по ссылке со страницы: «назад» вернёт туда, откуда пришли */
+function goTab(id) { showTab(id, { back: page.tab !== 'chats' && page.tab !== id ? page.tab : null }); }
+function pageBack() {
+  const root = $('pageView').querySelector('.page-head')?.dataset.root === '1';
+  if (!root) return showTab(page.tab, { back: page.back, fresh: true });
+  if (page.back) return showTab(page.back);
+  showTab(page.tab === 'profile' ? 'settings' : 'chats');
+}
+function syncBack() {
+  const hd = $('pageView').querySelector('.page-head');
+  if (!hd) return;
+  hd.querySelector('.page-back').hidden = hd.dataset.root === '1' && !page.back && page.tab !== 'settings' && page.tab !== 'profile';
+}
+/** Где человек был: вкладка, раздел настроек, прокрутка, открытый чат — переживает перезапуск */
+function saveNav() {
+  if (!state.me) return;
+  lsSet('nav:' + state.me.id, JSON.stringify({ tab: page.tab, sub: page.tab === 'settings' ? page.sub : null, scroll: page.tab === 'chats' ? 0 : $('pageView').scrollTop, chat: state.activeId || null, at: Date.now() }));
+}
+async function restoreNav() {
+  let nav = null;
+  try { nav = JSON.parse(lsGet('nav:' + state.me.id) || 'null'); } catch {}
+  if (!nav || Date.now() - (nav.at || 0) > 7 * 864e5) return;
+  if (nav.chat && state.chats.has(nav.chat) && (isDesktop() || nav.tab === 'chats')) await openChat(nav.chat);
+  const ok = nav.tab === 'settings' || nav.tab === 'profile' || tabsList().some(([t]) => t === nav.tab);
+  if (!ok || nav.tab === 'chats') return;
+  showTab(nav.tab);
+  if (nav.tab === 'settings' && nav.sub) settingsSub(nav.sub);
+  for (const ms of [500, 1500]) setTimeout(() => { if (page.tab === nav.tab) $('pageView').scrollTop = nav.scroll || 0; }, ms);
+}
+let navTimer = null;
+$('pageView').addEventListener('scroll', () => { clearTimeout(navTimer); navTimer = setTimeout(saveNav, 400); }, { passive: true });
+addEventListener('pagehide', () => saveNav());
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveNav(); });
+function showTab(id, opts = {}) {
+  const leaving = page.tab, view = $('pageView');
   if (leaving === 'chats' && id !== 'chats') page.scroll = $('messages').scrollTop;   // скрытая лента теряет прокрутку — запомним
-  if (!$('modalRoot').children.length && leaving !== 'chats') { const f = modalOnClose; modalOnClose = null; f?.(); }
+  const overlay = !!$('modalRoot').children.length;
+  if (leaving !== 'chats' && !overlay) {
+    const f = modalOnClose; modalOnClose = null;
+    if (f) { f(); delete page.mem[leaving]; }             // экран с «закрытием» (События) не храним — откроется заново
+    else if (leaving !== id) page.mem[leaving] = { nodes: [...view.childNodes], scroll: view.scrollTop, root: page.rootTitle, sub: page.sub };
+  }
   $('modalRoot').replaceChildren(); modalLocked = false;
-  page.tab = id; page.rootTitle = null; page.expectRoot = id !== 'chats';
+  page.tab = id; page.rootTitle = null; page.expectRoot = id !== 'chats'; page.back = opts.back || null;
   document.body.classList.toggle('page-on', id !== 'chats');
   document.body.dataset.tab = id;
   renderTabbar();
-  const view = $('pageView');
   if (id === 'chats') {
     view.replaceChildren();
     if (leaving !== 'chats' && page.scroll != null && state.activeId) $('messages').scrollTop = page.scroll;
+    saveNav();
     return;
   }
   if (leaving === 'chats' && news.ui) closeNews();
+  const mem = page.mem[id];
+  if (mem && !opts.fresh && leaving !== id && mem.nodes.length) {   // вернулись на вкладку — тот же экран и то же место
+    view.replaceChildren(...mem.nodes);
+    page.rootTitle = mem.root; page.expectRoot = false; page.sub = mem.sub;
+    syncBack();
+    view.scrollTop = mem.scroll;
+    saveNav();
+    return;
+  }
+  delete page.mem[id];
+  page.sub = null;
   view.replaceChildren(h('div', { class: 'page-loading' }, h('span', { class: 'spinner' })));
   ({ fortune: openFortune, shop: () => openShop('shop'), themes: openThemes, admin: openAdminHub, settings: () => openSettings(), profile: openProfile })[id]?.();
 }
@@ -6490,7 +6545,7 @@ function openThemes() {
     const locked = need === 'plus' ? !prefs.plus : need === 'premium' ? !prefs.premium : false;
     return h('button', { class: 'theme-card' + (prefs.style === id ? ' on' : '') + (locked ? ' locked' : ''), type: 'button', vars: { '--i': i },
       onclick: () => {
-        if (locked) return need === 'premium' ? (toast('Тема с Премиумом — он в магазине'), showTab('shop'))
+        if (locked) return need === 'premium' ? (toast('Тема с Премиумом — он в магазине'), goTab('shop'))
           : toast('Тема с Плюсом: стань партнёром сети или попроси друга-партнёра подарить Плюс (Настройки → Партнёрство)');
         smoothTheme(() => { prefs.style = id; savePrefs(); applyTheme(); }); draw();
       } },
