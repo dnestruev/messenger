@@ -1,14 +1,15 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126212608';
-import * as CONFIG from '../config.js?v=20261126212608';
-import * as E2E from './crypto.js?v=20261126212608';
-import { createNet } from './net.js?v=20261126212608';
-import { qrSvg } from './qr.js?v=20261126212608';
-import { findEmbed } from './embeds.js?v=20261126212608';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126212608';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126212608';
-import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126212608';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126212608';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126213614';
+import * as CONFIG from '../config.js?v=20261126213614';
+import * as E2E from './crypto.js?v=20261126213614';
+import { createNet } from './net.js?v=20261126213614';
+import { qrSvg } from './qr.js?v=20261126213614';
+import { findEmbed } from './embeds.js?v=20261126213614';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126213614';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126213614';
+import { fileText } from './filetext.js?v=20261126213614';
+import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126213614';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126213614';
 
 /* =====================================================================
    Утилиты
@@ -6818,7 +6819,7 @@ async function openExamsAdmin() {
         toast('Тест запущен'); openExamResults(data);
       } }), msg),
     section('Свои тесты',
-      h('small', { class: 'muted', text: 'Загрузи тест файлом Word (.docx) или вставь текст — вопросы, варианты и ответы разберутся сами. Потом проверь и отметь правильные.' }),
+      h('small', { class: 'muted', text: 'Загрузи тест любым файлом (Word, PDF, текст…) или вставь текст — вопросы, варианты и ответы разберутся сами. Потом проверь и отметь правильные.' }),
       h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: () => openExamImport() }, icon('plus'), 'Загрузить тест'),
       ...(tp.data || []).map((t) => h('div', { class: 'exam-tpl' },
         h('span', { class: 'row-text' }, h('b', { text: t.title }), h('small', { text: t.questions + ' вопр.' })),
@@ -6835,41 +6836,6 @@ async function openExamsAdmin() {
       h('span', { class: 'hub-arrow' }, icon('back')))).concat(ls.data?.length ? [] : [h('p', { class: 'muted', text: 'Пока ни одного' })])));
 }
 /* ---------- свои тесты: разбор файла и редактор ---------- */
-/** Текст из .docx (это zip с word/document.xml); распаковка — силами браузера */
-async function docxText(file) {
-  const buf = new Uint8Array(await file.arrayBuffer()), dv = new DataView(buf.buffer);
-  let eocd = -1;
-  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-  if (eocd < 0) throw new Error('Это не похоже на файл Word (.docx)');
-  let off = dv.getUint32(eocd + 16, true);
-  const count = dv.getUint16(eocd + 10, true), dec = new TextDecoder();
-  for (let n = 0; n < count; n++) {
-    if (dv.getUint32(off, true) !== 0x02014b50) break;
-    const method = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true);
-    const nlen = dv.getUint16(off + 28, true), xlen = dv.getUint16(off + 30, true), clen = dv.getUint16(off + 32, true), loc = dv.getUint32(off + 42, true);
-    const name = dec.decode(buf.subarray(off + 46, off + 46 + nlen));
-    off += 46 + nlen + xlen + clen;
-    if (name !== 'word/document.xml') continue;
-    const start = loc + 30 + dv.getUint16(loc + 26, true) + dv.getUint16(loc + 28, true);
-    let data = buf.subarray(start, start + csize);
-    if (method === 8) {
-      if (typeof DecompressionStream === 'undefined') throw new Error('Этот браузер не умеет открывать .docx — открой с компьютера или вставь текст');
-      data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
-    }
-    const xml = new DOMParser().parseFromString(dec.decode(data), 'application/xml');
-    const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-    return [...xml.getElementsByTagNameNS(W, 'p')].map((p) => {
-      let t = '';
-      for (const el of p.getElementsByTagNameNS(W, '*')) {
-        if (el.localName === 't') t += el.textContent;
-        else if (el.localName === 'tab') t += '    ';
-        else if (el.localName === 'br') t += '\n';
-      }
-      return t;
-    }).join('\n');
-  }
-  throw new Error('В файле не нашли текст документа');
-}
 const OPT_LETTERS = 'abcdefабвгде';
 /** Разбор текста теста: «1. Вопрос», «a) вариант», «Ключ/Ответы: 1. b)», «Практическое задание», «Пример решения» */
 function parseExamText(text) {
@@ -6907,7 +6873,7 @@ function parseExamText(text) {
   return out;
 }
 function openExamImport() {
-  const file = h('input', { type: 'file', accept: '.docx,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain', hidden: true });
+  const file = h('input', { type: 'file', hidden: true });
   const text = h('textarea', { rows: 8, placeholder: '…или вставь сюда текст теста:\n\n1. Вопрос\na) вариант\nb) вариант\n\nКлюч:\n1. b)' });
   const msg = note();
   const go = (t) => {
@@ -6919,10 +6885,11 @@ function openExamImport() {
     const f = file.files[0]; file.value = '';
     if (!f) return;
     say(msg, 'Читаю файл…', 'ok');
-    try { go(/\.docx$/i.test(f.name) ? await docxText(f) : await f.text()); } catch (e) { say(msg, e.message || humanError(e)); }
+    try { go(await fileText(f)); } catch (e) { say(msg, e.message || humanError(e)); }
   };
   openModal({ title: 'Загрузить тест' }, file,
-    h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: () => file.click() }, icon('file'), 'Выбрать файл .docx'),
+    h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: () => file.click() }, icon('file'), 'Выбрать файл'),
+    h('small', { class: 'muted', text: 'Подойдёт любой: Word (.docx, .doc), PDF, OpenOffice (.odt), RTF, страница .html или обычный текст.' }),
     text, msg,
     h('button', { class: 'btn btn-block', type: 'button', text: 'Разобрать текст', onclick: () => go(text.value) }),
     h('button', { class: 'btn btn-block', type: 'button', text: 'Назад к тестам', onclick: () => openExamsAdmin() }));
