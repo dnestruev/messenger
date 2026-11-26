@@ -52,6 +52,12 @@ with sync_playwright() as pw:
             if p.evaluate('document.documentElement.scrollWidth > innerWidth + 1 || document.getElementById("pageView").scrollWidth > innerWidth + 1'):
                 check(f'{w}: «{row or "меню"}» шире экрана', False)
     check('ни один раздел настроек не шире экрана', True)
+    # имя в профиле: шапка профиля и шапка настроек сразу новые
+    profile_page(p); p.fill('#pageView input[placeholder^="Имя"]', 'Селёдка Луник')
+    check('шапка профиля меняется при вводе', p.inner_text('.profile-hero .profile-name') == 'Селёдка Луник')
+    p.locator('#pageView .btn-primary', has_text='Сохранить').click(); time.sleep(0.8)
+    p.locator('.page-back').click(); time.sleep(0.6)
+    check('в шапке настроек новое имя', 'Селёдка Луник' in p.inner_text('.set-me'))
     errs = [e for e in boss.errors if 'pageerror' in e]
     check('нет ошибок JS', not errs); print(errs[:3]) if errs else None
     br.close()

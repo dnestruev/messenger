@@ -1,15 +1,15 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126230215';
-import * as CONFIG from '../config.js?v=20261126230215';
-import * as E2E from './crypto.js?v=20261126230215';
-import { createNet } from './net.js?v=20261126230215';
-import { qrSvg } from './qr.js?v=20261126230215';
-import { findEmbed } from './embeds.js?v=20261126230215';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126230215';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126230215';
-import { fileText } from './filetext.js?v=20261126230215';
-import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126230215';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126230215';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126230535';
+import * as CONFIG from '../config.js?v=20261126230535';
+import * as E2E from './crypto.js?v=20261126230535';
+import { createNet } from './net.js?v=20261126230535';
+import { qrSvg } from './qr.js?v=20261126230535';
+import { findEmbed } from './embeds.js?v=20261126230535';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126230535';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126230535';
+import { fileText } from './filetext.js?v=20261126230535';
+import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126230535';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126230535';
 
 /* =====================================================================
    Утилиты
@@ -5273,7 +5273,8 @@ function openProfile() {
     class: 'swatch' + (hh === hue ? ' on' : ''), vars: { '--h': hh }, title: 'Цвет', type: 'button',
     onclick: () => { hue = hh; drawSwatches(); drawAvatar(); },
   })));
-  name.oninput = drawAvatar;
+  const heroName = h('div', { class: 'profile-name', text: nameOf(me) });
+  name.oninput = () => { drawAvatar(); heroName.textContent = name.value.trim() || p.username; };
   state.redrawProfileAvatar = drawAvatar;
   drawAvatar(); drawSwatches();
   const save = h('button', { class: 'btn btn-primary btn-block', type: 'button', text: 'Сохранить', onclick: async () => {
@@ -5281,13 +5282,15 @@ function openProfile() {
     const { error } = await sb.from('profiles').update({ display_name, avatar_hue: hue }).eq('id', me);
     if (error) return say(msg, humanError(error));
     Object.assign(state.people.get(me), { display_name, avatar_hue: hue });
+    heroName.textContent = nameOf(me);
+    delete page.mem.settings;                              // в шапке настроек — новое имя
     renderMe(); renderChats();
     if (state.activeId) { renderHeader(); renderMessages({ keepScroll: true }); }
     say(msg, 'Профиль сохранён', 'ok'); toast('Профиль сохранён');
   } });
   openModal({ title: 'Профиль' },
     h('div', { class: 'profile-head profile-hero' }, avatarSlot,
-      h('div', { class: 'profile-name', text: nameOf(me) }),
+      heroName,
       h('div', { class: 'name-line' }, roleBadge(me)), h('div', { class: 'profile-nick', text: '@' + p.username })),
     section('Фото', photoControls(msg, drawAvatar) || h('small', { class: 'muted', text: 'Фото заработает после обновления сервера' })),
     section('Имя и ник', name, nickRow(msg)),
@@ -6526,6 +6529,14 @@ function showTab(id, opts = {}) {
   }
   if (leaving === 'chats' && news.ui) closeNews();
   const mem = page.mem[id];
+  if (mem && (id === 'profile' || (id === 'settings' && !mem.sub)) && !opts.fresh && leaving !== id) {   // свои данные могли поменяться — рисуем заново, место сохраняем
+    delete page.mem[id];
+    view.replaceChildren(h('div', { class: 'page-loading' }, h('span', { class: 'spinner' })));
+    page.sub = null;
+    (id === 'profile' ? openProfile : () => openSettings())();
+    view.scrollTop = mem.scroll;
+    return;
+  }
   if (mem && !opts.fresh && leaving !== id && mem.nodes.length) {   // вернулись на вкладку — тот же экран и то же место
     view.replaceChildren(...mem.nodes);
     page.rootTitle = mem.root; page.expectRoot = false; page.sub = mem.sub;
