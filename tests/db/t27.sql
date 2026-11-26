@@ -1,7 +1,8 @@
 \set ON_ERROR_STOP 0
-insert into auth.users (id, raw_user_meta_data) values ('11111111-1111-1111-1111-111111111111', '{"username":"alice"}');
+insert into auth.users (id, raw_user_meta_data) values ('11111111-1111-1111-1111-111111111111', '{"username":"alice"}'), ('22222222-2222-2222-2222-222222222222', '{"username":"deltaofishal"}'), ('33333333-3333-3333-3333-333333333333', '{"username":"peteroxhka"}');
 \i update-27.sql
-select '0 повторно без ошибок' as t;
+\i update-27.sql
+select '0 повторно без ошибок; выдано по одной' as t, string_agg(p.username || '#' || i.serial, ' ' order by i.serial) from public.limited_items i join public.profiles p on p.id = i.owner where i.kind = 'l_burmalda';
 set role authenticated;
 select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
 select '1 призы по порядку и сумма 48%' as t, string_agg(kind || ':' || chance_bp, ' '), sum(chance_bp) from public.fortune_prizes_list();
