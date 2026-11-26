@@ -1,15 +1,15 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126213614';
-import * as CONFIG from '../config.js?v=20261126213614';
-import * as E2E from './crypto.js?v=20261126213614';
-import { createNet } from './net.js?v=20261126213614';
-import { qrSvg } from './qr.js?v=20261126213614';
-import { findEmbed } from './embeds.js?v=20261126213614';
-import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126213614';
-import { renderMarkdown, stripMarkdown } from './md.js?v=20261126213614';
-import { fileText } from './filetext.js?v=20261126213614';
-import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126213614';
-import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126213614';
+import { SUPABASE_URL, SUPABASE_KEY, VAPID_PUBLIC_KEY } from '../config.js?v=20261126215635';
+import * as CONFIG from '../config.js?v=20261126215635';
+import * as E2E from './crypto.js?v=20261126215635';
+import { createNet } from './net.js?v=20261126215635';
+import { qrSvg } from './qr.js?v=20261126215635';
+import { findEmbed } from './embeds.js?v=20261126215635';
+import { STICKERS, stickerSvg, stickerLabel } from './stickers.js?v=20261126215635';
+import { renderMarkdown, stripMarkdown } from './md.js?v=20261126215635';
+import { fileText } from './filetext.js?v=20261126215635';
+import { GIFT_INFO, giftUrl } from './gifts.js?v=20261126215635';
+import { DEFAULT_ICE_SERVERS, loadIceConfiguration, describeCandidates, selectedRoute } from './calls.js?v=20261126215635';
 
 /* =====================================================================
    Утилиты
@@ -132,7 +132,7 @@ function humanError(err) {
     [/cannot gift yourself/i, 'Себе подарить нельзя'],
     [/Database error saving new user/i, 'Этот ник только что заняли — выберите другой'],
     [/Unable to validate email|invalid format/i, 'Проверьте email: похоже, в нём опечатка'],
-    [/too many nodes/i, 'Можно подключить не больше 3 узлов'],
+    [/too many nodes/i, 'На один аккаунт — не больше 3 узлов (снять предел может создатель)'],
     [/stale key/i, 'Ключ чата обновился — попробуйте ещё раз'],
     [/bad turn urls/i, 'Адрес TURN должен выглядеть так: turn:сервер:порт'],
     [/too many turn servers/i, 'Можно добавить не больше 2 TURN-серверов'],
